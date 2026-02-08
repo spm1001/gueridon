@@ -75,6 +75,11 @@ export class ClaudeCodeAgent {
   // Context tracking (for fuel gauge)
   private _lastInputTokens = 0;
   private _contextWindow = 200_000; // default, updated from init event
+  private _cwd = "";
+  private _lastRemainingBand: "normal" | "amber" | "red" = "normal";
+
+  // One-shot context note — prepended to next user prompt on threshold crossings
+  private _contextNote: string | null = null;
 
   // Required public fields — AgentInterface checks these
   public streamFn: any = () => {};
@@ -82,6 +87,12 @@ export class ClaudeCodeAgent {
 
   /** Fired when CC calls AskUserQuestion — render tappable UI, send answer as next prompt */
   public onAskUser?: (data: AskUserQuestionData) => void;
+
+  /** Fired when context compaction detected (input tokens dropped significantly between turns) */
+  public onCompaction?: (fromTokens: number, toTokens: number) => void;
+
+  /** Fired when CWD is known (from init event) */
+  public onCwdChange?: (cwd: string) => void;
 
   constructor() {
     this._state = {
@@ -115,8 +126,14 @@ export class ClaudeCodeAgent {
       console.warn("Already streaming, message will be queued by bridge");
     }
 
-    const text = typeof input === "string" ? input : this.extractText(input);
+    let text = typeof input === "string" ? input : this.extractText(input);
     if (!text) return;
+
+    // Inject one-shot context note on threshold crossings
+    if (this._contextNote) {
+      text = `${this._contextNote}\n\n${text}`;
+      this._contextNote = null;
+    }
 
     // Add user message to local state
     const userMessage: AgentMessage = {
@@ -179,6 +196,10 @@ export class ClaudeCodeAgent {
     return this._lastInputTokens;
   }
 
+  get cwd(): string {
+    return this._cwd;
+  }
+
   // --- CC Event Handler (the core translation) ---
 
   handleCCEvent(event: CCEvent): void {
@@ -208,10 +229,10 @@ export class ClaudeCodeAgent {
   // --- Event handlers ---
 
   private handleInit(event: CCEvent): void {
-    // Init fires on every user message — only process the first time
-    // Extract session info, tools list, model context window if available
-    if (event.session_id) {
-      // Could store for reconnection
+    // Init fires on every user message — extract CWD on first
+    if (event.cwd && !this._cwd) {
+      this._cwd = event.cwd;
+      this.onCwdChange?.(event.cwd);
     }
   }
 
@@ -378,11 +399,32 @@ export class ClaudeCodeAgent {
 
     // Update context tracking from result usage
     if (result.usage) {
+      const prevTokens = this._lastInputTokens;
       this._lastInputTokens =
         (result.usage.input_tokens || 0) +
         (result.usage.output_tokens || 0) +
         (result.usage.cache_read_input_tokens || 0) +
         (result.usage.cache_creation_input_tokens || 0);
+
+      // Detect compaction: significant drop (>15%) in token count between turns
+      if (prevTokens > 0 && this._lastInputTokens < prevTokens * 0.85) {
+        this.onCompaction?.(prevTokens, this._lastInputTokens);
+      }
+
+      // Track threshold crossings — inject context note for CC on band change
+      const remaining = 100 - this.contextPercent;
+      const newBand: "normal" | "amber" | "red" =
+        remaining <= 10 ? "red" : remaining <= 20 ? "amber" : "normal";
+      if (newBand !== this._lastRemainingBand) {
+        this._lastRemainingBand = newBand;
+        if (newBand === "amber") {
+          this._contextNote =
+            "[Context: ~20% remaining. Be concise. Consider suggesting a session close soon.]";
+        } else if (newBand === "red") {
+          this._contextNote =
+            "[Context: ~10% remaining. Be very concise. Suggest wrapping up and writing a handoff.]";
+        }
+      }
     }
 
     // End streaming

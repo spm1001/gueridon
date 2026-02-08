@@ -12,6 +12,7 @@ import { html, render } from "lit";
 import { ClaudeCodeAgent } from "./claude-code-agent.js";
 import { WSTransport, type ConnectionState } from "./ws-transport.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
+import { createContextGauge } from "./context-gauge.js";
 import "./app.css";
 
 // --- Configuration ---
@@ -109,10 +110,24 @@ agent.onAskUser = (data) => {
   );
 };
 
-// Dismiss overlay when a new turn starts (user sent something via chat input)
+// Context status bar — takes over pi-web-ui's stats bar with CWD + % remaining
+const gauge = createContextGauge();
+
+agent.onCompaction = (from, to) => {
+  gauge.notifyCompaction(from, to);
+};
+
+agent.onCwdChange = (cwd) => {
+  gauge.setCwd(cwd);
+};
+
+// Dismiss overlay on new turn + update gauge on turn end
 agent.subscribe((event) => {
   if (event.type === "agent_start") {
     dismissAskUserOverlay();
+  }
+  if (event.type === "agent_end") {
+    gauge.update(agent.contextPercent);
   }
 });
 
