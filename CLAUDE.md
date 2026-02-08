@@ -16,6 +16,7 @@ Process-per-session with `--session-id <uuid>`. Resume via `--resume` after proc
 |-----|---------|
 | `docs/empirical-verification.md` | Verified JSONL schemas for CC 2.1.37. Every event type, edge case, abort mechanism. **Read this first.** |
 | `docs/event-mapping.md` | CC events → pi-web-ui AgentEvents translation table. The adapter blueprint. |
+| `docs/bridge-protocol.md` | WebSocket protocol between browser and bridge. Message types, session lifecycle, reliability. |
 | `docs/decisions.md` | Architecture decisions with rationale. Permissions, session model, UI choices. |
 
 ## The Input Format (Critical)
@@ -76,11 +77,28 @@ pi-web-ui is compiled by `tsgo` which ignores `useDefineForClassFields: false`, 
 
 The plugin warns at build time if the regex doesn't match (esbuild output format changed).
 
+## Bridge Server
+
+`server/bridge.ts` — WebSocket-to-stdio proxy. Full protocol in `docs/bridge-protocol.md`.
+
+```bash
+npm run bridge              # Start on :3001
+npx tsx scripts/test-bridge.ts  # Integration tests (needs bridge running)
+```
+
+Key design decisions:
+- **Lazy spawn:** CC process starts on first prompt, not on WS connect. No wasted processes.
+- **`source` discriminator:** All server messages carry `source: "bridge"` or `source: "cc"` — structural, not string-convention.
+- **`promptReceived` ack:** Confirms prompt hit CC stdin. Hook point for "sending → waiting" UI transition.
+- **Ping/pong:** 30s interval, 10s timeout. Catches silently-dead mobile connections.
+- **SIGTERM → SIGKILL:** 3s escalation on all process kills.
+- **Early exit detection:** CC dying within 2s of spawn = flag/version problem, stderr surfaced to client.
+
 ## Session Model
 
-- One `claude -p` process per browser session
+- One `claude -p` process per browser session (spawned lazily on first prompt)
 - ~8s cold start (hooks + init + first API call), fast subsequent turns
-- Idle timeout → kill process → `--resume` on reconnect
+- Idle timeout (5min) → kill process → `--resume` on reconnect
 - Multi-turn works over persistent stdin (verified)
 - Mid-stream messages queue (no native steering)
 
@@ -88,5 +106,5 @@ The plugin warns at build time if the regex doesn't match (esbuild output format
 
 - **Soft (default):** Stop rendering on client, let backend finish
 - **Hard:** Kill process → `--resume` for next turn (8s penalty)
-- SIGINT and control messages both kill the process dead
+- SIGINT and control messages both kill the process dead (bridge uses SIGTERM→SIGKILL escalation)
 - Stdin close lets response finish then exits cleanly
