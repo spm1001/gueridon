@@ -1,2 +1,11 @@
 @import "tailwindcss";
 @import "@mariozechner/pi-web-ui/app.css";
+
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}

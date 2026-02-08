@@ -69,6 +69,9 @@ export class ClaudeCodeAgent {
   // AskUserQuestion tool call IDs — suppress their error tool_results
   private askUserToolCallIds = new Set<string>();
 
+  // Content block indices to suppress from stream message (AskUserQuestion tool calls)
+  private suppressedStreamIndices = new Set<number>();
+
   // Context tracking (for fuel gauge)
   private _lastInputTokens = 0;
   private _contextWindow = 200_000; // default, updated from init event
@@ -247,10 +250,28 @@ export class ClaudeCodeAgent {
     const msg = event.message;
     if (!msg) return;
 
+    // Detect AskUserQuestion tool calls first — fire callback, track IDs,
+    // and filter them from the content so no tool call card shows in chat
+    const askUserIds = new Set<string>();
+    for (const block of msg.content || []) {
+      if (block.type === "tool_use" && block.name === "AskUserQuestion") {
+        askUserIds.add(block.id);
+        this.askUserToolCallIds.add(block.id);
+        this.onAskUser?.({
+          questions: block.input?.questions || [],
+          toolCallId: block.id,
+        });
+      }
+    }
+
+    const filteredContent = (msg.content || []).filter(
+      (block: any) => !(block.type === "tool_use" && askUserIds.has(block.id)),
+    );
+
     // Build final pi AssistantMessage from CC's complete message
     const piMessage: AgentMessage = {
       role: "assistant",
-      content: this.mapContentBlocks(msg.content || []),
+      content: this.mapContentBlocks(filteredContent),
       api: "anthropic",
       provider: "anthropic",
       model: msg.model || "claude-opus-4-6",
@@ -272,17 +293,6 @@ export class ClaudeCodeAgent {
     this._state.streamMessage = null;
     this._state.messages = [...this._state.messages, piMessage];
     this.emit({ type: "message_end", message: piMessage });
-
-    // Detect AskUserQuestion tool calls — fire callback and track IDs
-    for (const block of msg.content || []) {
-      if (block.type === "tool_use" && block.name === "AskUserQuestion") {
-        this.askUserToolCallIds.add(block.id);
-        this.onAskUser?.({
-          questions: block.input?.questions || [],
-          toolCallId: block.id,
-        });
-      }
-    }
 
     // Track tool call IDs for tool_result mapping
     for (const block of piMessage.content) {
@@ -398,6 +408,7 @@ export class ClaudeCodeAgent {
     this.partialContent = [];
     this.partialMessageId = msg?.id || null;
     this.currentContentIndex = -1;
+    this.suppressedStreamIndices = new Set();
 
     const streamMessage: AgentMessage = {
       role: "assistant",
@@ -417,6 +428,12 @@ export class ClaudeCodeAgent {
   private startContentBlock(index: number, block: any): void {
     this.currentContentIndex = index;
 
+    // Suppress AskUserQuestion tool calls from stream — overlay handles display
+    if (block.type === "tool_use" && block.name === "AskUserQuestion") {
+      this.suppressedStreamIndices.add(index);
+      return;
+    }
+
     if (block.type === "text") {
       this.partialContent[index] = { type: "text", text: "" };
     } else if (block.type === "tool_use") {
@@ -435,6 +452,7 @@ export class ClaudeCodeAgent {
   }
 
   private applyDelta(index: number, delta: any): void {
+    if (this.suppressedStreamIndices.has(index)) return;
     const block = this.partialContent[index];
     if (!block) return;
 
@@ -468,6 +486,7 @@ export class ClaudeCodeAgent {
   }
 
   private finalizeContentBlock(index: number): void {
+    if (this.suppressedStreamIndices.has(index)) return;
     const block = this.partialContent[index];
     if (!block) return;
 

@@ -63,7 +63,8 @@ export function showAskUserOverlay(
   function renderSheet() {
     const template = html`
       <div
-        class="fixed inset-0 z-50 flex items-end bg-black/30"
+        class="fixed inset-0 z-50 flex items-end"
+        style="background: rgba(0,0,0,0.3); backdrop-filter: blur(2px)"
         @click=${(e: Event) => {
           if (e.target === e.currentTarget) {
             dismiss();
@@ -71,56 +72,54 @@ export function showAskUserOverlay(
           }
         }}
       >
-        <div class="w-full bg-background border-t border-border rounded-t-2xl shadow-2xl p-4 pb-8 space-y-4">
+        <div
+          class="w-full bg-background border-t border-border rounded-t-2xl shadow-2xl p-4 space-y-4"
+          style="animation: slide-up 0.25s ease-out; padding-bottom: max(2rem, env(safe-area-inset-bottom, 2rem))"
+        >
           ${data.questions.map(
             (q, qi) => html`
-              <div class="space-y-2">
+              <div class="space-y-2.5">
                 ${q.header
                   ? html`<div class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                       ${q.header}
                     </div>`
                   : nothing}
                 <div class="text-sm font-medium text-foreground">${q.question}</div>
-                <div class="flex flex-wrap gap-2">
+                <div class="flex flex-col gap-2">
                   ${q.options.map((opt, oi) => {
                     if (q.multiSelect) {
                       const isSelected = selected.get(qi)?.has(oi) ?? false;
                       return html`
                         <button
-                          class="px-4 py-2.5 rounded-full text-sm touch-manipulation transition-colors
+                          class="w-full text-left px-4 py-3 rounded-xl text-sm transition-colors
                                  ${isSelected
                             ? "bg-primary text-primary-foreground"
-                            : "bg-secondary text-secondary-foreground hover:bg-secondary/80"}"
+                            : "bg-secondary text-secondary-foreground"}"
+                          style="min-height: 44px; touch-action: manipulation"
                           @click=${() => toggleOption(qi, oi)}
                         >
-                          ${opt.label}
+                          <div class="font-medium">${opt.label}</div>
+                          ${opt.description
+                            ? html`<div class="text-xs mt-0.5 opacity-75">${opt.description}</div>`
+                            : nothing}
                         </button>
                       `;
                     }
                     return html`
                       <button
-                        class="px-4 py-2.5 rounded-full bg-primary text-primary-foreground text-sm
-                               active:opacity-80 touch-manipulation"
+                        class="w-full text-left px-4 py-3 rounded-xl bg-primary text-primary-foreground text-sm
+                               active:opacity-80"
+                        style="min-height: 44px; touch-action: manipulation"
                         @click=${() => handleSingleSelect(qi, opt.label)}
                       >
-                        ${opt.label}
+                        <div class="font-medium">${opt.label}</div>
+                        ${opt.description
+                          ? html`<div class="text-xs mt-0.5 opacity-75">${opt.description}</div>`
+                          : nothing}
                       </button>
                     `;
                   })}
                 </div>
-                ${q.options.some((o) => o.description)
-                  ? html`
-                      <div class="text-xs text-muted-foreground space-y-0.5 mt-1">
-                        ${q.options
-                          .filter((o) => o.description)
-                          .map(
-                            (o) => html`
-                              <div><span class="font-medium">${o.label}:</span> ${o.description}</div>
-                            `,
-                          )}
-                      </div>
-                    `
-                  : nothing}
               </div>
             `,
           )}
@@ -128,7 +127,8 @@ export function showAskUserOverlay(
             ? html`
                 <button
                   class="w-full py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium
-                         active:opacity-80 touch-manipulation"
+                         active:opacity-80"
+                  style="min-height: 44px; touch-action: manipulation"
                   @click=${handleMultiConfirm}
                 >
                   Confirm selection
@@ -136,7 +136,8 @@ export function showAskUserOverlay(
               `
             : nothing}
           <button
-            class="w-full text-center text-xs text-muted-foreground py-2 touch-manipulation"
+            class="w-full text-center text-xs text-muted-foreground py-2"
+            style="touch-action: manipulation"
             @click=${() => {
               dismiss();
               onDismiss();
