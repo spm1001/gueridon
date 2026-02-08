@@ -57,25 +57,42 @@ npm run build  # Production build to dist/
 
 ## Dependencies
 
-- **pi-web-ui packages:** `@mariozechner/pi-web-ui`, `pi-agent-core`, `pi-ai`, `mini-lit` (all on npm)
+- **pi-web-ui:** Consumed from local fork source (NOT npm). See below.
+- **pi-agent-core, pi-ai, mini-lit:** From npm (`@mariozechner/*`)
 - **Bundler:** Vite with `@tailwindcss/vite`
 - **Reference project:** `~/Repos/persistent-assistant` (David's Telegram bot, spawn-per-message approach)
-- **pi-mono source:** `~/Repos/pi-mono` (for reference, consume via npm not source)
 
-## Lit Class Field Fix (Critical)
+## pi-mono Fork (Critical)
 
-pi-web-ui is compiled by `tsgo` which ignores `useDefineForClassFields: false`, emitting native class fields. These shadow Lit's `@state`/`@property` prototype accessors, breaking reactivity entirely (components render empty).
+**guéridon consumes pi-web-ui TypeScript source directly from `~/Repos/pi-mono`.**
 
-`vite.config.ts` contains a `litClassFieldFix()` plugin that patches esbuild's `__defNormalProp` helper in pre-bundled deps:
-- Uses `[[Set]]` semantics (simple assignment) → triggers Lit setters for `@state`/`@property`
-- Falls back silently for getter-only properties (`@query`) → getter stays intact
+- Fork: `~/Repos/pi-mono`, branch `gueridon` (all our patches)
+- Remote `origin` = spm1001/pi-mono, `upstream` = badlogic/pi-mono
+- `main` tracks upstream clean. Rebase `gueridon` on `main` when upstream updates.
 
-**If pi-web-ui components render blank**, debug in this order:
+### How it works
+
+`vite.config.ts` aliases `@mariozechner/pi-web-ui` → `~/Repos/pi-mono/packages/web-ui/src`. Vite compiles the TypeScript directly with `esbuild.target: "es2020"`, which uses `[[Set]]` semantics for class fields — this fixes Lit reactivity at source (no more tsgo class field bug).
+
+**No build step.** Edit web-ui source → Vite HMR picks it up.
+
+Lit is deduplicated across pi-mono and guéridon to prevent duplicate runtime issues.
+
+### Our patches
+
+The `gueridon` branch carries patches on top of upstream:
+- `customStats` property on AgentInterface (fuel gauge hook)
+- Per-message token stats removed (we use the fuel gauge instead)
+- Double render fix (clear streaming container on `message_end`)
+- Streaming line-buffer, tool call buffering, padding fix, /exit alias
+
+### If pi-web-ui components render blank
+
+Debug in this order:
 1. `element.hasUpdated` — false means Lit never completed first render
-2. `element.updateComplete` — if it rejects, the error message says exactly what's wrong
-3. Only then check CSS/layout
-
-The plugin warns at build time if the regex doesn't match (esbuild output format changed).
+2. Check `esbuild.target` in vite.config.ts — must be `"es2020"` for [[Set]] semantics
+3. Check Vite alias is resolving to source, not stale npm package
+4. `litClassFieldFix()` plugin is belt-and-suspenders (probably dead code now)
 
 ## Bridge Server
 
