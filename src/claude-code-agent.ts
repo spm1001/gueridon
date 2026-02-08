@@ -1,0 +1,552 @@
+/**
+ * ClaudeCodeAgent — Adapter that satisfies pi-web-ui's Agent interface
+ * but gets its events from Claude Code's stream-json output via a transport
+ * (WebSocket to bridge server), not from a direct LLM call.
+ *
+ * CC runs its own agent loop (tool execution, multi-turn). We don't use
+ * pi-agent-core's agentLoop at all. We just translate CC's output events
+ * into pi's AgentEvent format and manage AgentState accordingly.
+ */
+
+import type {
+  AgentEvent,
+  AgentMessage,
+  AgentState,
+  AgentTool,
+  ThinkingLevel,
+} from "@mariozechner/pi-agent-core";
+import { getModel, type Model, type Usage } from "@mariozechner/pi-ai";
+
+// --- Transport interface (WebSocket later) ---
+
+export interface CCTransport {
+  send(message: string): void;
+  onEvent(handler: (event: CCEvent) => void): void;
+  close(): void;
+}
+
+// --- Claude Code stream-json event types ---
+
+export interface CCEvent {
+  type: string;
+  [key: string]: any;
+}
+
+// --- The Adapter ---
+
+export class ClaudeCodeAgent {
+  private _state: AgentState;
+  private listeners = new Set<(e: AgentEvent) => void>();
+  private transport: CCTransport | null = null;
+
+  // Partial message being built from stream deltas
+  private partialContent: any[] = [];
+  private partialMessageId: string | null = null;
+  private currentContentIndex = -1;
+
+  // Track tool call IDs → names for tool_result mapping
+  private toolCallNames = new Map<string, string>();
+
+  // Context tracking (for fuel gauge)
+  private _lastInputTokens = 0;
+  private _contextWindow = 200_000; // default, updated from init event
+
+  // Required public fields — AgentInterface checks these
+  public streamFn: any = () => {};
+  public getApiKey: any = () => "bridge";
+
+  constructor() {
+    this._state = {
+      systemPrompt: "",
+      model: getModel("anthropic", "claude-opus-4-6"),
+      thinkingLevel: "off" as ThinkingLevel,
+      tools: [],
+      messages: [],
+      isStreaming: false,
+      streamMessage: null,
+      pendingToolCalls: new Set<string>(),
+      error: undefined,
+    };
+  }
+
+  // --- Public API (matches Agent interface) ---
+
+  get state(): AgentState {
+    return this._state;
+  }
+
+  subscribe(fn: (e: AgentEvent) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
+  }
+
+  async prompt(input: string | AgentMessage): Promise<void> {
+    if (this._state.isStreaming) {
+      // CC queues mid-stream messages, so we can too
+      // For now, just warn — bridge will handle queuing
+      console.warn("Already streaming, message will be queued by bridge");
+    }
+
+    const text = typeof input === "string" ? input : this.extractText(input);
+    if (!text) return;
+
+    // Add user message to local state
+    const userMessage: AgentMessage = {
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    };
+    this._state.messages = [...this._state.messages, userMessage];
+
+    // Mark streaming
+    this._state.isStreaming = true;
+    this._state.error = undefined;
+    this.emit({ type: "agent_start" });
+    this.emit({ type: "turn_start" });
+
+    // Send to bridge via transport
+    if (this.transport) {
+      this.transport.send(text);
+    }
+  }
+
+  abort(): void {
+    // Soft abort: stop updating UI. Bridge can optionally kill the CC process.
+    this._state.isStreaming = false;
+    this._state.streamMessage = null;
+    this.emit({ type: "agent_end", messages: this._state.messages });
+  }
+
+  setModel(_m: Model<any>): void {
+    // No-op — CC manages model selection
+  }
+
+  setThinkingLevel(_l: ThinkingLevel): void {
+    // No-op — CC manages thinking
+  }
+
+  setTools(t: AgentTool<any>[]): void {
+    this._state.tools = t;
+  }
+
+  // --- Transport ---
+
+  connectTransport(transport: CCTransport): void {
+    this.transport = transport;
+    transport.onEvent((event) => this.handleCCEvent(event));
+  }
+
+  // --- Context tracking ---
+
+  get contextPercent(): number {
+    if (this._contextWindow <= 0) return 0;
+    return (this._lastInputTokens / this._contextWindow) * 100;
+  }
+
+  get contextWindow(): number {
+    return this._contextWindow;
+  }
+
+  get lastInputTokens(): number {
+    return this._lastInputTokens;
+  }
+
+  // --- CC Event Handler (the core translation) ---
+
+  handleCCEvent(event: CCEvent): void {
+    switch (event.type) {
+      case "system":
+        this.handleInit(event);
+        break;
+
+      case "stream_event":
+        this.handleStreamEvent(event);
+        break;
+
+      case "assistant":
+        this.handleAssistantComplete(event);
+        break;
+
+      case "user":
+        this.handleUserEvent(event);
+        break;
+
+      case "result":
+        this.handleResult(event);
+        break;
+    }
+  }
+
+  // --- Event handlers ---
+
+  private handleInit(event: CCEvent): void {
+    // Init fires on every user message — only process the first time
+    // Extract session info, tools list, model context window if available
+    if (event.session_id) {
+      // Could store for reconnection
+    }
+  }
+
+  private handleStreamEvent(event: CCEvent): void {
+    const streamEvent = event.event;
+    if (!streamEvent) return;
+
+    switch (streamEvent.type) {
+      case "message_start":
+        this.startStreamMessage(streamEvent.message);
+        break;
+
+      case "content_block_start":
+        this.startContentBlock(streamEvent.index, streamEvent.content_block);
+        break;
+
+      case "content_block_delta":
+        this.applyDelta(streamEvent.index, streamEvent.delta);
+        break;
+
+      case "content_block_stop":
+        this.finalizeContentBlock(streamEvent.index);
+        break;
+
+      case "message_delta":
+        // stop_reason updates — message-level delta
+        break;
+
+      case "message_stop":
+        // The full assistant message follows as a separate event
+        break;
+    }
+  }
+
+  private handleAssistantComplete(event: CCEvent): void {
+    const msg = event.message;
+    if (!msg) return;
+
+    // Build final pi AssistantMessage from CC's complete message
+    const piMessage: AgentMessage = {
+      role: "assistant",
+      content: this.mapContentBlocks(msg.content || []),
+      api: "anthropic",
+      provider: "anthropic",
+      model: msg.model || "claude-opus-4-6",
+      usage: this.mapUsage(msg.usage),
+      stopReason: this.mapStopReason(msg.stop_reason),
+      timestamp: Date.now(),
+    } as AgentMessage;
+
+    // Track context usage
+    if (msg.usage) {
+      this._lastInputTokens =
+        (msg.usage.input_tokens || 0) +
+        (msg.usage.output_tokens || 0) +
+        (msg.usage.cache_read_input_tokens || 0) +
+        (msg.usage.cache_creation_input_tokens || 0);
+    }
+
+    // Clear stream state, append final message
+    this._state.streamMessage = null;
+    this._state.messages = [...this._state.messages, piMessage];
+    this.emit({ type: "message_end", message: piMessage });
+
+    // Track tool call IDs for tool_result mapping
+    for (const block of piMessage.content) {
+      if ((block as any).type === "toolCall") {
+        const tc = block as any;
+        this.toolCallNames.set(tc.id, tc.name);
+        // Emit tool execution start
+        const pending = new Set(this._state.pendingToolCalls);
+        pending.add(tc.id);
+        this._state.pendingToolCalls = pending;
+        this.emit({
+          type: "tool_execution_start",
+          toolCallId: tc.id,
+          toolName: tc.name,
+          args: tc.arguments,
+        });
+      }
+    }
+  }
+
+  private handleUserEvent(event: CCEvent): void {
+    const msg = event.message;
+    if (!msg?.content) return;
+
+    // Tool results come as user messages with tool_result content
+    for (const block of msg.content) {
+      if (block.type === "tool_result") {
+        const toolCallId = block.tool_use_id;
+        const toolName = this.toolCallNames.get(toolCallId) || "unknown";
+        const isError = block.is_error || false;
+
+        // Build pi ToolResultMessage
+        const resultText =
+          typeof block.content === "string"
+            ? block.content
+            : Array.isArray(block.content)
+              ? block.content
+                  .filter((c: any) => c.type === "text")
+                  .map((c: any) => c.text)
+                  .join("\n")
+              : "";
+
+        const toolResultMessage: AgentMessage = {
+          role: "toolResult",
+          toolCallId,
+          toolName,
+          content: [{ type: "text", text: resultText }],
+          isError,
+          timestamp: Date.now(),
+        } as AgentMessage;
+
+        this._state.messages = [...this._state.messages, toolResultMessage];
+
+        // Remove from pending
+        const pending = new Set(this._state.pendingToolCalls);
+        pending.delete(toolCallId);
+        this._state.pendingToolCalls = pending;
+
+        this.emit({
+          type: "tool_execution_end",
+          toolCallId,
+          toolName,
+          result: resultText,
+          isError,
+        });
+      }
+    }
+  }
+
+  private handleResult(event: CCEvent): void {
+    const result = event.result || event;
+
+    // Update context tracking from result usage
+    if (result.usage) {
+      this._lastInputTokens =
+        (result.usage.input_tokens || 0) +
+        (result.usage.output_tokens || 0) +
+        (result.usage.cache_read_input_tokens || 0) +
+        (result.usage.cache_creation_input_tokens || 0);
+    }
+
+    // End streaming
+    this._state.isStreaming = false;
+    this._state.streamMessage = null;
+    this._state.pendingToolCalls = new Set<string>();
+
+    if (result.type === "result" && result.subtype === "error_max_turns") {
+      this._state.error = "Max turns reached";
+    }
+
+    this.emit({
+      type: "turn_end",
+      message: this._state.messages[this._state.messages.length - 1],
+      toolResults: [],
+    });
+    this.emit({ type: "agent_end", messages: this._state.messages });
+  }
+
+  // --- Stream message building ---
+
+  private startStreamMessage(msg: any): void {
+    this.partialContent = [];
+    this.partialMessageId = msg?.id || null;
+    this.currentContentIndex = -1;
+
+    const streamMessage: AgentMessage = {
+      role: "assistant",
+      content: [],
+      api: "anthropic",
+      provider: "anthropic",
+      model: msg?.model || "claude-opus-4-6",
+      usage: this.emptyUsage(),
+      stopReason: "stop",
+      timestamp: Date.now(),
+    } as AgentMessage;
+
+    this._state.streamMessage = streamMessage;
+    this.emit({ type: "message_start", message: streamMessage });
+  }
+
+  private startContentBlock(index: number, block: any): void {
+    this.currentContentIndex = index;
+
+    if (block.type === "text") {
+      this.partialContent[index] = { type: "text", text: "" };
+    } else if (block.type === "tool_use") {
+      this.partialContent[index] = {
+        type: "toolCall",
+        id: block.id,
+        name: block.name,
+        arguments: {},
+      };
+      this.emitToolCallStart(block);
+    } else if (block.type === "thinking") {
+      this.partialContent[index] = { type: "thinking", thinking: "" };
+    }
+
+    this.updateStreamMessage();
+  }
+
+  private applyDelta(index: number, delta: any): void {
+    const block = this.partialContent[index];
+    if (!block) return;
+
+    if (delta.type === "text_delta" && block.type === "text") {
+      block.text += delta.text;
+      this.updateStreamMessage({
+        type: "text_delta",
+        contentIndex: index,
+        delta: delta.text,
+        partial: block.text,
+      });
+    } else if (delta.type === "input_json_delta" && block.type === "toolCall") {
+      // Accumulate JSON fragments — parse will happen at block_stop
+      if (!block._jsonAccum) block._jsonAccum = "";
+      block._jsonAccum += delta.partial_json;
+      this.updateStreamMessage({
+        type: "toolcall_delta",
+        contentIndex: index,
+      });
+    } else if (delta.type === "thinking_delta" && block.type === "thinking") {
+      block.thinking += delta.thinking;
+      this.updateStreamMessage({
+        type: "text_delta",
+        contentIndex: index,
+        delta: delta.thinking,
+        partial: block.thinking,
+      });
+    } else if (delta.type === "signature_delta" && block.type === "thinking") {
+      block.thinkingSignature = delta.signature;
+    }
+  }
+
+  private finalizeContentBlock(index: number): void {
+    const block = this.partialContent[index];
+    if (!block) return;
+
+    if (block.type === "toolCall" && block._jsonAccum) {
+      try {
+        block.arguments = JSON.parse(block._jsonAccum);
+      } catch {
+        block.arguments = {};
+      }
+      delete block._jsonAccum;
+      this.emitToolCallEnd(block);
+    }
+
+    this.updateStreamMessage();
+  }
+
+  private updateStreamMessage(assistantMessageEvent?: any): void {
+    if (!this._state.streamMessage) return;
+
+    const streamMessage: AgentMessage = {
+      ...this._state.streamMessage,
+      content: this.partialContent.filter(Boolean),
+    };
+
+    this._state.streamMessage = streamMessage;
+
+    const event: any = {
+      type: "message_update",
+      message: streamMessage,
+    };
+    if (assistantMessageEvent) {
+      event.assistantMessageEvent = assistantMessageEvent;
+    }
+    this.emit(event);
+  }
+
+  private emitToolCallStart(block: any): void {
+    this.updateStreamMessage({
+      type: "toolcall_start",
+      contentIndex: this.currentContentIndex,
+      toolCallId: block.id,
+      toolName: block.name,
+    });
+  }
+
+  private emitToolCallEnd(block: any): void {
+    this.updateStreamMessage({
+      type: "toolcall_end",
+      contentIndex: this.currentContentIndex,
+      toolCallId: block.id,
+      toolName: block.name,
+      args: block.arguments,
+    });
+  }
+
+  // --- Helpers ---
+
+  private emit(e: AgentEvent): void {
+    for (const listener of this.listeners) {
+      listener(e);
+    }
+  }
+
+  private extractText(msg: AgentMessage): string {
+    if (typeof msg.content === "string") return msg.content;
+    const textBlocks = msg.content.filter((c: any) => c.type === "text");
+    return textBlocks.map((c: any) => c.text || "").join("\n");
+  }
+
+  private mapContentBlocks(blocks: any[]): any[] {
+    return blocks.map((block) => {
+      if (block.type === "text") {
+        return { type: "text", text: block.text };
+      }
+      if (block.type === "tool_use") {
+        return {
+          type: "toolCall",
+          id: block.id,
+          name: block.name,
+          arguments: block.input || {},
+        };
+      }
+      if (block.type === "thinking") {
+        return {
+          type: "thinking",
+          thinking: block.thinking,
+          thinkingSignature: block.signature,
+        };
+      }
+      return block;
+    });
+  }
+
+  private mapUsage(usage: any): Usage {
+    if (!usage) return this.emptyUsage();
+    return {
+      input: usage.input_tokens || 0,
+      output: usage.output_tokens || 0,
+      cacheRead: usage.cache_read_input_tokens || 0,
+      cacheWrite: usage.cache_creation_input_tokens || 0,
+      totalTokens:
+        (usage.input_tokens || 0) +
+        (usage.output_tokens || 0) +
+        (usage.cache_read_input_tokens || 0) +
+        (usage.cache_creation_input_tokens || 0),
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+  }
+
+  private mapStopReason(
+    reason: string | null,
+  ): "stop" | "toolUse" | "error" | "aborted" {
+    if (reason === "tool_use") return "toolUse";
+    if (reason === "end_turn") return "stop";
+    if (reason === "max_tokens") return "stop";
+    return "stop";
+  }
+
+  private emptyUsage(): Usage {
+    return {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+  }
+}

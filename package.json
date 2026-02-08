@@ -1,0 +1,24 @@
+{
+  "name": "gueridon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile web UI for Claude Code",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mariozechner/mini-lit": "^0.2.1",
+    "@mariozechner/pi-agent-core": "^0.52.8",
+    "@mariozechner/pi-ai": "^0.52.8",
+    "@mariozechner/pi-web-ui": "^0.52.8",
+    "lit": "^3.3.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
+  }
+}

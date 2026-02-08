@@ -47,12 +47,34 @@ python3 scripts/hello-cc.py
 python3 scripts/hello-cc.py "What tools do you have?"
 ```
 
+## Dev Server
+
+```bash
+npm run dev    # Vite on localhost:5173
+npm run build  # Production build to dist/
+```
+
 ## Dependencies
 
 - **pi-web-ui packages:** `@mariozechner/pi-web-ui`, `pi-agent-core`, `pi-ai`, `mini-lit` (all on npm)
 - **Bundler:** Vite with `@tailwindcss/vite`
 - **Reference project:** `~/Repos/persistent-assistant` (David's Telegram bot, spawn-per-message approach)
 - **pi-mono source:** `~/Repos/pi-mono` (for reference, consume via npm not source)
+
+## Lit Class Field Fix (Critical)
+
+pi-web-ui is compiled by `tsgo` which ignores `useDefineForClassFields: false`, emitting native class fields. These shadow Lit's `@state`/`@property` prototype accessors, breaking reactivity entirely (components render empty).
+
+`vite.config.ts` contains a `litClassFieldFix()` plugin that patches esbuild's `__defNormalProp` helper in pre-bundled deps:
+- Uses `[[Set]]` semantics (simple assignment) → triggers Lit setters for `@state`/`@property`
+- Falls back silently for getter-only properties (`@query`) → getter stays intact
+
+**If pi-web-ui components render blank**, debug in this order:
+1. `element.hasUpdated` — false means Lit never completed first render
+2. `element.updateComplete` — if it rejects, the error message says exactly what's wrong
+3. Only then check CSS/layout
+
+The plugin warns at build time if the regex doesn't match (esbuild output format changed).
 
 ## Session Model
 
