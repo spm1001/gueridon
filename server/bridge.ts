@@ -86,6 +86,12 @@ const CC_FLAGS = [
   "--replay-user-messages",
   "--dangerously-skip-permissions",
   "--allow-dangerously-skip-permissions",
+  "--append-system-prompt",
+  "The user is on a mobile device using Guéridon. " +
+    "When you use AskUserQuestion, it will return an error — this is expected. " +
+    "The user sees your questions as tappable buttons and will respond with their selection " +
+    "in their next message. Do not apologize for the error or retry the tool. " +
+    "End your turn and wait for the user's response.",
 ];
 
 function spawnCC(sessionId: string, resume: boolean): ChildProcess {

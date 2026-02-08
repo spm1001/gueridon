@@ -32,6 +32,25 @@ export interface CCEvent {
   [key: string]: any;
 }
 
+// --- AskUserQuestion types ---
+
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
+export interface AskUserQuestionItem {
+  question: string;
+  header: string;
+  options: AskUserOption[];
+  multiSelect: boolean;
+}
+
+export interface AskUserQuestionData {
+  questions: AskUserQuestionItem[];
+  toolCallId: string;
+}
+
 // --- The Adapter ---
 
 export class ClaudeCodeAgent {
@@ -47,6 +66,9 @@ export class ClaudeCodeAgent {
   // Track tool call IDs → names for tool_result mapping
   private toolCallNames = new Map<string, string>();
 
+  // AskUserQuestion tool call IDs — suppress their error tool_results
+  private askUserToolCallIds = new Set<string>();
+
   // Context tracking (for fuel gauge)
   private _lastInputTokens = 0;
   private _contextWindow = 200_000; // default, updated from init event
@@ -54,6 +76,9 @@ export class ClaudeCodeAgent {
   // Required public fields — AgentInterface checks these
   public streamFn: any = () => {};
   public getApiKey: any = () => "bridge";
+
+  /** Fired when CC calls AskUserQuestion — render tappable UI, send answer as next prompt */
+  public onAskUser?: (data: AskUserQuestionData) => void;
 
   constructor() {
     this._state = {
@@ -248,6 +273,17 @@ export class ClaudeCodeAgent {
     this._state.messages = [...this._state.messages, piMessage];
     this.emit({ type: "message_end", message: piMessage });
 
+    // Detect AskUserQuestion tool calls — fire callback and track IDs
+    for (const block of msg.content || []) {
+      if (block.type === "tool_use" && block.name === "AskUserQuestion") {
+        this.askUserToolCallIds.add(block.id);
+        this.onAskUser?.({
+          questions: block.input?.questions || [],
+          toolCallId: block.id,
+        });
+      }
+    }
+
     // Track tool call IDs for tool_result mapping
     for (const block of piMessage.content) {
       if ((block as any).type === "toolCall") {
@@ -275,6 +311,17 @@ export class ClaudeCodeAgent {
     for (const block of msg.content) {
       if (block.type === "tool_result") {
         const toolCallId = block.tool_use_id;
+
+        // Suppress AskUserQuestion error results — the overlay handles this
+        if (this.askUserToolCallIds.has(toolCallId)) {
+          this.askUserToolCallIds.delete(toolCallId);
+          // Still remove from pending tool calls
+          const pending = new Set(this._state.pendingToolCalls);
+          pending.delete(toolCallId);
+          this._state.pendingToolCalls = pending;
+          continue;
+        }
+
         const toolName = this.toolCallNames.get(toolCallId) || "unknown";
         const isError = block.is_error || false;
 

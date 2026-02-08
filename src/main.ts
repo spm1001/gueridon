@@ -11,6 +11,7 @@ import {
 import { html, render } from "lit";
 import { ClaudeCodeAgent } from "./claude-code-agent.js";
 import { WSTransport, type ConnectionState } from "./ws-transport.js";
+import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
 import "./app.css";
 
 // --- Configuration ---
@@ -93,6 +94,28 @@ const transport = new WSTransport({
 });
 
 agent.connectTransport(transport);
+
+// AskUserQuestion interception — render as tappable buttons, send answer as next prompt
+agent.onAskUser = (data) => {
+  showAskUserOverlay(
+    data,
+    (answer) => {
+      // User tapped an option — send as next prompt
+      agent.prompt(answer);
+    },
+    () => {
+      // User dismissed — they'll type a custom answer in the chat input
+    },
+  );
+};
+
+// Dismiss overlay when a new turn starts (user sent something via chat input)
+agent.subscribe((event) => {
+  if (event.type === "agent_start") {
+    dismissAskUserOverlay();
+  }
+});
+
 transport.connect();
 
 // --- Render ---
