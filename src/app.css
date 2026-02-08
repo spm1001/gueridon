@@ -1,5 +1,7 @@
 @import "tailwindcss";
-@import "@mariozechner/pi-web-ui/app.css";
+/* Import mini-lit theme (used by pi-web-ui components) directly,
+   NOT via pi-web-ui/app.css which has its own conflicting Tailwind setup */
+@import "@mariozechner/mini-lit/styles/themes/default.css";
 
 @keyframes slide-up {
   from {

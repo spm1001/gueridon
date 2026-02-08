@@ -57,9 +57,15 @@ export function createContextGauge(
   }
 
   function renderStats(): unknown {
+    // The parent div (in AgentInterface) has "flex justify-between items-center h-5"
+    // inside a container with px-2.
+    // Left: pl-4 so CWD aligns with textarea text (px-2 + pl-4 = 24px ≈ textarea p-4)
+    // Right: pr-6 so % centers on send button (px-2 + pr-6 = 32px ≈ button center)
     return html`
-      <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title=${cwdText}>${cwdText}</span>
-      <span style="font-weight:500; ${colorForRemaining(remaining)}">${remaining < 100 ? `${remaining}%` : ""}</span>
+      <div class="flex justify-between items-center w-full pl-4 pr-6">
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title=${cwdText}>${cwdText}</span>
+        <span style="font-weight:500; ${colorForRemaining(remaining)}">${remaining < 100 ? `${remaining}%` : ""}</span>
+      </div>
     `;
   }
 
