@@ -110,8 +110,12 @@ agent.onAskUser = (data) => {
   );
 };
 
-// Context status bar — takes over pi-web-ui's stats bar with CWD + % remaining
-const gauge = createContextGauge();
+// Context fuel gauge — renders CWD + % remaining in pi-web-ui's stats bar
+// via the customStats property (Lit-native, no DOM fighting).
+// requestUpdate triggers AgentInterface re-render when gauge state changes.
+const gauge = createContextGauge(() => {
+  chatPanel.agentInterface?.requestUpdate();
+});
 
 agent.onCompaction = (from, to) => {
   gauge.notifyCompaction(from, to);
@@ -149,6 +153,12 @@ async function init() {
     // Returning true tells the guard "proceed, auth is handled elsewhere."
     onApiKeyRequired: async () => true,
   });
+
+  // Wire fuel gauge into AgentInterface's stats bar (replaces token totals).
+  // Cast needed: customStats is our fork addition, not in the npm type defs.
+  if (chatPanel.agentInterface) {
+    (chatPanel.agentInterface as any).customStats = () => gauge.renderStats();
+  }
 
   const appHtml = html`
     <div class="w-full h-[100dvh] flex flex-col bg-background text-foreground overflow-hidden">

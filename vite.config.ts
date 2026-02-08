@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
 
@@ -35,9 +36,32 @@ function litClassFieldFix(): Plugin {
   };
 }
 
+// Consume pi-web-ui from local fork source (~/Repos/pi-mono) instead of npm.
+// Benefits: no build step, no stale dist/, HMR on component edits, and esbuild
+// compiles with [[Set]] semantics (es2020 target) so Lit reactivity just works.
+const PI_WEB_UI_SRC = "/Users/modha/Repos/pi-mono/packages/web-ui/src";
+
 export default defineConfig({
   plugins: [litClassFieldFix(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@mariozechner/pi-web-ui": PI_WEB_UI_SRC,
+      // Deduplicate Lit: web-ui source resolves lit from pi-mono's node_modules,
+      // guéridon has its own copy. Two Lit runtimes = broken instanceof checks.
+      // Force everything through guéridon's copy.
+      "lit": resolve("node_modules/lit"),
+      "lit/": resolve("node_modules/lit") + "/",
+      "@lit/reactive-element": resolve("node_modules/@lit/reactive-element"),
+    },
+  },
+  esbuild: {
+    // [[Set]] semantics for class fields — Lit @state/@property setters need this.
+    // esbuild ignores tsconfig; target controls class field emit strategy.
+    target: "es2020",
+  },
   optimizeDeps: {
+    // Don't pre-bundle the aliased source — Vite transforms it directly.
+    exclude: ["@mariozechner/pi-web-ui"],
     esbuildOptions: {
       target: "es2020",
     },

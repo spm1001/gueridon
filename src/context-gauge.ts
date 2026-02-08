@@ -1,10 +1,12 @@
 /**
- * Context status bar — takes over pi-web-ui's stats bar (the h-5 div below
- * the input area) and replaces its content with CWD + % remaining.
+ * Context fuel gauge — provides a Lit template for pi-web-ui's stats bar
+ * showing CWD + % context remaining.
  *
- * Uses a MutationObserver to find the stats element after pi-web-ui renders,
- * then replaces its children on each update.
+ * Uses AgentInterface.customStats to render natively inside Lit's render
+ * cycle instead of fighting it with DOM manipulation.
  */
+
+import { html } from "lit";
 
 export interface ContextGauge {
   /** Update the % remaining display */
@@ -13,40 +15,18 @@ export interface ContextGauge {
   setCwd(cwd: string): void;
   /** Show a brief compaction notification */
   notifyCompaction(fromTokens: number, toTokens: number): void;
+  /** Lit template for the stats bar — pass to AgentInterface.customStats */
+  renderStats(): unknown;
 }
 
-export function createContextGauge(): ContextGauge {
+export function createContextGauge(
+  /** Called when gauge state changes and the host component should re-render */
+  requestUpdate: () => void,
+): ContextGauge {
   let cwdText = "";
   let remaining = 100;
-  let statsEl: HTMLElement | null = null;
 
-  // Find pi-web-ui's stats bar. It's the .h-5 div inside agent-interface's
-  // input area. We watch for it since ChatPanel renders asynchronously.
-  function findStatsBar(): HTMLElement | null {
-    // The stats bar is: agent-interface > div > div.shrink-0 > div.max-w-3xl > div.h-5
-    const candidates = document.querySelectorAll<HTMLElement>(
-      "agent-interface .shrink-0 .h-5",
-    );
-    // Take the last match (the global stats bar, not any per-message ones)
-    return candidates.length > 0 ? candidates[candidates.length - 1] : null;
-  }
-
-  function ensureStatsEl(): HTMLElement | null {
-    if (statsEl && statsEl.isConnected) return statsEl;
-    statsEl = findStatsBar();
-    return statsEl;
-  }
-
-  // Watch for the stats bar to appear (ChatPanel renders async)
-  const observer = new MutationObserver(() => {
-    if (ensureStatsEl()) {
-      renderBar();
-      observer.disconnect();
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  // Compaction toast (separate element, briefly overlays)
+  // Compaction toast (fixed-position overlay, independent of stats bar)
   const toast = document.createElement("div");
   Object.assign(toast.style, {
     position: "fixed",
@@ -71,49 +51,29 @@ export function createContextGauge(): ContextGauge {
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
   function colorForRemaining(pct: number): string {
-    if (pct <= 10) return "#ef4444"; // red
-    if (pct <= 20) return "#eab308"; // amber
-    return ""; // inherit (muted-foreground from parent)
+    if (pct <= 10) return "color: #ef4444;"; // red
+    if (pct <= 20) return "color: #eab308;"; // amber
+    return ""; // inherit muted-foreground from parent
   }
 
-  function renderBar() {
-    const el = ensureStatsEl();
-    if (!el) return;
-
-    // Replace the stats bar content entirely
-    el.innerHTML = "";
-    el.style.display = "flex";
-    el.style.justifyContent = "space-between";
-    el.style.alignItems = "center";
-
-    const cwdSpan = document.createElement("span");
-    cwdSpan.textContent = cwdText;
-    cwdSpan.style.overflow = "hidden";
-    cwdSpan.style.textOverflow = "ellipsis";
-    cwdSpan.style.whiteSpace = "nowrap";
-    cwdSpan.title = cwdText; // full path on hover/long-press
-
-    const pctSpan = document.createElement("span");
-    pctSpan.textContent = remaining < 100 ? `${remaining}%` : "";
-    pctSpan.style.fontWeight = "500";
-    const color = colorForRemaining(remaining);
-    if (color) pctSpan.style.color = color;
-
-    el.appendChild(cwdSpan);
-    el.appendChild(pctSpan);
+  function renderStats(): unknown {
+    return html`
+      <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title=${cwdText}>${cwdText}</span>
+      <span style="font-weight:500; ${colorForRemaining(remaining)}">${remaining < 100 ? `${remaining}%` : ""}</span>
+    `;
   }
 
   function update(percent: number) {
     const used = Math.max(0, Math.min(100, percent));
     remaining = Math.round(100 - used);
-    renderBar();
+    requestUpdate();
   }
 
   function setCwd(cwd: string) {
     // Show just the last path component (repo name)
     const short = cwd.split("/").filter(Boolean).pop() || cwd;
     cwdText = short;
-    renderBar();
+    requestUpdate();
   }
 
   function notifyCompaction(fromTokens: number, toTokens: number) {
@@ -129,5 +89,5 @@ export function createContextGauge(): ContextGauge {
     }, 4000);
   }
 
-  return { update, setCwd, notifyCompaction };
+  return { update, setCwd, notifyCompaction, renderStats };
 }
