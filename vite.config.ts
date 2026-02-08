@@ -42,4 +42,13 @@ export default defineConfig({
       target: "es2020",
     },
   },
+  build: {
+    rollupOptions: {
+      // pi-ai bundles @aws-sdk/client-bedrock-runtime which pulls in Node.js-only
+      // @smithy packages (stream, http, net). We don't use Bedrock — CC handles
+      // the LLM call server-side. Externalizing prevents Rollup from failing on
+      // Node.js imports that can't resolve in a browser bundle.
+      external: [/^@smithy\//, /^@aws-sdk\//],
+    },
+  },
 });

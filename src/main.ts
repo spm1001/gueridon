@@ -106,7 +106,10 @@ async function init() {
   // Cast to any — ClaudeCodeAgent satisfies Agent's shape structurally
   // but isn't a subclass (we don't use pi's agentLoop at all)
   await chatPanel.setAgent(agent as any, {
-    onApiKeyRequired: async () => true, // Keys handled server-side by CC/MAX
+    // AgentInterface.sendMessage() silently aborts if this returns false.
+    // We never need a key — CC authenticates via MAX subscription server-side.
+    // Returning true tells the guard "proceed, auth is handled elsewhere."
+    onApiKeyRequired: async () => true,
   });
 
   const appHtml = html`

@@ -156,12 +156,17 @@ export class WSTransport implements CCTransport {
           break;
 
         case "processExit":
-          // CC process died — not a connection error, but the adapter
-          // should know (it'll get this as a CC event if we forward it,
-          // but processExit is bridge-level, not CC-level)
-          // We could synthesize a CC event here, but the adapter's
-          // result handler already covers normal exits. This handles
-          // abnormal exits (crash, abort).
+          // CC process died. Normal exits (result/success) are handled by
+          // the adapter via CC events. But abnormal exits (crash, abort,
+          // SIGKILL) never send a result event — the adapter's isStreaming
+          // stays true and the UI shows an infinite pulsing cursor.
+          // Synthesize a result event so the adapter resets cleanly.
+          this.clearPromptTimer();
+          this.eventHandler?.({
+            type: "result",
+            subtype: "error",
+            error: `CC process exited (code=${msg.code}, signal=${msg.signal})`,
+          });
           break;
       }
     } else if (msg.source === "cc") {

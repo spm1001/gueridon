@@ -298,6 +298,18 @@ wss.on("listening", () => {
   console.log(`[bridge] WebSocket server listening on ws://localhost:${PORT}`);
 });
 
+wss.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `[bridge] Port ${PORT} is already in use. Is another bridge running?\n` +
+        `  Kill it:  lsof -ti :${PORT} | xargs kill\n` +
+        `  Or use:   BRIDGE_PORT=3002 npm run bridge`
+    );
+    process.exit(1);
+  }
+  throw err;
+});
+
 wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const url = new URL(req.url || "/", `http://localhost:${PORT}`);
   const requestedSessionId = url.searchParams.get("session");
