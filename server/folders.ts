@@ -203,27 +203,33 @@ export async function scanFolders(
       continue;
     }
 
-    // Check CC session files (paused wins over closed)
+    // Check handoff and session files.
+    // Handoff = intentional close (closed wins over paused).
+    // Session files without handoff = abandoned mid-work (paused).
+    // Session .jsonl files persist forever — they're not cleaned up by /close.
     const session = await getLatestSession(fullPath);
     const handoff = await getLatestHandoff(fullPath);
 
-    if (session) {
+    if (handoff) {
+      // Intentionally closed — handoff exists regardless of leftover session files.
+      // Still provide sessionId for --resume if user wants to reopen.
+      folders.push({
+        name,
+        path: fullPath,
+        state: "closed",
+        sessionId: session?.id ?? null,
+        lastActive: session?.lastActive.toISOString() ?? null,
+        handoffPurpose: handoff.purpose,
+      });
+    } else if (session) {
+      // Session files but no handoff — abandoned without /close (truly paused)
       folders.push({
         name,
         path: fullPath,
         state: "paused",
         sessionId: session.id,
         lastActive: session.lastActive.toISOString(),
-        handoffPurpose: handoff?.purpose ?? null,
-      });
-    } else if (handoff) {
-      folders.push({
-        name,
-        path: fullPath,
-        state: "closed",
-        sessionId: null,
-        lastActive: null,
-        handoffPurpose: handoff.purpose,
+        handoffPurpose: null,
       });
     } else {
       folders.push({

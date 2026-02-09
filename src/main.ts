@@ -11,6 +11,7 @@ import {
 import { html, render } from "lit";
 import { ClaudeCodeAgent } from "./claude-code-agent.js";
 import { WSTransport, type ConnectionState } from "./ws-transport.js";
+import { showFolderChooser, type FolderChooserHandle } from "./folder-chooser.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
 import { createContextGauge } from "./context-gauge.js";
 import "./app.css";
@@ -89,11 +90,33 @@ function updateStatus(state: ConnectionState, detail?: string) {
   }
 }
 
+let folderChooser: FolderChooserHandle | null = null;
+
 const transport = new WSTransport({
   url: BRIDGE_URL,
   onStateChange: updateStatus,
-  onSessionId: (id) => console.log(`[guéridon] session: ${id}`),
+  onSessionId: (id) => {
+    console.log(`[guéridon] session: ${id}`);
+    // Folder selected — dismiss chooser, reveal chat
+    if (folderChooser) {
+      folderChooser.dismiss();
+      folderChooser = null;
+    }
+  },
   onBridgeError: (err) => console.error(`[guéridon] bridge error: ${err}`),
+  onLobbyConnected: () => {
+    transport.listFolders();
+  },
+  onFolderList: (folders) => {
+    if (!folderChooser) {
+      folderChooser = showFolderChooser(folders, (folder) => {
+        gauge.setCwd(folder.name); // Immediate feedback before CC starts
+        transport.connectFolder(folder.path);
+      });
+    } else {
+      folderChooser.updateFolders(folders);
+    }
+  },
 });
 
 agent.connectTransport(transport);
