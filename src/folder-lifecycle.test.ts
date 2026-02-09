@@ -201,6 +201,22 @@ describe("switching phase", () => {
     expect((effects[0] as any).path).toBe("/home/user/Repos/beta");
   });
 
+  it("auto_connect → connecting (treated as lobby_entered — localStorage stored folder is ignored)", () => {
+    const { state, effects } = transition(switching, {
+      type: "auto_connect",
+      path: "/home/user/Repos/WRONG",
+      name: "WRONG",
+    });
+    expect(state).toEqual({
+      phase: "connecting",
+      folderPath: "/home/user/Repos/beta",
+      folderName: "beta",
+      retries: 0,
+    });
+    expect(effectTypes(effects)).toEqual(["connect_folder"]);
+    expect((effects[0] as any).path).toBe("/home/user/Repos/beta");
+  });
+
   it("folder_list → no-op (stale list during switch)", () => {
     const { state, effects } = transition(switching, {
       type: "folder_list",

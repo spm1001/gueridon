@@ -190,7 +190,10 @@ const transport = new WSTransport({
   },
   onFolderList: (folders) => dispatch({ type: "folder_list", folders }),
   onHistoryStart: () => agent.startReplay(),
-  onHistoryEnd: () => agent.endReplay(),
+  onHistoryEnd: () => {
+    agent.endReplay();
+    gi.setContextPercent(agent.contextPercent);
+  },
   onProcessExit: (code, signal) => {
     const detail = signal ? `signal ${signal}` : `code ${code}`;
     dispatch({ type: "connection_failed", reason: `Claude process exited (${detail})` });

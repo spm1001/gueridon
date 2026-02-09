@@ -220,7 +220,10 @@ function transitionSwitching(
 ): TransitionResult {
   switch (event.type) {
     case "lobby_entered":
-      // We're back in lobby after returnToLobby — now connect to the deferred folder
+    case "auto_connect":
+      // We're back in lobby after returnToLobby — now connect to the deferred folder.
+      // auto_connect fires instead of lobby_entered when localStorage has a stored
+      // folder, but during switching we already know the target — just proceed.
       // Timeout continues from switching phase (not restarted)
       return {
         state: {

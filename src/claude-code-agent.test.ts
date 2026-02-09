@@ -1138,4 +1138,57 @@ describe("replay mode", () => {
     expect(cwdSpy).not.toHaveBeenCalled();
     expect(agent.cwd).toBe("/replayed/path"); // State IS updated
   });
+
+  it("adds user text messages to state during replay", () => {
+    agent.startReplay();
+    // CC echoes user messages with content as a plain string (not an array)
+    agent.handleCCEvent({
+      type: "user",
+      message: {
+        role: "user",
+        content: "hello from replay",
+      },
+    });
+
+    expect(agent.state.messages).toHaveLength(1);
+    expect(agent.state.messages[0].role).toBe("user");
+    expect(agent.state.messages[0].content[0]).toEqual({
+      type: "text",
+      text: "hello from replay",
+    });
+    expect(events).toEqual([]); // Suppressed during replay
+  });
+
+  it("ignores user text echo during normal (non-replay) operation", () => {
+    // During normal use, prompt() already added the user message.
+    // The CC echo via --replay-user-messages should NOT duplicate it.
+    agent.handleCCEvent({
+      type: "user",
+      message: {
+        role: "user",
+        content: "echo from CC",
+      },
+    });
+
+    // No user message added (prompt() would have done it)
+    expect(agent.state.messages.filter((m) => m.role === "user")).toHaveLength(0);
+  });
+
+  it("context gauge is available after replay ends", () => {
+    agent.startReplay();
+    agent.handleCCEvent({
+      type: "result",
+      result: {
+        usage: {
+          input_tokens: 50000,
+          output_tokens: 5000,
+          cache_read_input_tokens: 10000,
+          cache_creation_input_tokens: 0,
+        },
+      },
+    });
+    agent.endReplay();
+
+    expect(agent.contextPercent).toBeGreaterThan(0);
+  });
 });

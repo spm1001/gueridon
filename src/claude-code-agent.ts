@@ -400,6 +400,20 @@ export class ClaudeCodeAgent {
     const msg = event.message;
     if (!msg?.content) return;
 
+    // During replay, CC echoes user text messages via --replay-user-messages.
+    // Add them to state so the conversation shows both sides.
+    // During normal operation, prompt() already added the user message — skip
+    // the echo to avoid duplicates.
+    // CC echoes content as a plain string, not an array of blocks.
+    if (this._replayMode && typeof msg.content === "string") {
+      const userMessage: AgentMessage = {
+        role: "user",
+        content: [{ type: "text" as const, text: msg.content }],
+        timestamp: Date.now(),
+      };
+      this._state.messages = [...this._state.messages, userMessage];
+    }
+
     // Tool results come as user messages with tool_result content
     for (const block of msg.content) {
       if (block.type === "tool_result") {
