@@ -17,8 +17,6 @@ export interface ContextGauge {
   notifyCompaction(fromTokens: number, toTokens: number): void;
   /** Lit template for the stats bar — pass to AgentInterface.customStats */
   renderStats(): unknown;
-  /** Set callback for when user taps the CWD label */
-  onCwdTap: (() => void) | null;
 }
 
 export function createContextGauge(
@@ -27,7 +25,6 @@ export function createContextGauge(
 ): ContextGauge {
   let cwdText = "";
   let remaining = 100;
-  let cwdTapCallback: (() => void) | null = null;
 
   // Compaction toast (fixed-position overlay, independent of stats bar)
   const toast = document.createElement("div");
@@ -66,11 +63,7 @@ export function createContextGauge(
     // Right: pr-6 so % centers on send button (px-2 + pr-6 = 32px ≈ button center)
     return html`
       <div class="flex justify-between items-center w-full pl-4 pr-6">
-        <span
-          style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; touch-action:manipulation"
-          title="Tap to switch folder"
-          @click=${() => cwdTapCallback?.()}
-        >${cwdText}</span>
+        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title=${cwdText}>${cwdText}</span>
         <span style="font-weight:500; ${colorForRemaining(remaining)}">${remaining < 100 ? `${remaining}%` : ""}</span>
       </div>
     `;
@@ -102,12 +95,5 @@ export function createContextGauge(
     }, 4000);
   }
 
-  return {
-    update,
-    setCwd,
-    notifyCompaction,
-    renderStats,
-    get onCwdTap() { return cwdTapCallback; },
-    set onCwdTap(cb: (() => void) | null) { cwdTapCallback = cb; },
-  };
+  return { update, setCwd, notifyCompaction, renderStats };
 }
