@@ -53,7 +53,7 @@ python3 scripts/hello-cc.py "What tools do you have?"
 ```bash
 npm run dev         # Vite on localhost:5173
 npm run build       # Production build to dist/
-npm test            # Run all tests (155 tests, ~2.7s)
+npm test            # Run all tests (183 tests, ~2.25s)
 npm run test:watch  # Watch mode for development
 ```
 
