@@ -174,11 +174,15 @@ Browser sends prompt             → CC spawned (lazy) → bridge:promptReceived
 ```
 CC streams events         → forwarded as cc:event messages
 CC completes (result)     → cc:event with type="result"
-Browser disconnects       → 5-minute idle timer starts
+Browser disconnects       → removed from session's client set
+                            If last client: 5-minute idle timer starts
                             If timer fires: CC killed, session removed
-Browser reconnects        → idle timer cancelled
+Browser reconnects        → added to client set, idle timer cancelled
                             If CC still running: session resumes
                             If CC died: respawned with --resume on next prompt
+Second tab connects       → added to same session's client set
+                            CC events broadcast to all connected tabs
+                            Disconnecting one tab doesn't affect others
 ```
 
 ## Reliability

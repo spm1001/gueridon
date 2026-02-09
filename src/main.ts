@@ -63,12 +63,14 @@ function updateStatus(state: ConnectionState, detail?: string) {
   if (!statusEl) return;
   const labels: Record<ConnectionState, string> = {
     connecting: "Connecting…",
+    lobby: "Choose folder…",
     connected: "Connected",
     disconnected: "Reconnecting…",
     error: "Connection error",
   };
   const colors: Record<ConnectionState, string> = {
     connecting: "bg-yellow-500",
+    lobby: "bg-blue-500",
     connected: "bg-green-500",
     disconnected: "bg-yellow-500",
     error: "bg-red-500",

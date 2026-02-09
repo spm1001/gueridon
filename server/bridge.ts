@@ -93,7 +93,7 @@ interface Session {
   // conceptually distinct — if we need to distinguish "fresh WS to existing CC
   // session" from "WS reconnecting to active bridge session", split this field.
   process: ChildProcess | null;
-  ws: WebSocket | null;
+  clients: Set<WebSocket>; // All browser tabs connected to this session
   idleTimer: ReturnType<typeof setTimeout> | null;
   stderrBuffer: string[]; // Capture stderr for early-exit diagnostics
   spawnedAt: number | null; // Timestamp of last spawn, for early-exit detection
@@ -194,6 +194,16 @@ function sendToClient(ws: WebSocket | null, msg: ServerMessage): void {
   }
 }
 
+/** Send a message to all connected clients for a session. */
+function broadcast(session: Session, msg: ServerMessage): void {
+  const data = JSON.stringify(msg);
+  for (const client of session.clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(data);
+    }
+  }
+}
+
 /** Write to CC stdin with error handling (fixes TOCTOU race) */
 function writeToStdin(session: Session, data: string): boolean {
   const stdin = session.process?.stdin;
@@ -206,7 +216,7 @@ function writeToStdin(session: Session, data: string): boolean {
       `[bridge] stdin write failed session=${session.id}:`,
       (err as Error).message
     );
-    sendToClient(session.ws, {
+    broadcast(session, {
       source: "bridge",
       type: "error",
       error: "CC process stdin closed unexpectedly",
@@ -230,7 +240,7 @@ function wireProcessToSession(session: Session): void {
     if (!trimmed) return;
     try {
       const event = JSON.parse(trimmed);
-      sendToClient(session.ws, { source: "cc", event });
+      broadcast(session, { source: "cc", event });
     } catch {
       // Non-JSON output from CC (startup banners, warnings)
       console.log(`[bridge] non-json stdout: ${trimmed.slice(0, 200)}`);
@@ -264,14 +274,14 @@ function wireProcessToSession(session: Session): void {
     ) {
       const stderr = session.stderrBuffer.join("\n");
       const hint = stderr || "No stderr output captured";
-      sendToClient(session.ws, {
+      broadcast(session, {
         source: "bridge",
         type: "error",
         error: `CC process failed immediately (${uptime}ms). Likely a flag or version problem.\n${hint}`,
       });
     }
 
-    sendToClient(session.ws, {
+    broadcast(session, {
       source: "bridge",
       type: "processExit",
       code,
@@ -283,7 +293,7 @@ function wireProcessToSession(session: Session): void {
 
   proc.on("error", (err) => {
     console.error(`[bridge] CC spawn error session=${session.id}:`, err);
-    sendToClient(session.ws, {
+    broadcast(session, {
       source: "bridge",
       type: "error",
       error: `Process error: ${err.message}`,
@@ -306,7 +316,7 @@ function ensureProcess(session: Session, resume: boolean): boolean {
       `[bridge] failed to spawn CC session=${session.id}:`,
       (err as Error).message
     );
-    sendToClient(session.ws, {
+    broadcast(session, {
       source: "bridge",
       type: "error",
       error: `Failed to spawn CC: ${(err as Error).message}`,
@@ -377,16 +387,13 @@ wss.on("error", (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
-/** Attach a WebSocket to a session, clearing any idle timer and replacing the previous WS. */
+/** Attach a WebSocket to a session, clearing any idle timer. */
 function attachWsToSession(ws: WebSocket, session: Session): void {
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
     session.idleTimer = null;
   }
-  if (session.ws && session.ws !== ws) {
-    session.ws.close(1000, "Replaced by new connection");
-  }
-  session.ws = ws;
+  session.clients.add(ws);
 }
 
 /** Handle messages on a session-mode connection. */
@@ -494,7 +501,7 @@ async function handleLobbyMessage(
           folder: folderPath,
           resumable: !!existing, // Can --resume if CC has state
           process: null,
-          ws,
+          clients: new Set([ws]),
           idleTimer: null,
           stderrBuffer: [],
           spawnedAt: null,
@@ -562,7 +569,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
         folder: null,
         resumable: true,
         process: null,
-        ws,
+        clients: new Set([ws]),
         idleTimer: null,
         stderrBuffer: [],
         spawnedAt: null,
@@ -620,13 +627,12 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 
     if (conn.state.mode === "session") {
       const session = conn.state.session;
-      // Only set idle timer if we're still the active WS for this session.
-      // (A replaced WS closing shouldn't start a new idle timer.)
-      if (session.ws === ws) {
+      session.clients.delete(ws);
+
+      if (session.clients.size === 0) {
         console.log(
-          `[bridge] client disconnected session=${session.id} code=${code}`
+          `[bridge] last client disconnected session=${session.id} code=${code}`
         );
-        session.ws = null;
         session.idleTimer = setTimeout(() => {
           console.log(
             `[bridge] idle timeout, killing CC session=${session.id}`
@@ -636,6 +642,10 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
           }
           sessions.delete(session.id);
         }, IDLE_TIMEOUT_MS);
+      } else {
+        console.log(
+          `[bridge] client disconnected session=${session.id} code=${code} (${session.clients.size} remaining)`
+        );
       }
     } else {
       console.log(`[bridge] lobby client disconnected code=${code}`);

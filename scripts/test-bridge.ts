@@ -308,6 +308,82 @@ async function testLobbyConnectFolder(): Promise<void> {
   });
 }
 
+// --- Test 8: Multi-WS — two connections share a session ---
+
+async function testMultiWS(): Promise<void> {
+  console.log("\n=== Test 8: Multi-WS — two tabs share one session ===");
+
+  return new Promise((resolve, reject) => {
+    const folderPath = `${process.env.HOME}/Repos/gueridon`;
+    let ws1SessionId: string | null = null;
+
+    // First connection
+    const ws1 = new WebSocket(BRIDGE_URL);
+
+    ws1.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+
+      if (msg.type === "lobbyConnected") {
+        ws1.send(JSON.stringify({ type: "connectFolder", path: folderPath }));
+      }
+
+      if (msg.type === "connected") {
+        ws1SessionId = msg.sessionId;
+        console.log(`[t8] ws1 connected session=${msg.sessionId.slice(0, 8)}`);
+
+        // Second connection joins same folder
+        const ws2 = new WebSocket(BRIDGE_URL);
+
+        ws2.on("message", (data2) => {
+          const msg2 = JSON.parse(data2.toString());
+
+          if (msg2.type === "lobbyConnected") {
+            ws2.send(JSON.stringify({ type: "connectFolder", path: folderPath }));
+          }
+
+          if (msg2.type === "connected") {
+            console.log(`[t8] ws2 connected session=${msg2.sessionId.slice(0, 8)}`);
+
+            if (msg2.sessionId !== ws1SessionId) {
+              reject(new Error(`Session mismatch: ws1=${ws1SessionId} ws2=${msg2.sessionId}`));
+              return;
+            }
+            console.log("[t8] same sessionId — sharing CC process");
+
+            // Disconnect ws1, ws2 should stay alive (no processExit)
+            let gotProcessExit = false;
+            ws2.on("message", (data3) => {
+              const msg3 = JSON.parse(data3.toString());
+              if (msg3.type === "processExit") {
+                gotProcessExit = true;
+              }
+            });
+
+            ws1.close();
+
+            // Wait briefly to confirm no processExit arrives
+            setTimeout(() => {
+              if (gotProcessExit) {
+                reject(new Error("ws2 got processExit after ws1 disconnected"));
+                return;
+              }
+              console.log("[t8] ws1 disconnected, ws2 still alive — no processExit");
+              console.log("[t8] PASS");
+              ws2.close();
+            }, 1000);
+          }
+        });
+
+        ws2.on("close", () => resolve());
+        ws2.on("error", (err) => reject(err));
+      }
+    });
+
+    ws1.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("t8 timeout")), 15_000);
+  });
+}
+
 // --- Run all tests ---
 
 async function main() {
@@ -324,6 +400,7 @@ async function main() {
     await testLobbyRejectsPrompt();
     await testLobbyPathValidation();
     await testLobbyConnectFolder();
+    await testMultiWS();
     console.log("\n=== ALL TESTS PASSED ===");
     process.exit(0);
   } catch (err) {

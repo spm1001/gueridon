@@ -10,7 +10,20 @@ import type { CCTransport, CCEvent } from "./claude-code-agent.js";
 
 // --- Connection state ---
 
-export type ConnectionState = "connecting" | "connected" | "disconnected" | "error";
+export type ConnectionState = "connecting" | "lobby" | "connected" | "disconnected" | "error";
+
+// --- Folder types (mirrors server/folders.ts for typed API) ---
+
+export type FolderState = "active" | "paused" | "closed" | "fresh";
+
+export interface FolderInfo {
+  name: string;
+  path: string;
+  state: FolderState;
+  sessionId: string | null;
+  lastActive: string | null;
+  handoffPurpose: string | null;
+}
 
 export interface WSTransportOptions {
   /** Bridge WebSocket URL, e.g. "ws://localhost:3001" */
@@ -25,6 +38,10 @@ export interface WSTransportOptions {
   onSessionId?: (id: string) => void;
   /** Called on bridge-level error */
   onBridgeError?: (error: string) => void;
+  /** Called when lobby mode is entered (WS open, no session yet) */
+  onLobbyConnected?: () => void;
+  /** Called with folder list from bridge */
+  onFolderList?: (folders: FolderInfo[]) => void;
 }
 
 // --- Reconnect backoff ---
@@ -97,6 +114,18 @@ export class WSTransport implements CCTransport {
     this.ws.send(JSON.stringify({ type: "abort" }));
   }
 
+  /** Request folder list from bridge (lobby mode only) */
+  listFolders(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "listFolders" }));
+  }
+
+  /** Connect to a folder — transitions from lobby to session mode */
+  connectFolder(path: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "connectFolder", path }));
+  }
+
   // --- Internal ---
 
   private doConnect(): void {
@@ -141,6 +170,15 @@ export class WSTransport implements CCTransport {
   private handleMessage(msg: any): void {
     if (msg.source === "bridge") {
       switch (msg.type) {
+        case "lobbyConnected":
+          this.setState("lobby");
+          this.options.onLobbyConnected?.();
+          break;
+
+        case "folderList":
+          this.options.onFolderList?.(msg.folders);
+          break;
+
         case "connected":
           this.sessionId = msg.sessionId;
           this.options.onSessionId?.(msg.sessionId);
