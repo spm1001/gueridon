@@ -1,6 +1,7 @@
 import { html, render } from "lit";
 import { ClaudeCodeAgent } from "./claude-code-agent.js";
 import { WSTransport, type ConnectionState } from "./ws-transport.js";
+import type { FolderInfo } from "./ws-transport.js";
 import { FolderSelector } from "./folder-selector.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
 import { GueridonInterface } from "./gueridon-interface.js";
@@ -45,18 +46,34 @@ function updateStatus(state: ConnectionState) {
 
 let lifecycle = initial();
 let folderDialog: FolderSelector | null = null;
+let cachedFolders: FolderInfo[] = [];
+
+// Dispatch queue — effects can trigger callbacks that dispatch new events.
+// Without a queue, the inner dispatch would run mid-iteration of the outer
+// dispatch's effect loop. The queue ensures each dispatch completes fully
+// before the next event is processed.
+let dispatching = false;
+const eventQueue: FolderEvent[] = [];
 
 function dispatch(event: FolderEvent) {
-  const result = transition(lifecycle, event);
-  lifecycle = result.state;
-  for (const effect of result.effects) {
-    executeEffect(effect);
+  eventQueue.push(event);
+  if (dispatching) return;
+  dispatching = true;
+  while (eventQueue.length > 0) {
+    const ev = eventQueue.shift()!;
+    const result = transition(lifecycle, ev);
+    lifecycle = result.state;
+    for (const effect of result.effects) {
+      executeEffect(effect);
+    }
   }
+  dispatching = false;
 }
 
 function executeEffect(effect: FolderEffect) {
   switch (effect.type) {
     case "open_dialog":
+      cachedFolders = effect.folders;
       if (!folderDialog) {
         folderDialog = FolderSelector.show(
           effect.folders,
@@ -76,6 +93,7 @@ function executeEffect(effect: FolderEffect) {
       }
       break;
     case "update_dialog":
+      cachedFolders = effect.folders;
       folderDialog?.updateFolders(effect.folders);
       break;
     case "close_dialog": {
@@ -139,7 +157,7 @@ agent.subscribe((event) => {
   if (event.type === "agent_end") gi.setContextPercent(agent.contextPercent);
 });
 
-gi.onFolderSelect = () => dispatch({ type: "open_requested" });
+gi.onFolderSelect = () => dispatch({ type: "open_requested", cachedFolders });
 
 // --- Connect and render ---
 

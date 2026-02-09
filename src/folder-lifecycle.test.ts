@@ -36,10 +36,21 @@ describe("initial()", () => {
 describe("idle phase", () => {
   const idle: FolderPhase = { phase: "idle" };
 
-  it("open_requested → browsing, lists folders", () => {
+  it("open_requested → browsing, opens dialog + lists folders", () => {
     const { state, effects } = transition(idle, { type: "open_requested" });
     expect(state).toEqual({ phase: "browsing", folders: [] });
-    expect(effectTypes(effects)).toEqual(["list_folders"]);
+    expect(effectTypes(effects)).toEqual(["open_dialog", "list_folders"]);
+    expect((effects[0] as any).folders).toEqual([]);
+  });
+
+  it("open_requested with cached folders → opens dialog with cache", () => {
+    const { state, effects } = transition(idle, {
+      type: "open_requested",
+      cachedFolders: folders,
+    });
+    expect(state).toEqual({ phase: "browsing", folders });
+    expect(effectTypes(effects)).toEqual(["open_dialog", "list_folders"]);
+    expect((effects[0] as any).folders).toBe(folders);
   });
 
   it("lobby_entered → stays idle, lists folders", () => {
@@ -201,6 +212,14 @@ describe("switching phase", () => {
     expect(state).toBe(switching);
     expect(effects).toEqual([]);
   });
+
+  it("dialog_cancelled → idle (user escaped mid-switch)", () => {
+    const { state, effects } = transition(switching, {
+      type: "dialog_cancelled",
+    });
+    expect(state).toEqual({ phase: "idle" });
+    expect(effects).toEqual([]);
+  });
 });
 
 describe("connecting phase", () => {
@@ -228,11 +247,20 @@ describe("connecting phase", () => {
     expect(effects).toEqual([]);
   });
 
-  it("lobby_entered → no-op (unexpected, transport handles)", () => {
+  it("lobby_entered → retries connect_folder (WS dropped and reconnected)", () => {
     const { state, effects } = transition(connecting, {
       type: "lobby_entered",
     });
     expect(state).toBe(connecting);
+    expect(effectTypes(effects)).toEqual(["connect_folder"]);
+    expect((effects[0] as any).path).toBe("/home/user/Repos/alpha");
+  });
+
+  it("dialog_cancelled → idle (user escaped mid-connect)", () => {
+    const { state, effects } = transition(connecting, {
+      type: "dialog_cancelled",
+    });
+    expect(state).toEqual({ phase: "idle" });
     expect(effects).toEqual([]);
   });
 });
@@ -279,11 +307,12 @@ describe("full paths", () => {
     let s: FolderPhase = initial();
 
     // User opens folder selector while in a session
-    let r = transition(s, { type: "open_requested" });
+    let r = transition(s, { type: "open_requested", cachedFolders: folders });
     s = r.state;
     expect(s.phase).toBe("browsing");
+    expect(effectTypes(r.effects)).toEqual(["open_dialog", "list_folders"]);
 
-    // Folder list arrives
+    // Fresh folder list arrives
     r = transition(s, { type: "folder_list", folders });
     s = r.state;
     expect(s.phase).toBe("browsing");
@@ -323,6 +352,66 @@ describe("full paths", () => {
     const r = transition(s, { type: "dialog_cancelled" });
     expect(r.state.phase).toBe("idle");
     expect(effectTypes(r.effects)).toEqual(["close_dialog"]);
+  });
+
+  it("disconnect during connecting: lobby_entered retries connect", () => {
+    // Select folder → connecting → WS drops → reconnect → lobby → retries
+    let s: FolderPhase = {
+      phase: "connecting",
+      folderPath: folders[0].path,
+      folderName: folders[0].name,
+    };
+
+    // WS drops and reconnects
+    let r = transition(s, { type: "lobby_entered" });
+    s = r.state;
+    expect(s.phase).toBe("connecting");
+    expect(effectTypes(r.effects)).toEqual(["connect_folder"]);
+
+    // Second drop — still retries
+    r = transition(s, { type: "lobby_entered" });
+    expect(r.state.phase).toBe("connecting");
+    expect(effectTypes(r.effects)).toEqual(["connect_folder"]);
+
+    // Eventually succeeds
+    r = transition(r.state, { type: "session_started", sessionId: "recovered" });
+    expect(r.state.phase).toBe("idle");
+    expect(effectTypes(r.effects)).toEqual(["close_dialog", "focus_input"]);
+  });
+
+  it("escape during connecting: user cancels, connection may succeed silently", () => {
+    let s: FolderPhase = {
+      phase: "connecting",
+      folderPath: folders[0].path,
+      folderName: folders[0].name,
+    };
+
+    // User escapes
+    let r = transition(s, { type: "dialog_cancelled" });
+    s = r.state;
+    expect(s.phase).toBe("idle");
+
+    // session_started arrives later — no-op in idle
+    r = transition(s, { type: "session_started", sessionId: "late" });
+    expect(r.state.phase).toBe("idle");
+    expect(r.effects).toEqual([]);
+  });
+
+  it("escape during switching: user cancels, returns to idle", () => {
+    let s: FolderPhase = {
+      phase: "switching",
+      folderPath: folders[1].path,
+      folderName: folders[1].name,
+    };
+
+    // User escapes
+    let r = transition(s, { type: "dialog_cancelled" });
+    s = r.state;
+    expect(s.phase).toBe("idle");
+
+    // lobby_entered arrives — lists folders, user sees selector again
+    r = transition(s, { type: "lobby_entered" });
+    expect(effectTypes(r.effects)).toEqual(["list_folders"]);
   });
 
   it("flash bug scenario: session_started while browsing does NOT close dialog", () => {

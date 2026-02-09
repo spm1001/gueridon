@@ -22,7 +22,7 @@ export type FolderPhase =
 // --- Events ---
 
 export type FolderEvent =
-  | { type: "open_requested" }
+  | { type: "open_requested"; cachedFolders?: FolderInfo[] }
   | { type: "folder_list"; folders: FolderInfo[] }
   | { type: "folder_selected"; path: string; name: string; inSession: boolean }
   | { type: "dialog_cancelled" }
@@ -80,12 +80,18 @@ function transitionIdle(
   event: FolderEvent,
 ): TransitionResult {
   switch (event.type) {
-    case "open_requested":
-      // User clicked folder button — move to browsing with empty list, request folders
+    case "open_requested": {
+      // User clicked folder button — open dialog immediately (with cached data),
+      // request fresh folder list in parallel
+      const cached = event.cachedFolders || [];
       return {
-        state: { phase: "browsing", folders: [] },
-        effects: [{ type: "list_folders" }],
+        state: { phase: "browsing", folders: cached },
+        effects: [
+          { type: "open_dialog", folders: cached },
+          { type: "list_folders" },
+        ],
       };
+    }
 
     case "lobby_entered":
       // WS connected in lobby mode (initial load or after returnToLobby without deferred)
@@ -196,6 +202,15 @@ function transitionSwitching(
         effects: [{ type: "connect_folder", path: state.folderPath }],
       };
 
+    case "dialog_cancelled":
+      // User escaped during switch — abandon. We've already returnToLobby'd,
+      // so we're disconnected. Idle + eventual lobby_entered → list_folders
+      // → user sees folder selector again.
+      return {
+        state: { phase: "idle" },
+        effects: [],
+      };
+
     case "folder_list":
       // Stale folder list during switch — ignore
       return { state, effects: [] };
@@ -221,12 +236,24 @@ function transitionConnecting(
         effects: [{ type: "close_dialog" }, { type: "focus_input" }],
       };
 
+    case "lobby_entered":
+      // WS dropped and reconnected during connect — retry
+      return {
+        state,
+        effects: [{ type: "connect_folder", path: state.folderPath }],
+      };
+
+    case "dialog_cancelled":
+      // User escaped during connect — abandon. Connection may still succeed
+      // in background (session_started in idle → no-op). User can re-open
+      // folder selector later.
+      return {
+        state: { phase: "idle" },
+        effects: [],
+      };
+
     case "folder_list":
       // Stale folder list during connect — ignore
-      return { state, effects: [] };
-
-    case "lobby_entered":
-      // Unexpected lobby during connect — ignore (transport will retry)
       return { state, effects: [] };
 
     default:
