@@ -83,6 +83,7 @@ export async function getLatestSession(
 interface HandoffInfo {
   sessionId: string;
   purpose: string;
+  mtime: Date; // When the handoff file was last modified
 }
 
 /**
@@ -147,6 +148,7 @@ export async function getLatestHandoff(
     return {
       sessionId: sessionIdMatch[1].trim(),
       purpose: purposeMatch[1].trim(),
+      mtime: latest.mtime,
     };
   } catch {
     return null;
@@ -213,12 +215,14 @@ export async function scanFolders(
     if (handoff) {
       // Intentionally closed — handoff exists regardless of leftover session files.
       // Still provide sessionId for --resume if user wants to reopen.
+      // lastActive: prefer session mtime, fall back to handoff mtime (covers
+      // repos where handoff was written from a different folder's session).
       folders.push({
         name,
         path: fullPath,
         state: "closed",
         sessionId: session?.id ?? null,
-        lastActive: session?.lastActive.toISOString() ?? null,
+        lastActive: (session?.lastActive ?? handoff.mtime).toISOString(),
         handoffPurpose: handoff.purpose,
       });
     } else if (session) {

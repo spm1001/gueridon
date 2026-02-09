@@ -126,6 +126,13 @@ export class WSTransport implements CCTransport {
     this.ws.send(JSON.stringify({ type: "connectFolder", path }));
   }
 
+  /** Disconnect from current session and reconnect in lobby mode */
+  returnToLobby(): void {
+    this.sessionId = null;
+    this.close();
+    this.connect(); // Reconnects without ?session= → lobby mode
+  }
+
   // --- Internal ---
 
   private doConnect(): void {

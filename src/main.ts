@@ -142,6 +142,11 @@ const gauge = createContextGauge(() => {
   chatPanel.agentInterface?.requestUpdate();
 });
 
+// Tap CWD label → return to folder chooser
+gauge.onCwdTap = () => {
+  transport.returnToLobby();
+};
+
 agent.onCompaction = (from, to) => {
   gauge.notifyCompaction(from, to);
 };
