@@ -3,6 +3,8 @@ import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
 import { IncomingMessage } from "http";
+import { resolve } from "node:path";
+import { scanFolders, getLatestSession, FolderInfo, SCAN_ROOT } from "./folders.js";
 
 // --- Configuration ---
 
@@ -23,7 +25,18 @@ interface ClientPrompt {
 interface ClientAbort {
   type: "abort";
 }
-type ClientMessage = ClientPrompt | ClientAbort;
+interface ClientListFolders {
+  type: "listFolders";
+}
+interface ClientConnectFolder {
+  type: "connectFolder";
+  path: string;
+}
+type ClientMessage =
+  | ClientPrompt
+  | ClientAbort
+  | ClientListFolders
+  | ClientConnectFolder;
 
 // Bridge → Browser
 interface BridgeConnected {
@@ -47,6 +60,15 @@ interface BridgeProcessExit {
   code: number | null;
   signal: string | null;
 }
+interface BridgeLobbyConnected {
+  source: "bridge";
+  type: "lobbyConnected";
+}
+interface BridgeFolderList {
+  source: "bridge";
+  type: "folderList";
+  folders: FolderInfo[];
+}
 interface BridgeCCEvent {
   source: "cc";
   event: Record<string, unknown>;
@@ -56,22 +78,52 @@ type ServerMessage =
   | BridgePromptReceived
   | BridgeError
   | BridgeProcessExit
+  | BridgeLobbyConnected
+  | BridgeFolderList
   | BridgeCCEvent;
 
 // --- Session state ---
 
 interface Session {
   id: string;
+  folder: string | null; // Folder path (null for legacy ?session= connections)
+  resumable: boolean; // True when CC has state for this session ID (use --resume)
   process: ChildProcess | null;
   ws: WebSocket | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
-  pingTimer: ReturnType<typeof setInterval> | null;
-  pongTimer: ReturnType<typeof setTimeout> | null;
   stderrBuffer: string[]; // Capture stderr for early-exit diagnostics
   spawnedAt: number | null; // Timestamp of last spawn, for early-exit detection
 }
 
 const sessions = new Map<string, Session>();
+
+// --- Per-connection state ---
+// Ping/pong is a connection concern (WS health), not a session concern (process lifecycle).
+
+interface PingPongState {
+  pingTimer: ReturnType<typeof setInterval> | null;
+  pongTimer: ReturnType<typeof setTimeout> | null;
+}
+
+interface Connection {
+  ping: PingPongState;
+  state:
+    | { mode: "lobby" }
+    | { mode: "session"; session: Session };
+}
+
+const connections = new Map<WebSocket, Connection>();
+
+/** Build activeProcesses map from sessions for scanFolders. */
+function getActiveProcesses(): Map<string, string> {
+  const active = new Map<string, string>();
+  for (const session of sessions.values()) {
+    if (session.folder && session.process && session.process.exitCode === null) {
+      active.set(session.folder, session.id);
+    }
+  }
+  return active;
+}
 
 // --- CC process management ---
 
@@ -94,7 +146,7 @@ const CC_FLAGS = [
     "End your turn and wait for the user's response.",
 ];
 
-function spawnCC(sessionId: string, resume: boolean): ChildProcess {
+function spawnCC(sessionId: string, resume: boolean, cwd?: string): ChildProcess {
   const args = [
     ...CC_FLAGS,
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
@@ -103,10 +155,11 @@ function spawnCC(sessionId: string, resume: boolean): ChildProcess {
   const proc = spawn("claude", args, {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env },
+    ...(cwd && { cwd }),
   });
 
   console.log(
-    `[bridge] spawned CC pid=${proc.pid} session=${sessionId}${resume ? " (resume)" : ""}`
+    `[bridge] spawned CC pid=${proc.pid} session=${sessionId}${resume ? " (resume)" : ""}${cwd ? ` cwd=${cwd}` : ""}`
   );
   return proc;
 }
@@ -162,6 +215,7 @@ function wireProcessToSession(session: Session): void {
   const proc = session.process;
   if (!proc || !proc.stdout) return;
 
+  session.resumable = true; // CC now has state for this session ID
   session.stderrBuffer = [];
   session.spawnedAt = Date.now();
 
@@ -240,7 +294,7 @@ function ensureProcess(session: Session, resume: boolean): boolean {
   if (session.process && session.process.exitCode === null) return true;
 
   try {
-    session.process = spawnCC(session.id, resume);
+    session.process = spawnCC(session.id, resume, session.folder ?? undefined);
     wireProcessToSession(session);
     return true;
   } catch (err) {
@@ -259,40 +313,43 @@ function ensureProcess(session: Session, resume: boolean): boolean {
 
 // --- Ping/pong ---
 
-function startPingPong(ws: WebSocket, session: Session): void {
-  // Clear any existing timers
-  stopPingPong(session);
+function startPingPong(ws: WebSocket, ping: PingPongState): void {
+  stopPingPong(ping);
 
-  session.pingTimer = setInterval(() => {
+  ping.pingTimer = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) {
-      stopPingPong(session);
+      stopPingPong(ping);
       return;
     }
     ws.ping();
-    session.pongTimer = setTimeout(() => {
-      console.log(
-        `[bridge] pong timeout, terminating connection session=${session.id}`
-      );
+    ping.pongTimer = setTimeout(() => {
+      // Resolve label at timeout time so it reflects current mode
+      const conn = connections.get(ws);
+      const label =
+        conn?.state.mode === "session"
+          ? `session=${conn.state.session.id}`
+          : "lobby";
+      console.log(`[bridge] pong timeout, terminating connection (${label})`);
       ws.terminate(); // Hard close — triggers 'close' event
     }, PONG_TIMEOUT_MS);
   }, PING_INTERVAL_MS);
 
   ws.on("pong", () => {
-    if (session.pongTimer) {
-      clearTimeout(session.pongTimer);
-      session.pongTimer = null;
+    if (ping.pongTimer) {
+      clearTimeout(ping.pongTimer);
+      ping.pongTimer = null;
     }
   });
 }
 
-function stopPingPong(session: Session): void {
-  if (session.pingTimer) {
-    clearInterval(session.pingTimer);
-    session.pingTimer = null;
+function stopPingPong(ping: PingPongState): void {
+  if (ping.pingTimer) {
+    clearInterval(ping.pingTimer);
+    ping.pingTimer = null;
   }
-  if (session.pongTimer) {
-    clearTimeout(session.pongTimer);
-    session.pongTimer = null;
+  if (ping.pongTimer) {
+    clearTimeout(ping.pongTimer);
+    ping.pongTimer = null;
   }
 }
 
@@ -316,66 +373,218 @@ wss.on("error", (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
+/** Attach a WebSocket to a session, clearing any idle timer and replacing the previous WS. */
+function attachWsToSession(ws: WebSocket, session: Session): void {
+  if (session.idleTimer) {
+    clearTimeout(session.idleTimer);
+    session.idleTimer = null;
+  }
+  if (session.ws && session.ws !== ws) {
+    session.ws.close(1000, "Replaced by new connection");
+  }
+  session.ws = ws;
+}
+
+/** Handle messages on a session-mode connection. */
+function handleSessionMessage(
+  ws: WebSocket,
+  session: Session,
+  msg: ClientMessage,
+): void {
+  switch (msg.type) {
+    case "prompt": {
+      // Lazy spawn: start CC process on first prompt (or respawn if dead)
+      const needsResume = session.process === null && session.resumable;
+      if (!ensureProcess(session, needsResume)) return;
+
+      // Write prompt to CC stdin
+      const envelope = JSON.stringify({
+        type: "user",
+        message: { role: "user", content: msg.text },
+      });
+      if (writeToStdin(session, envelope + "\n")) {
+        sendToClient(ws, { source: "bridge", type: "promptReceived" });
+      }
+      break;
+    }
+
+    case "abort": {
+      if (session.process) {
+        console.log(`[bridge] aborting CC session=${session.id}`);
+        killWithEscalation(session.process, session.id);
+      }
+      break;
+    }
+
+    case "listFolders":
+    case "connectFolder":
+      sendToClient(ws, {
+        source: "bridge",
+        type: "error",
+        error: `Cannot ${msg.type} on an active session`,
+      });
+      break;
+
+    default:
+      sendToClient(ws, {
+        source: "bridge",
+        type: "error",
+        error: `Unknown message type: ${(msg as any).type}`,
+      });
+  }
+}
+
+/** Handle messages on a lobby-mode connection. */
+async function handleLobbyMessage(
+  ws: WebSocket,
+  conn: Connection,
+  msg: ClientMessage,
+): Promise<void> {
+  switch (msg.type) {
+    case "listFolders": {
+      const folders = await scanFolders(getActiveProcesses());
+      sendToClient(ws, { source: "bridge", type: "folderList", folders });
+      break;
+    }
+
+    case "connectFolder": {
+      const folderPath = msg.path;
+      if (!folderPath) {
+        sendToClient(ws, {
+          source: "bridge",
+          type: "error",
+          error: "connectFolder requires a path",
+        });
+        return;
+      }
+
+      // Path must resolve to within SCAN_ROOT (prevents traversal)
+      const normalized = resolve(folderPath);
+      if (!normalized.startsWith(SCAN_ROOT + "/")) {
+        sendToClient(ws, {
+          source: "bridge",
+          type: "error",
+          error: "Folder path must be within scan root",
+        });
+        return;
+      }
+
+      // Check if there's already an active bridge session for this folder
+      let session: Session | undefined;
+      for (const s of sessions.values()) {
+        if (s.folder === folderPath) {
+          session = s;
+          break;
+        }
+      }
+
+      if (session) {
+        // Reconnect to existing bridge session
+        attachWsToSession(ws, session);
+      } else {
+        // No bridge session — check for existing CC session (paused)
+        const existing = await getLatestSession(folderPath);
+        const id = existing?.id ?? randomUUID();
+        session = {
+          id,
+          folder: folderPath,
+          resumable: !!existing, // Can --resume if CC has state
+          process: null,
+          ws,
+          idleTimer: null,
+          stderrBuffer: [],
+          spawnedAt: null,
+        };
+        sessions.set(id, session);
+      }
+
+      // Transition: lobby → session (no listener surgery — dispatcher reads mode)
+      conn.state = { mode: "session", session };
+
+      console.log(
+        `[bridge] connectFolder folder=${folderPath} session=${session.id} resumable=${session.resumable}`
+      );
+
+      sendToClient(ws, {
+        source: "bridge",
+        type: "connected",
+        sessionId: session.id,
+        resumed: session.resumable,
+      });
+      break;
+    }
+
+    case "prompt":
+    case "abort":
+      sendToClient(ws, {
+        source: "bridge",
+        type: "error",
+        error: `Cannot ${msg.type} in lobby — send connectFolder first`,
+      });
+      break;
+
+    default:
+      sendToClient(ws, {
+        source: "bridge",
+        type: "error",
+        error: `Unknown message type: ${(msg as any).type}`,
+      });
+  }
+}
+
+// --- Connection handler ---
+
 wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const url = new URL(req.url || "/", `http://localhost:${PORT}`);
   const requestedSessionId = url.searchParams.get("session");
 
-  let session: Session;
-  let resumed = false;
+  // Every connection gets its own ping/pong state and a single set of handlers.
+  const ping: PingPongState = { pingTimer: null, pongTimer: null };
+  const conn: Connection = { ping, state: { mode: "lobby" } };
+  connections.set(ws, conn);
+  startPingPong(ws, ping);
 
-  if (requestedSessionId && sessions.has(requestedSessionId)) {
-    // Reconnect to existing session
-    session = sessions.get(requestedSessionId)!;
-    resumed = true;
+  if (requestedSessionId) {
+    // --- Legacy ?session= path (backwards compat) ---
+    let session: Session;
 
-    // Clear idle timer
-    if (session.idleTimer) {
-      clearTimeout(session.idleTimer);
-      session.idleTimer = null;
+    if (sessions.has(requestedSessionId)) {
+      session = sessions.get(requestedSessionId)!;
+      attachWsToSession(ws, session);
+    } else {
+      // Client provided ID implies existing CC session
+      session = {
+        id: requestedSessionId,
+        folder: null,
+        resumable: true,
+        process: null,
+        ws,
+        idleTimer: null,
+        stderrBuffer: [],
+        spawnedAt: null,
+      };
+      sessions.set(requestedSessionId, session);
     }
 
-    // Close previous WebSocket if still open
-    if (session.ws && session.ws !== ws) {
-      session.ws.close(1000, "Replaced by new connection");
-      stopPingPong(session);
-    }
-    session.ws = ws;
+    conn.state = { mode: "session", session };
 
-    // If CC process died while disconnected, it will be respawned on next prompt
-    // (lazy spawn — don't respawn until user actually sends something)
+    sendToClient(ws, {
+      source: "bridge",
+      type: "connected",
+      sessionId: session.id,
+      resumed: session.resumable,
+    });
+
+    console.log(
+      `[bridge] client connected session=${session.id} (legacy ?session= path)`
+    );
   } else {
-    // New session — no CC process yet (lazy spawn on first prompt)
-    const id = requestedSessionId || randomUUID();
-    session = {
-      id,
-      process: null,
-      ws,
-      idleTimer: null,
-      pingTimer: null,
-      pongTimer: null,
-      stderrBuffer: [],
-      spawnedAt: null,
-    };
-    sessions.set(id, session);
-    resumed = !!requestedSessionId;
+    // --- Lobby mode ---
+    sendToClient(ws, { source: "bridge", type: "lobbyConnected" });
+    console.log("[bridge] client connected (lobby mode)");
   }
 
-  // Start ping/pong for this connection
-  startPingPong(ws, session);
-
-  // Announce connection
-  sendToClient(ws, {
-    source: "bridge",
-    type: "connected",
-    sessionId: session.id,
-    resumed,
-  });
-
-  console.log(
-    `[bridge] client connected session=${session.id} resumed=${resumed}`
-  );
-
-  // Handle incoming messages
+  // Single message handler — dispatches based on current mode.
   ws.on("message", (data) => {
     let msg: ClientMessage;
     try {
@@ -389,61 +598,48 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
       return;
     }
 
-    switch (msg.type) {
-      case "prompt": {
-        // Lazy spawn: start CC process on first prompt (or respawn if dead)
-        const needsResume = session.process === null && resumed;
-        if (!ensureProcess(session, needsResume)) return;
-
-        // Write prompt to CC stdin
-        const envelope = JSON.stringify({
-          type: "user",
-          message: { role: "user", content: msg.text },
-        });
-        if (writeToStdin(session, envelope + "\n")) {
-          sendToClient(ws, { source: "bridge", type: "promptReceived" });
-        }
-        break;
-      }
-
-      case "abort": {
-        if (session.process) {
-          console.log(`[bridge] aborting CC session=${session.id}`);
-          killWithEscalation(session.process, session.id);
-        }
-        break;
-      }
-
-      default:
-        sendToClient(ws, {
-          source: "bridge",
-          type: "error",
-          error: `Unknown message type: ${(msg as any).type}`,
-        });
+    if (conn.state.mode === "session") {
+      handleSessionMessage(ws, conn.state.session, msg);
+    } else {
+      handleLobbyMessage(ws, conn, msg);
     }
   });
 
-  // Client disconnect → idle timer
-  ws.on("close", (code, reason) => {
-    console.log(
-      `[bridge] client disconnected session=${session.id} code=${code}`
-    );
-    session.ws = null;
-    stopPingPong(session);
+  // Single close handler — cleans up based on current mode.
+  ws.on("close", (code) => {
+    connections.delete(ws);
+    stopPingPong(ping);
 
-    session.idleTimer = setTimeout(() => {
-      console.log(
-        `[bridge] idle timeout, killing CC session=${session.id}`
-      );
-      if (session.process) {
-        killWithEscalation(session.process, session.id);
+    if (conn.state.mode === "session") {
+      const session = conn.state.session;
+      // Only set idle timer if we're still the active WS for this session.
+      // (A replaced WS closing shouldn't start a new idle timer.)
+      if (session.ws === ws) {
+        console.log(
+          `[bridge] client disconnected session=${session.id} code=${code}`
+        );
+        session.ws = null;
+        session.idleTimer = setTimeout(() => {
+          console.log(
+            `[bridge] idle timeout, killing CC session=${session.id}`
+          );
+          if (session.process) {
+            killWithEscalation(session.process, session.id);
+          }
+          sessions.delete(session.id);
+        }, IDLE_TIMEOUT_MS);
       }
-      sessions.delete(session.id);
-    }, IDLE_TIMEOUT_MS);
+    } else {
+      console.log(`[bridge] lobby client disconnected code=${code}`);
+    }
   });
 
   ws.on("error", (err) => {
-    console.error(`[bridge] WS error session=${session.id}:`, err);
+    const label =
+      conn.state.mode === "session"
+        ? `session=${conn.state.session.id}`
+        : "lobby";
+    console.error(`[bridge] WS error (${label}):`, err);
   });
 });
 
@@ -451,13 +647,21 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 
 function shutdown() {
   console.log("[bridge] shutting down...");
+
+  // Close all WebSocket connections and stop their ping/pong
+  for (const [ws, conn] of connections) {
+    stopPingPong(conn.ping);
+    ws.close(1000, "Server shutting down");
+  }
+  connections.clear();
+
+  // Kill all CC processes and clear idle timers
   for (const [id, session] of sessions) {
     if (session.idleTimer) clearTimeout(session.idleTimer);
-    stopPingPong(session);
     if (session.process) killWithEscalation(session.process, id);
-    if (session.ws) session.ws.close(1000, "Server shutting down");
   }
   sessions.clear();
+
   wss.close(() => {
     console.log("[bridge] closed");
     process.exit(0);

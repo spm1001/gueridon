@@ -17,7 +17,7 @@ export interface FolderInfo {
 
 // --- Config ---
 
-const SCAN_ROOT =
+export const SCAN_ROOT =
   process.env.SCAN_ROOT || join(homedir(), "Repos");
 const CC_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 const HANDOFFS_DIR = join(homedir(), ".claude", "handoffs");
