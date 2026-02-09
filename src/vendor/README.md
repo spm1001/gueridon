@@ -43,3 +43,10 @@ its `renderTool` chain with much simpler rendering.
 These files are frozen at the commit above. If upstream fixes a bug in
 MessageList or StreamingMessageContainer, cherry-pick the specific change
 into the vendored file. Don't re-vendor the whole barrel.
+
+## Drift detection
+
+`.provenance.json` records the commit hash and file mapping in machine-readable
+form. `update-all.sh` (in claude-suite) diffs these 6 files against
+`upstream/main` in `~/Repos/pi-mono` daily and reports drift in session-start
+news. When you see a drift report, review the diff and cherry-pick what's useful.

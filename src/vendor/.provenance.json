@@ -1,0 +1,37 @@
+{
+  "upstreamRepo": "badlogic/pi-mono",
+  "gitCommit": "41c4157b",
+  "vendoredDate": "2026-02-09",
+  "files": [
+    {
+      "vendored": "MessageList.ts",
+      "upstream": "packages/web-ui/src/components/MessageList.ts",
+      "localMods": null
+    },
+    {
+      "vendored": "StreamingMessageContainer.ts",
+      "upstream": "packages/web-ui/src/components/StreamingMessageContainer.ts",
+      "localMods": null
+    },
+    {
+      "vendored": "ThinkingBlock.ts",
+      "upstream": "packages/web-ui/src/components/ThinkingBlock.ts",
+      "localMods": null
+    },
+    {
+      "vendored": "ConsoleBlock.ts",
+      "upstream": "packages/web-ui/src/components/ConsoleBlock.ts",
+      "localMods": "import rewrite: ../utils/i18n.js -> ./i18n.js"
+    },
+    {
+      "vendored": "message-renderer-registry.ts",
+      "upstream": "packages/web-ui/src/components/message-renderer-registry.ts",
+      "localMods": null
+    },
+    {
+      "vendored": "i18n.ts",
+      "upstream": "packages/web-ui/src/utils/i18n.ts",
+      "localMods": "trimmed from 200+ keys to ~10; will always show as changed"
+    }
+  ]
+}
