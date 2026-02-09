@@ -87,7 +87,11 @@ type ServerMessage =
 interface Session {
   id: string;
   folder: string | null; // Folder path (null for legacy ?session= connections)
-  resumable: boolean; // True when CC has state for this session ID (use --resume)
+  resumable: boolean; // True when CC has state for this session ID.
+  // Used for both spawn strategy (--resume vs --session-id) and the `resumed`
+  // field on the `connected` message to the client. These overlap today but are
+  // conceptually distinct — if we need to distinguish "fresh WS to existing CC
+  // session" from "WS reconnecting to active bridge session", split this field.
   process: ChildProcess | null;
   ws: WebSocket | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -585,6 +589,10 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   }
 
   // Single message handler — dispatches based on current mode.
+  // Lobby messages are async (scanFolders, getLatestSession) so we chain them
+  // to prevent interleaving. Session messages are sync — no queue needed.
+  let lobbyQueue = Promise.resolve();
+
   ws.on("message", (data) => {
     let msg: ClientMessage;
     try {
@@ -601,7 +609,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     if (conn.state.mode === "session") {
       handleSessionMessage(ws, conn.state.session, msg);
     } else {
-      handleLobbyMessage(ws, conn, msg);
+      lobbyQueue = lobbyQueue.then(() => handleLobbyMessage(ws, conn, msg));
     }
   });
 
