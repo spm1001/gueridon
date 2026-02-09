@@ -169,18 +169,19 @@ describe("GueridonInterface", () => {
   describe("connection status", () => {
     it("hidden by default", async () => {
       el = await createElement();
-      // The status indicator is a w-2 h-2 dot — should not be present
-      const dots = [...el.querySelectorAll(".rounded-full")].filter(
-        (d) => d.classList.contains("w-2") && d.classList.contains("h-2"),
-      );
-      expect(dots.length).toBe(0);
+      // Dot is always in DOM but invisible (opacity 0) by default
+      const dot = el.querySelector(".w-1\\.5.h-1\\.5.rounded-full") as HTMLElement;
+      expect(dot).toBeTruthy();
+      expect(dot.style.opacity).toBe("0");
     });
 
-    it("shows label when set", async () => {
+    it("shows dot with correct color when set", async () => {
       el = await createElement();
       el.updateConnectionStatus("Reconnecting\u2026", "bg-amber-500");
       await el.updateComplete;
-      expect(el.textContent).toContain("Reconnecting\u2026");
+      const dot = el.querySelector(".w-1\\.5.h-1\\.5.rounded-full");
+      expect(dot).toBeTruthy();
+      expect(dot!.classList.contains("bg-amber-500")).toBe(true);
     });
 
     it("auto-hides Connected after 2s", async () => {
@@ -188,11 +189,12 @@ describe("GueridonInterface", () => {
       el = await createElement();
       el.updateConnectionStatus("Connected", "bg-green-500");
       await el.updateComplete;
-      expect(el.textContent).toContain("Connected");
+      const dot = el.querySelector(".w-1\\.5.h-1\\.5.rounded-full") as HTMLElement;
+      expect(dot.style.opacity).toBe("1");
 
       vi.advanceTimersByTime(2000);
       await el.updateComplete;
-      expect(el.textContent).not.toContain("Connected");
+      expect(dot.style.opacity).toBe("0");
     });
 
     it("non-Connected status stays visible", async () => {
@@ -203,7 +205,9 @@ describe("GueridonInterface", () => {
 
       vi.advanceTimersByTime(5000);
       await el.updateComplete;
-      expect(el.textContent).toContain("Disconnected");
+      const dot = el.querySelector(".w-1\\.5.h-1\\.5.rounded-full");
+      expect(dot).toBeTruthy();
+      expect(dot!.classList.contains("bg-red-500")).toBe(true);
     });
   });
 

@@ -10,7 +10,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:mobile": "scripts/test-mobile.sh",
+    "test:mobile:stop": "scripts/test-mobile.sh --stop"
   },
   "dependencies": {
     "@mariozechner/mini-lit": "^0.2.1",

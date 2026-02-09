@@ -113,10 +113,10 @@ export class FolderSelector extends DialogBase {
 
     return html`
       ${DialogContent({
-        className: "h-full flex flex-col p-0",
+        className: "!p-0 h-full flex flex-col",
         children: html`
           <!-- Header + search -->
-          <div class="px-4 pt-4 pb-2 shrink-0">
+          <div class="px-4 pt-3.5 pb-2 shrink-0">
             ${DialogHeader({
               title: "Guéridon",
               description: "Choose a project folder",

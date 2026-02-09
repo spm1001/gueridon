@@ -336,7 +336,7 @@ export class GueridonInterface extends LitElement {
               <!-- Textarea (full width) -->
               <textarea
                 class="gdn-textarea w-full resize-none bg-transparent text-foreground
-                       text-sm outline-none px-2 py-1.5 max-h-32"
+                       text-base outline-none px-2 py-1.5 max-h-32"
                 rows="1"
                 placeholder="Message Claude…"
                 .value=${this._inputText}
@@ -348,7 +348,7 @@ export class GueridonInterface extends LitElement {
               <div class="flex items-center gap-1 mt-1">
                 <!-- Paperclip (image upload) -->
                 <button
-                  class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center
+                  class="shrink-0 w-10 h-10 rounded-lg flex items-center justify-center
                          text-muted-foreground hover:text-foreground hover:bg-secondary
                          transition-colors"
                   title="Attach image"
@@ -360,9 +360,9 @@ export class GueridonInterface extends LitElement {
                   </svg>
                 </button>
 
-                <!-- Folder selector (doubles as CWD display) -->
+                <!-- Folder selector (doubles as CWD display + connection status) -->
                 <button
-                  class="shrink-0 h-8 px-2 rounded-lg flex items-center gap-1.5
+                  class="shrink-0 h-10 px-2 rounded-lg flex items-center gap-1.5
                          text-xs text-muted-foreground hover:text-foreground
                          hover:bg-secondary transition-colors truncate"
                   style="max-width: 45%"
@@ -377,6 +377,8 @@ export class GueridonInterface extends LitElement {
                   <span class="truncate">
                     ${this._cwdShort || "Choose folder"}
                   </span>
+                  <span class="inline-block w-1.5 h-1.5 rounded-full shrink-0 ${this._connectionColor}"
+                        style="opacity: ${this._connectionState ? 1 : 0}; transition: opacity 0.3s ease"></span>
                 </button>
 
                 <!-- Spacer -->
@@ -392,13 +394,13 @@ export class GueridonInterface extends LitElement {
                 <!-- Send / Abort -->
                 ${this._isStreaming
                   ? html`<button
-                      class="shrink-0 w-8 h-8 rounded-full bg-red-500 text-white
+                      class="shrink-0 w-10 h-10 rounded-full bg-red-500 text-white
                              flex items-center justify-center"
                       @click=${this.handleAbort}
                       title="Stop"
                     >■</button>`
                   : html`<button
-                      class="shrink-0 w-8 h-8 rounded-full bg-primary
+                      class="shrink-0 w-10 h-10 rounded-full bg-primary
                              text-primary-foreground flex items-center
                              justify-center disabled:opacity-50"
                       @click=${this.handleSend}
@@ -408,13 +410,6 @@ export class GueridonInterface extends LitElement {
               </div>
             </div>
 
-            <!-- Connection status -->
-            ${this._connectionState
-              ? html`<div class="flex items-center justify-center gap-1.5 py-1">
-                  <span class="inline-block w-2 h-2 rounded-full ${this._connectionColor}"></span>
-                  <span class="text-xs text-muted-foreground">${this._connectionState}</span>
-                </div>`
-              : ""}
           </div>
         </div>
       </div>
