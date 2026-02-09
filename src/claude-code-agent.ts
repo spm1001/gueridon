@@ -134,6 +134,8 @@ export class ClaudeCodeAgent {
     this._cwd = "";
     this._lastRemainingBand = "normal";
     this._contextNote = null;
+    // Notify subscribers so UI clears stale messages
+    this.emit({ type: "agent_end" });
   }
 
   get state(): AgentState {
