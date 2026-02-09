@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { createInterface } from "readline";
 import { IncomingMessage } from "http";
 import { resolve } from "node:path";
-import { scanFolders, getLatestSession, FolderInfo, SCAN_ROOT } from "./folders.js";
+import { scanFolders, getLatestSession, getLatestHandoff, FolderInfo, SCAN_ROOT } from "./folders.js";
 
 // --- Configuration ---
 
@@ -493,13 +493,18 @@ async function handleLobbyMessage(
         // Reconnect to existing bridge session
         attachWsToSession(ws, session);
       } else {
-        // No bridge session — check for existing CC session (paused)
+        // No bridge session — check for existing CC session.
+        // Only resume if truly paused (session files, no handoff).
+        // Closed folders (handoff exists) get a fresh session — the old
+        // session was intentionally ended via /close.
         const existing = await getLatestSession(folderPath);
-        const id = existing?.id ?? randomUUID();
+        const handoff = await getLatestHandoff(folderPath);
+        const isClosed = !!handoff;
+        const id = (existing && !isClosed) ? existing.id : randomUUID();
         session = {
           id,
           folder: folderPath,
-          resumable: !!existing, // Can --resume if CC has state
+          resumable: !!existing && !isClosed,
           process: null,
           clients: new Set([ws]),
           idleTimer: null,
