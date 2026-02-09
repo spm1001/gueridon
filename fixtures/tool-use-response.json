@@ -1,0 +1,110 @@
+{
+  "name": "tool-use-response",
+  "description": "Tool use cycle: assistant calls Bash, receives result, responds with text. From empirical-verification.md §5. Includes streaming for the tool_use content block (input_json_delta).",
+  "events": [
+    {
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/test/project",
+      "session_id": "550e8400-e29b-41d4-a716-446655440000",
+      "tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+      "model": "claude-opus-4-6"
+    },
+    {
+      "_comment": "Streaming: assistant decides to call a tool",
+      "type": "stream_event",
+      "event": {
+        "type": "message_start",
+        "message": {
+          "model": "claude-opus-4-6",
+          "id": "msg_01Tool",
+          "role": "assistant",
+          "content": [],
+          "stop_reason": null,
+          "usage": { "input_tokens": 500, "output_tokens": 1 }
+        }
+      }
+    },
+    {
+      "type": "stream_event",
+      "event": { "type": "content_block_start", "index": 0, "content_block": { "type": "tool_use", "id": "toolu_01ABC123", "name": "Bash" } }
+    },
+    {
+      "type": "stream_event",
+      "event": { "type": "content_block_delta", "index": 0, "delta": { "type": "input_json_delta", "partial_json": "{\"command\":" } }
+    },
+    {
+      "type": "stream_event",
+      "event": { "type": "content_block_delta", "index": 0, "delta": { "type": "input_json_delta", "partial_json": "\"echo hello-from-tool\"" } }
+    },
+    {
+      "type": "stream_event",
+      "event": { "type": "content_block_delta", "index": 0, "delta": { "type": "input_json_delta", "partial_json": ",\"description\":\"Echo a test string\"}" } }
+    },
+    {
+      "_comment": "Complete assistant arrives before block_stop",
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_01Tool",
+        "role": "assistant",
+        "content": [{ "type": "tool_use", "id": "toolu_01ABC123", "name": "Bash", "input": { "command": "echo hello-from-tool", "description": "Echo a test string" } }],
+        "stop_reason": "tool_use",
+        "usage": { "input_tokens": 500, "output_tokens": 30 }
+      },
+      "session_id": "550e8400-e29b-41d4-a716-446655440000"
+    },
+    {
+      "type": "stream_event",
+      "event": { "type": "content_block_stop", "index": 0 }
+    },
+    {
+      "type": "stream_event",
+      "event": { "type": "message_delta", "delta": { "stop_reason": "tool_use" }, "usage": { "output_tokens": 30 } }
+    },
+    {
+      "type": "stream_event",
+      "event": { "type": "message_stop" }
+    },
+    {
+      "_comment": "Tool result arrives as user message",
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [{ "tool_use_id": "toolu_01ABC123", "type": "tool_result", "content": "hello-from-tool", "is_error": false }]
+      },
+      "tool_use_result": { "stdout": "hello-from-tool", "stderr": "", "interrupted": false, "isImage": false }
+    },
+    {
+      "_comment": "Second init fires on tool result turn",
+      "type": "system",
+      "subtype": "init",
+      "cwd": "/Users/test/project",
+      "session_id": "550e8400-e29b-41d4-a716-446655440000",
+      "tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
+      "model": "claude-opus-4-6"
+    },
+    {
+      "_comment": "Assistant responds to tool result",
+      "type": "assistant",
+      "message": {
+        "model": "claude-opus-4-6",
+        "id": "msg_02Reply",
+        "role": "assistant",
+        "content": [{ "type": "text", "text": "Done \u2014 output: `hello-from-tool`" }],
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 600, "output_tokens": 15 }
+      },
+      "session_id": "550e8400-e29b-41d4-a716-446655440000"
+    },
+    {
+      "type": "result",
+      "subtype": "success",
+      "is_error": false,
+      "duration_ms": 26284,
+      "num_turns": 2,
+      "session_id": "550e8400-e29b-41d4-a716-446655440000",
+      "usage": { "input_tokens": 600, "output_tokens": 45, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 }
+    }
+  ]
+}

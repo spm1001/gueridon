@@ -3,17 +3,22 @@ import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
 import { IncomingMessage } from "http";
-import { resolve } from "node:path";
 import { scanFolders, getLatestSession, getLatestHandoff, FolderInfo, SCAN_ROOT } from "./folders.js";
+import {
+  IDLE_TIMEOUT_MS,
+  PING_INTERVAL_MS,
+  PONG_TIMEOUT_MS,
+  KILL_ESCALATION_MS,
+  EARLY_EXIT_MS,
+  buildCCArgs,
+  getActiveProcesses as getActiveProcessesFromSessions,
+  resolveSessionForFolder,
+  validateFolderPath,
+} from "./bridge-logic.js";
 
 // --- Configuration ---
 
 const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-const PING_INTERVAL_MS = 30_000; // 30 seconds
-const PONG_TIMEOUT_MS = 10_000; // 10 seconds to respond
-const KILL_ESCALATION_MS = 3_000; // SIGTERM → SIGKILL after 3 seconds
-const EARLY_EXIT_MS = 2_000; // Process dying within 2s of spawn = flag/version problem
 
 // --- Protocol types ---
 
@@ -120,41 +125,13 @@ const connections = new Map<WebSocket, Connection>();
 
 /** Build activeProcesses map from sessions for scanFolders. */
 function getActiveProcesses(): Map<string, string> {
-  const active = new Map<string, string>();
-  for (const session of sessions.values()) {
-    if (session.folder && session.process && session.process.exitCode === null) {
-      active.set(session.folder, session.id);
-    }
-  }
-  return active;
+  return getActiveProcessesFromSessions(sessions);
 }
 
 // --- CC process management ---
 
-const CC_FLAGS = [
-  "-p",
-  "--verbose",
-  "--input-format",
-  "stream-json",
-  "--output-format",
-  "stream-json",
-  "--include-partial-messages",
-  "--replay-user-messages",
-  "--dangerously-skip-permissions",
-  "--allow-dangerously-skip-permissions",
-  "--append-system-prompt",
-  "The user is on a mobile device using Guéridon. " +
-    "When you use AskUserQuestion, it will return an error — this is expected. " +
-    "The user sees your questions as tappable buttons and will respond with their selection " +
-    "in their next message. Do not apologize for the error or retry the tool. " +
-    "End your turn and wait for the user's response.",
-];
-
 function spawnCC(sessionId: string, resume: boolean, cwd?: string): ChildProcess {
-  const args = [
-    ...CC_FLAGS,
-    ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
-  ];
+  const args = buildCCArgs(sessionId, resume);
 
   const proc = spawn("claude", args, {
     stdio: ["pipe", "pipe", "pipe"],
@@ -469,9 +446,7 @@ async function handleLobbyMessage(
         return;
       }
 
-      // Path must resolve to within SCAN_ROOT (prevents traversal)
-      const normalized = resolve(folderPath);
-      if (!normalized.startsWith(SCAN_ROOT + "/")) {
+      if (!validateFolderPath(folderPath, SCAN_ROOT)) {
         sendToClient(ws, {
           source: "bridge",
           type: "error",
@@ -480,38 +455,41 @@ async function handleLobbyMessage(
         return;
       }
 
-      // Check if there's already an active bridge session for this folder
-      let session: Session | undefined;
+      // Find existing bridge session for this folder (multi-WS reconnect)
+      let existingBridgeSession: { id: string; resumable: boolean } | null = null;
       for (const s of sessions.values()) {
         if (s.folder === folderPath) {
-          session = s;
+          existingBridgeSession = { id: s.id, resumable: s.resumable };
           break;
         }
       }
 
-      if (session) {
-        // Reconnect to existing bridge session
+      // Resolve: reconnect, resume, or fresh?
+      const latestSession = await getLatestSession(folderPath);
+      const handoff = await getLatestHandoff(folderPath);
+      const resolution = resolveSessionForFolder(
+        existingBridgeSession,
+        latestSession,
+        !!handoff,
+        randomUUID,
+      );
+
+      let session: Session;
+      if (resolution.isReconnect) {
+        session = [...sessions.values()].find(s => s.folder === folderPath)!;
         attachWsToSession(ws, session);
       } else {
-        // No bridge session — check for existing CC session.
-        // Only resume if truly paused (session files, no handoff).
-        // Closed folders (handoff exists) get a fresh session — the old
-        // session was intentionally ended via /close.
-        const existing = await getLatestSession(folderPath);
-        const handoff = await getLatestHandoff(folderPath);
-        const isClosed = !!handoff;
-        const id = (existing && !isClosed) ? existing.id : randomUUID();
         session = {
-          id,
+          id: resolution.sessionId,
           folder: folderPath,
-          resumable: !!existing && !isClosed,
+          resumable: resolution.resumable,
           process: null,
           clients: new Set([ws]),
           idleTimer: null,
           stderrBuffer: [],
           spawnedAt: null,
         };
-        sessions.set(id, session);
+        sessions.set(resolution.sessionId, session);
       }
 
       // Transition: lobby → session (no listener surgery — dispatcher reads mode)
