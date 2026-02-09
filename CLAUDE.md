@@ -14,10 +14,24 @@ Process-per-session with `--session-id <uuid>`. Resume via `--resume` after proc
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/empirical-verification.md` | Verified JSONL schemas for CC 2.1.37. Every event type, edge case, abort mechanism. **Read this first.** |
+| `docs/architecture-and-review.md` | **Full architecture map + three-lens code review (2026-02-09).** File map, element nesting, dep table, build pipeline, 23 findings ranked by severity. |
+| `docs/empirical-verification.md` | Verified JSONL schemas for CC 2.1.37. Every event type, edge case, abort mechanism. |
 | `docs/event-mapping.md` | CC events → pi-web-ui AgentEvents translation table. The adapter blueprint. |
 | `docs/bridge-protocol.md` | WebSocket protocol between browser and bridge. Message types, session lifecycle, reliability. |
 | `docs/decisions.md` | Architecture decisions with rationale. Permissions, session model, UI choices. |
+
+## Known Bugs (from code review 2026-02-09)
+
+Start here before building features. See `docs/architecture-and-review.md` for full list.
+
+1. **Agent state never resets on folder switch** (gdn-walaco) — singleton accumulates messages/tokens across sessions. Fix first.
+2. **prompt() swallows null transport** (gdn-vosejo) — UI stuck streaming forever if called before WS connects
+3. **Unknown CC events silently dropped** (gdn-pudaco) — no default case in handleCCEvent
+4. **main.ts folder lifecycle** — deferred connect / pendingFolderConnect is a state machine hidden in callbacks. Source of dialog flash bug.
+
+## Working Pattern: Write Analysis to Files
+
+When producing architecture maps, reviews, or other analysis: **write to file first, present summary in chat**. Context can lock without warning. In-context-only analysis evaporates. Files survive.
 
 ## The Input Format (Critical)
 

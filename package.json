@@ -16,7 +16,6 @@
     "@mariozechner/mini-lit": "^0.2.1",
     "@mariozechner/pi-agent-core": "^0.52.8",
     "@mariozechner/pi-ai": "^0.52.8",
-    "@mariozechner/pi-web-ui": "^0.52.8",
     "lit": "^3.3.2",
     "ws": "^8.19.0"
   },
