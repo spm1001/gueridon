@@ -3,6 +3,72 @@
    NOT via pi-web-ui/app.css which has its own conflicting Tailwind setup */
 @import "@mariozechner/mini-lit/styles/themes/default.css";
 
+/* Tell Tailwind to scan component libraries for utility classes.
+   Without these, classes used inside pi-web-ui and mini-lit templates
+   won't be generated — layout breaks especially at mobile widths. */
+@source "../../node_modules/@mariozechner/mini-lit/dist";
+@source "/Users/modha/Repos/pi-mono/packages/web-ui/src";
+
+/* Custom styles from pi-web-ui's app.css that aren't Tailwind utilities.
+   We import the theme and @source separately, but these are plain CSS
+   that pi-web-ui components depend on. */
+
+body {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) rgba(0, 0, 0, 0);
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0);
+}
+
+.fixed.inset-0 button[aria-label*="Close"],
+.fixed.inset-0 button[type="button"] {
+  cursor: pointer;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+/* User message pill styling — orange gradient distinguishes from assistant */
+.user-message-container {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  background: linear-gradient(135deg, rgba(217, 79, 0, 0.12), rgba(255, 107, 0, 0.12), rgba(212, 165, 0, 0.12));
+  border: 1px solid rgba(255, 107, 0, 0.25);
+  backdrop-filter: blur(10px);
+  max-width: 100%;
+}
+
 @keyframes slide-up {
   from {
     transform: translateY(100%);
