@@ -1,204 +1,131 @@
-import {
-  AppStorage,
-  ChatPanel,
-  IndexedDBStorageBackend,
-  ProviderKeysStore,
-  SessionsStore,
-  SettingsStore,
-  CustomProvidersStore,
-  setAppStorage,
-} from "@mariozechner/pi-web-ui";
 import { html, render } from "lit";
 import { ClaudeCodeAgent } from "./claude-code-agent.js";
 import { WSTransport, type ConnectionState } from "./ws-transport.js";
-import { showFolderChooser, type FolderChooserHandle } from "./folder-chooser.js";
+import type { FolderInfo } from "./ws-transport.js";
+import { FolderSelector } from "./folder-selector.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
-import { createContextGauge } from "./context-gauge.js";
+import { GueridonInterface } from "./gueridon-interface.js";
 import "./app.css";
 
 // --- Configuration ---
 
-// Bridge URL: use same host as page in production, localhost in dev
 const BRIDGE_URL =
   location.hostname === "localhost"
     ? `ws://localhost:3001`
     : `wss://${location.host}/ws`;
 
-// --- Storage setup (required by ChatPanel internals) ---
-
-const settings = new SettingsStore();
-const providerKeys = new ProviderKeysStore();
-const sessions = new SessionsStore();
-const customProviders = new CustomProvidersStore();
-
-const configs = [
-  settings.getConfig(),
-  SessionsStore.getMetadataConfig(),
-  providerKeys.getConfig(),
-  customProviders.getConfig(),
-  sessions.getConfig(),
-];
-
-const backend = new IndexedDBStorageBackend({
-  dbName: "gueridon",
-  version: 1,
-  stores: configs,
-});
-
-settings.setBackend(backend);
-providerKeys.setBackend(backend);
-customProviders.setBackend(backend);
-sessions.setBackend(backend);
-
-const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
-setAppStorage(storage);
-
-// --- Agent + Transport ---
+// --- Core objects (created first, wired below) ---
 
 const agent = new ClaudeCodeAgent();
+const gi = new GueridonInterface();
+gi.setAgent(agent);
 
-// Connection status indicator
-let statusEl: HTMLElement | null = null;
+// --- Connection status ---
 
-function updateStatus(state: ConnectionState, detail?: string) {
-  if (!statusEl) return;
-  const labels: Record<ConnectionState, string> = {
-    connecting: "Connecting…",
-    lobby: "Choose folder…",
-    connected: "Connected",
-    disconnected: "Reconnecting…",
-    error: "Connection error",
-  };
-  const colors: Record<ConnectionState, string> = {
-    connecting: "bg-yellow-500",
-    lobby: "bg-blue-500",
-    connected: "bg-green-500",
-    disconnected: "bg-yellow-500",
-    error: "bg-red-500",
-  };
-  statusEl.innerHTML = `
-    <span class="inline-block w-2 h-2 rounded-full ${colors[state]}"></span>
-    <span class="text-xs text-muted-foreground">${labels[state]}</span>
-  `;
-  // Auto-hide "Connected" after 2s, keep others visible
-  if (state === "connected") {
-    setTimeout(() => {
-      if (statusEl) statusEl.style.opacity = "0";
-    }, 2000);
-  } else {
-    statusEl.style.opacity = "1";
-  }
+const statusLabels: Record<ConnectionState, string> = {
+  connecting: "Connecting…",
+  lobby: "Choose folder…",
+  connected: "Connected",
+  disconnected: "Reconnecting…",
+  error: "Connection error",
+};
+const statusColors: Record<ConnectionState, string> = {
+  connecting: "bg-yellow-500",
+  lobby: "bg-blue-500",
+  connected: "bg-green-500",
+  disconnected: "bg-yellow-500",
+  error: "bg-red-500",
+};
+
+function updateStatus(state: ConnectionState) {
+  gi.updateConnectionStatus(statusLabels[state], statusColors[state]);
 }
 
-let folderChooser: FolderChooserHandle | null = null;
+// --- Folder selector dialog ---
+
+let folderDialog: FolderSelector | null = null;
+let cachedFolders: FolderInfo[] = [];
+
+function openFolderSelector() {
+  if (folderDialog) return;
+  console.log("[guéridon] opening folder selector");
+  folderDialog = FolderSelector.show(
+    cachedFolders,
+    (folder) => {
+      gi.setCwd(folder.name);
+      transport.connectFolder(folder.path);
+    },
+    () => {
+      folderDialog = null;
+    },
+  );
+}
+
+// --- Transport ---
 
 const transport = new WSTransport({
   url: BRIDGE_URL,
   onStateChange: updateStatus,
   onSessionId: (id) => {
-    console.log(`[guéridon] session: ${id}`);
-    // Folder selected — dismiss chooser, reveal chat
-    if (folderChooser) {
-      folderChooser.dismiss();
-      folderChooser = null;
+    console.log(`[guéridon] session: ${id} (folderDialog=${!!folderDialog})`);
+    if (folderDialog) {
+      console.log("[guéridon] closing folder dialog due to session connect");
+      folderDialog.close();
     }
+    gi.focusInput();
   },
   onBridgeError: (err) => console.error(`[guéridon] bridge error: ${err}`),
   onLobbyConnected: () => {
     transport.listFolders();
   },
   onFolderList: (folders) => {
-    if (!folderChooser) {
-      folderChooser = showFolderChooser(folders, (folder) => {
-        gauge.setCwd(folder.name); // Immediate feedback before CC starts
-        transport.connectFolder(folder.path);
-      });
-    } else {
-      folderChooser.updateFolders(folders);
+    console.log(`[guéridon] folderList: ${folders.length} folders, state=${transport.state}, dialog=${!!folderDialog}`);
+    cachedFolders = folders;
+    if (folderDialog) {
+      folderDialog.updateFolders(folders);
+    } else if (transport.state === "lobby") {
+      openFolderSelector();
     }
   },
 });
 
 agent.connectTransport(transport);
 
-// AskUserQuestion interception — render as tappable buttons, send answer as next prompt
+// --- Callbacks ---
+
 agent.onAskUser = (data) => {
   showAskUserOverlay(
     data,
-    (answer) => {
-      // User tapped an option — send as next prompt
-      agent.prompt(answer);
-    },
-    () => {
-      // User dismissed — they'll type a custom answer in the chat input
-    },
+    (answer) => agent.prompt(answer),
+    () => {},
   );
 };
 
-// Context fuel gauge — renders CWD + % remaining in pi-web-ui's stats bar
-// via the customStats property (Lit-native, no DOM fighting).
-// requestUpdate triggers AgentInterface re-render when gauge state changes.
-const gauge = createContextGauge(() => {
-  chatPanel.agentInterface?.requestUpdate();
-});
+agent.onCwdChange = (cwd) => gi.setCwd(cwd);
+agent.onCompaction = (from, to) => gi.notifyCompaction(from, to);
 
-agent.onCompaction = (from, to) => {
-  gauge.notifyCompaction(from, to);
-};
-
-agent.onCwdChange = (cwd) => {
-  gauge.setCwd(cwd);
-};
-
-// Dismiss overlay on new turn + update gauge on turn end
 agent.subscribe((event) => {
-  if (event.type === "agent_start") {
-    dismissAskUserOverlay();
-  }
-  if (event.type === "agent_end") {
-    gauge.update(agent.contextPercent);
-  }
+  if (event.type === "agent_start") dismissAskUserOverlay();
+  if (event.type === "agent_end") gi.setContextPercent(agent.contextPercent);
 });
+
+gi.onFolderSelect = () => {
+  openFolderSelector();
+  transport.listFolders();
+};
+
+// --- Connect and render ---
 
 transport.connect();
 
-// --- Render ---
+const app = document.getElementById("app");
+if (!app) throw new Error("App container not found");
 
-const chatPanel = new ChatPanel();
+render(
+  html`<div class="w-full h-[100dvh] flex flex-col bg-background text-foreground overflow-hidden">
+    ${gi}
+  </div>`,
+  app,
+);
 
-async function init() {
-  const app = document.getElementById("app");
-  if (!app) throw new Error("App container not found");
-
-  // Cast to any — ClaudeCodeAgent satisfies Agent's shape structurally
-  // but isn't a subclass (we don't use pi's agentLoop at all)
-  await chatPanel.setAgent(agent as any, {
-    // AgentInterface.sendMessage() silently aborts if this returns false.
-    // We never need a key — CC authenticates via MAX subscription server-side.
-    // Returning true tells the guard "proceed, auth is handled elsewhere."
-    onApiKeyRequired: async () => true,
-  });
-
-  // Wire fuel gauge into AgentInterface's stats bar (replaces token totals).
-  // Cast needed: customStats is our fork addition, not in the npm type defs.
-  if (chatPanel.agentInterface) {
-    (chatPanel.agentInterface as any).customStats = () => gauge.renderStats();
-  }
-
-  const appHtml = html`
-    <div class="w-full h-[100dvh] flex flex-col bg-background text-foreground overflow-hidden">
-      <div id="connection-status"
-           class="fixed top-2 right-2 z-50 flex items-center gap-1.5 px-2 py-1 rounded-full bg-background/80 backdrop-blur-sm transition-opacity duration-300"
-           style="opacity: 1">
-      </div>
-      ${chatPanel}
-    </div>
-  `;
-
-  render(appHtml, app);
-  statusEl = document.getElementById("connection-status");
-  // Trigger initial state render
-  updateStatus(transport.state);
-}
-
-init();
+updateStatus(transport.state);

@@ -2,19 +2,21 @@ import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
 
-// pi-web-ui is compiled by tsgo which ignores useDefineForClassFields:false,
-// emitting native class fields. esbuild's pre-bundling downlevels these to
-// __publicField() calls that use Object.defineProperty ([[Define]] semantics),
-// which shadows Lit's reactive property accessors defined by @state/@property.
+// esbuild emits __publicField() / __defNormalProp() for class fields.
+// When a field has a Lit decorator (@state, @property), the decorator creates
+// a getter/setter on the prototype. __defNormalProp uses Object.defineProperty
+// ([[Define]] semantics) which shadows the accessor with a data property,
+// breaking Lit reactivity.
 //
 // Fix: rewrite __defNormalProp to try simple assignment first ([[Set]]),
 // which triggers Lit @state/@property setters. If assignment throws
 // (getter-only properties from @query), silently skip — the getter stays.
+// Applies to all files (our source + pre-bundled deps) — any file with
+// Lit decorators and esbuild class field output needs this.
 function litClassFieldFix(): Plugin {
   return {
     name: "lit-class-field-fix",
     transform(code, id) {
-      if (!id.includes("node_modules/.vite/deps/")) return;
       if (!code.includes("__defNormalProp")) return;
 
       const pattern =
