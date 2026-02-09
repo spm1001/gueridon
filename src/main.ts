@@ -55,6 +55,7 @@ function openFolderSelector() {
     cachedFolders,
     (folder) => {
       pendingFolderConnect = true;
+      agent.reset();
       gi.setCwd(folder.name);
       // If already in a session, must return to lobby first — bridge rejects
       // connectFolder on active sessions. Defer the connect until lobby mode.

@@ -110,6 +110,32 @@ export class ClaudeCodeAgent {
 
   // --- Public API (matches Agent interface) ---
 
+  /** Reset all session state — call on folder switch before starting new session */
+  reset(): void {
+    this._state = {
+      systemPrompt: "",
+      model: { api: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" } as Model<any>,
+      thinkingLevel: "off" as ThinkingLevel,
+      tools: [],
+      messages: [],
+      isStreaming: false,
+      streamMessage: null,
+      pendingToolCalls: new Set<string>(),
+      error: undefined,
+    };
+    this.partialContent = [];
+    this.partialMessageId = null;
+    this.currentContentIndex = -1;
+    this.toolCallNames.clear();
+    this.askUserToolCallIds.clear();
+    this.suppressedStreamIndices.clear();
+    this._lastInputTokens = 0;
+    this._contextWindow = 200_000;
+    this._cwd = "";
+    this._lastRemainingBand = "normal";
+    this._contextNote = null;
+  }
+
   get state(): AgentState {
     return this._state;
   }
@@ -120,6 +146,12 @@ export class ClaudeCodeAgent {
   }
 
   async prompt(input: string | AgentMessage): Promise<void> {
+    if (!this.transport) {
+      this._state.error = "Not connected";
+      this.emit({ type: "agent_end", messages: this._state.messages });
+      return;
+    }
+
     if (this._state.isStreaming) {
       // CC queues mid-stream messages, so we can too
       // For now, just warn — bridge will handle queuing
@@ -149,10 +181,7 @@ export class ClaudeCodeAgent {
     this.emit({ type: "agent_start" });
     this.emit({ type: "turn_start" });
 
-    // Send to bridge via transport
-    if (this.transport) {
-      this.transport.send(text);
-    }
+    this.transport.send(text);
   }
 
   abort(): void {
@@ -223,6 +252,9 @@ export class ClaudeCodeAgent {
       case "result":
         this.handleResult(event);
         break;
+
+      default:
+        console.debug(`[adapter] unknown CC event type: ${event.type}`, event);
     }
   }
 
@@ -264,6 +296,9 @@ export class ClaudeCodeAgent {
       case "message_stop":
         // The full assistant message follows as a separate event
         break;
+
+      default:
+        console.debug(`[adapter] unknown stream event type: ${streamEvent.type}`, streamEvent);
     }
   }
 

@@ -426,11 +426,27 @@ describe("GueridonInterface", () => {
       expect(toolCall.name).toBe("Bash");
     });
 
-    it("syncs pendingToolCalls after tool result clears them", async () => {
-      // NOTE: There's a known sync gap — GueridonInterface doesn't listen
-      // for tool_execution_start/end events, so pendingToolCalls only syncs
-      // on the next message_end or agent_end. This test verifies the
-      // end-of-turn state after everything settles.
+    it("syncs pendingToolCalls immediately on tool_execution_start", async () => {
+      el = await createElement();
+      const agent = new ClaudeCodeAgent();
+      el.setAgent(agent);
+
+      // Feed assistant message with tool_use — this emits tool_execution_start
+      agent.handleCCEvent(
+        assistantComplete(
+          [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }],
+          "tool_use",
+        ),
+      );
+      await el.updateComplete;
+
+      // pendingToolCalls should be synced immediately (not waiting for next message_end)
+      const msgList = el.querySelector("message-list") as any;
+      expect(msgList.pendingToolCalls).toBeInstanceOf(Set);
+      expect(msgList.pendingToolCalls.has("toolu_1")).toBe(true);
+    });
+
+    it("syncs pendingToolCalls after full tool cycle", async () => {
       el = await createElement();
       const agent = new ClaudeCodeAgent();
       el.setAgent(agent);

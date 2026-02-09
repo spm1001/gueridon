@@ -229,6 +229,11 @@ export class GueridonInterface extends LitElement {
           }
           this.syncState();
           break;
+
+        case "tool_execution_start":
+        case "tool_execution_end":
+          this.syncState();
+          break;
       }
     });
   }

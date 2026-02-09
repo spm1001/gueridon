@@ -804,3 +804,190 @@ describe("subscribe", () => {
     expect(events2.length).toBe(countBefore);
   });
 });
+
+describe("unknown event handling", () => {
+  it("logs unknown CC event types without throwing", () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    agent.handleCCEvent({ type: "some_future_event", data: "payload" });
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining("unknown CC event type: some_future_event"),
+      expect.objectContaining({ type: "some_future_event" }),
+    );
+    debugSpy.mockRestore();
+  });
+
+  it("logs unknown stream event types without throwing", () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    agent.handleCCEvent({
+      type: "stream_event",
+      event: { type: "some_new_stream_thing", data: 123 },
+    });
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining("unknown stream event type: some_new_stream_thing"),
+      expect.objectContaining({ type: "some_new_stream_thing" }),
+    );
+    debugSpy.mockRestore();
+  });
+
+  it("does not log known event types", () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    agent.handleCCEvent({ type: "system", subtype: "init", cwd: "/test" });
+    expect(debugSpy).not.toHaveBeenCalled();
+    debugSpy.mockRestore();
+  });
+});
+
+describe("prompt guards", () => {
+  it("sets error and does not stream when transport is null", () => {
+    // agent has no transport connected (default from beforeEach)
+    agent.prompt("hello");
+
+    expect(agent.state.isStreaming).toBe(false);
+    expect(agent.state.error).toBe("Not connected");
+    expect(agent.state.messages).toEqual([]); // user message not added
+    expect(eventsOfType("agent_end")).toHaveLength(1);
+  });
+
+  it("does not set error when transport is connected", () => {
+    agent.connectTransport({
+      send: () => {},
+      onEvent: () => {},
+      close: () => {},
+    });
+    agent.prompt("hello");
+
+    expect(agent.state.error).toBeUndefined();
+    expect(agent.state.isStreaming).toBe(true);
+  });
+});
+
+describe("reset", () => {
+  it("clears messages", () => {
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "Hello" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 100, output_tokens: 10 },
+      },
+    });
+    expect(agent.state.messages.length).toBeGreaterThan(0);
+
+    agent.reset();
+    expect(agent.state.messages).toEqual([]);
+  });
+
+  it("clears streaming state", () => {
+    agent.handleCCEvent({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { model: "claude-opus-4-6", id: "msg_1", role: "assistant", content: [], stop_reason: null, usage: {} },
+      },
+    });
+    expect(agent.state.streamMessage).not.toBeNull();
+
+    agent.reset();
+    expect(agent.state.streamMessage).toBeNull();
+    expect(agent.state.isStreaming).toBe(false);
+  });
+
+  it("clears pending tool calls", () => {
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: {} }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+    expect(agent.state.pendingToolCalls.size).toBe(1);
+
+    agent.reset();
+    expect(agent.state.pendingToolCalls.size).toBe(0);
+  });
+
+  it("clears context tracking", () => {
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 150000, output_tokens: 10000 },
+    });
+    expect(agent.contextPercent).toBeGreaterThan(0);
+
+    agent.reset();
+    expect(agent.contextPercent).toBe(0);
+    expect(agent.lastInputTokens).toBe(0);
+  });
+
+  it("clears CWD", () => {
+    agent.handleCCEvent({ type: "system", subtype: "init", cwd: "/old/project" });
+    expect(agent.cwd).toBe("/old/project");
+
+    agent.reset();
+    expect(agent.cwd).toBe("");
+  });
+
+  it("preserves subscribers", () => {
+    const postResetEvents: any[] = [];
+    agent.subscribe((e) => postResetEvents.push(e));
+
+    agent.reset();
+
+    agent.handleCCEvent({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { model: "claude-opus-4-6", id: "msg_2", role: "assistant", content: [], stop_reason: null, usage: {} },
+      },
+    });
+    expect(postResetEvents.length).toBeGreaterThan(0);
+  });
+
+  it("preserves transport", () => {
+    const sent: string[] = [];
+    agent.connectTransport({
+      send: (msg) => sent.push(msg),
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    agent.reset();
+    agent.prompt("hello after reset");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("accepts new CWD after reset", () => {
+    agent.handleCCEvent({ type: "system", subtype: "init", cwd: "/old" });
+    agent.reset();
+    agent.handleCCEvent({ type: "system", subtype: "init", cwd: "/new" });
+    expect(agent.cwd).toBe("/new");
+  });
+
+  it("resets context band so notes fire again", () => {
+    // Push to amber
+    agent.handleCCEvent({
+      type: "result",
+      usage: { input_tokens: 164000, output_tokens: 0 },
+    });
+
+    agent.reset();
+
+    // Push to amber again — should set note again since band was reset
+    agent.handleCCEvent({
+      type: "result",
+      usage: { input_tokens: 164000, output_tokens: 0 },
+    });
+
+    const sent: string[] = [];
+    agent.connectTransport({
+      send: (msg) => sent.push(msg),
+      onEvent: () => {},
+      close: () => {},
+    });
+    agent.prompt("test");
+    expect(sent[0]).toContain("[Context:");
+  });
+});
