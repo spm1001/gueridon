@@ -74,6 +74,14 @@ interface BridgeFolderList {
   type: "folderList";
   folders: FolderInfo[];
 }
+interface BridgeHistoryStart {
+  source: "bridge";
+  type: "historyStart";
+}
+interface BridgeHistoryEnd {
+  source: "bridge";
+  type: "historyEnd";
+}
 interface BridgeCCEvent {
   source: "cc";
   event: Record<string, unknown>;
@@ -85,6 +93,8 @@ type ServerMessage =
   | BridgeProcessExit
   | BridgeLobbyConnected
   | BridgeFolderList
+  | BridgeHistoryStart
+  | BridgeHistoryEnd
   | BridgeCCEvent;
 
 // --- Session state ---
@@ -100,6 +110,7 @@ interface Session {
   process: ChildProcess | null;
   clients: Set<WebSocket>; // All browser tabs connected to this session
   idleTimer: ReturnType<typeof setTimeout> | null;
+  messageBuffer: string[]; // Serialized CC events for replay on reconnect
   stderrBuffer: string[]; // Capture stderr for early-exit diagnostics
   spawnedAt: number | null; // Timestamp of last spawn, for early-exit detection
 }
@@ -217,7 +228,12 @@ function wireProcessToSession(session: Session): void {
     if (!trimmed) return;
     try {
       const event = JSON.parse(trimmed);
-      broadcast(session, { source: "cc", event });
+      // Inline broadcast + buffer: serialize once, send to clients, push to buffer
+      const serialized = JSON.stringify({ source: "cc", event });
+      for (const client of session.clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(serialized);
+      }
+      session.messageBuffer.push(serialized);
     } catch {
       // Non-JSON output from CC (startup banners, warnings)
       console.log(`[bridge] non-json stdout: ${trimmed.slice(0, 200)}`);
@@ -370,6 +386,15 @@ function attachWsToSession(ws: WebSocket, session: Session): void {
     clearTimeout(session.idleTimer);
     session.idleTimer = null;
   }
+  // Replay history BEFORE adding to clients — synchronous within one event-loop
+  // tick, so no readline callback can interleave live events with replay.
+  if (session.messageBuffer.length > 0) {
+    sendToClient(ws, { source: "bridge", type: "historyStart" });
+    for (const serialized of session.messageBuffer) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(serialized);
+    }
+    sendToClient(ws, { source: "bridge", type: "historyEnd" });
+  }
   session.clients.add(ws);
 }
 
@@ -493,6 +518,7 @@ async function handleLobbyMessage(
           process: null,
           clients: new Set([ws]),
           idleTimer: null,
+          messageBuffer: [],
           stderrBuffer: [],
           spawnedAt: null,
         };

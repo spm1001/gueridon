@@ -52,8 +52,35 @@ class MockWebSocket {
 
 vi.stubGlobal("WebSocket", MockWebSocket);
 
+// --- Mock document for visibilitychange ---
+
+let mockVisibilityState = "visible";
+const visibilityListeners: Array<() => void> = [];
+
+const mockDocument = {
+  get visibilityState() { return mockVisibilityState; },
+  addEventListener(type: string, handler: any) {
+    if (type === "visibilitychange") visibilityListeners.push(handler);
+  },
+  removeEventListener(type: string, handler: any) {
+    if (type === "visibilitychange") {
+      const idx = visibilityListeners.indexOf(handler);
+      if (idx >= 0) visibilityListeners.splice(idx, 1);
+    }
+  },
+};
+
+vi.stubGlobal("document", mockDocument);
+
+function simulateVisibilityChange(state: "visible" | "hidden") {
+  mockVisibilityState = state;
+  for (const fn of [...visibilityListeners]) fn();
+}
+
 beforeEach(() => {
   wsInstances = [];
+  mockVisibilityState = "visible";
+  visibilityListeners.length = 0;
   vi.useFakeTimers();
 });
 
@@ -432,5 +459,150 @@ describe("returnToLobby", () => {
     // Should create a new WS without session param
     const ws2 = wsInstances[wsInstances.length - 1];
     expect(ws2.url).toBe("ws://localhost:3001");
+  });
+});
+
+// --- Visibility change (mobile tab resume) ---
+
+describe("visibilitychange", () => {
+  it("reconnects immediately when tab becomes visible and WS is dead", () => {
+    const { transport } = createLobbyTransport();
+    const ws1 = connectAndOpen(transport);
+
+    // WS dies, normal backoff would wait 1s
+    ws1.simulateClose();
+    expect(wsInstances).toHaveLength(1);
+
+    // Tab comes back — should reconnect instantly, not wait for backoff
+    simulateVisibilityChange("visible");
+    expect(wsInstances).toHaveLength(2);
+  });
+
+  it("does not reconnect when WS is still open", () => {
+    const { transport } = createLobbyTransport();
+    connectAndOpen(transport);
+
+    simulateVisibilityChange("visible");
+
+    // No extra WS — the existing one is healthy
+    expect(wsInstances).toHaveLength(1);
+  });
+
+  it("cancels pending backoff timer on visibility reconnect", () => {
+    const { transport } = createLobbyTransport();
+    const ws1 = connectAndOpen(transport);
+
+    // WS dies — backoff timer starts (1s)
+    ws1.simulateClose();
+
+    // Tab comes back before backoff fires
+    simulateVisibilityChange("visible");
+    expect(wsInstances).toHaveLength(2);
+
+    // Advance past the original backoff — should NOT create a third WS
+    vi.advanceTimersByTime(1000);
+    expect(wsInstances).toHaveLength(2);
+  });
+
+  it("resets backoff counter so next failure uses base delay", () => {
+    const { transport } = createLobbyTransport();
+    const ws1 = connectAndOpen(transport);
+
+    // Burn through two failures to escalate backoff: 1s, 2s
+    ws1.simulateClose();
+    vi.advanceTimersByTime(1000);
+    wsInstances[1].simulateClose();
+    vi.advanceTimersByTime(2000);
+    // Now at attempt 2, next would be 4s
+
+    // Tab resume reconnects and resets counter
+    wsInstances[2].simulateClose();
+    simulateVisibilityChange("visible");
+    expect(wsInstances).toHaveLength(4);
+
+    // This new connection fails — backoff should be 1s (reset), not 4s
+    wsInstances[3].simulateClose();
+    vi.advanceTimersByTime(999);
+    expect(wsInstances).toHaveLength(4);
+    vi.advanceTimersByTime(1);
+    expect(wsInstances).toHaveLength(5);
+  });
+
+  it("does nothing when page goes hidden", () => {
+    const { transport } = createLobbyTransport();
+    connectAndOpen(transport);
+
+    simulateVisibilityChange("hidden");
+
+    expect(wsInstances).toHaveLength(1);
+  });
+
+  it("does not reconnect after close()", () => {
+    const { transport } = createLobbyTransport();
+    connectAndOpen(transport);
+
+    transport.close();
+
+    simulateVisibilityChange("visible");
+    // Only the original WS — no reconnect attempt
+    expect(wsInstances).toHaveLength(1);
+  });
+
+  it("registers listener on connect(), not before", () => {
+    const { transport } = createLobbyTransport();
+    expect(visibilityListeners).toHaveLength(0);
+    transport.connect();
+    expect(visibilityListeners).toHaveLength(1);
+  });
+});
+
+// --- History replay messages ---
+
+describe("history replay", () => {
+  it("fires onHistoryStart when bridge sends historyStart", () => {
+    const onHistoryStart = vi.fn();
+    const { transport } = createLobbyTransport({ onHistoryStart });
+    const ws = connectAndOpen(transport);
+
+    ws.simulateMessage({ source: "bridge", type: "historyStart" });
+    expect(onHistoryStart).toHaveBeenCalledOnce();
+  });
+
+  it("fires onHistoryEnd when bridge sends historyEnd", () => {
+    const onHistoryEnd = vi.fn();
+    const { transport } = createLobbyTransport({ onHistoryEnd });
+    const ws = connectAndOpen(transport);
+
+    ws.simulateMessage({ source: "bridge", type: "historyEnd" });
+    expect(onHistoryEnd).toHaveBeenCalledOnce();
+  });
+
+  it("forwards CC events between historyStart and historyEnd to eventHandler", () => {
+    const onHistoryStart = vi.fn();
+    const onHistoryEnd = vi.fn();
+    const { transport } = createLobbyTransport({ onHistoryStart, onHistoryEnd });
+    const ws = connectAndOpen(transport);
+    const received: any[] = [];
+    transport.onEvent((e) => received.push(e));
+
+    ws.simulateMessage({ source: "bridge", type: "historyStart" });
+    ws.simulateMessage({ source: "cc", event: { type: "system", cwd: "/test" } });
+    ws.simulateMessage({ source: "cc", event: { type: "result", subtype: "success" } });
+    ws.simulateMessage({ source: "bridge", type: "historyEnd" });
+
+    expect(onHistoryStart).toHaveBeenCalledOnce();
+    expect(received).toHaveLength(2);
+    expect(received[0].type).toBe("system");
+    expect(received[1].type).toBe("result");
+    expect(onHistoryEnd).toHaveBeenCalledOnce();
+  });
+
+  it("removes listener on close()", () => {
+    const { transport } = createLobbyTransport();
+    connectAndOpen(transport);
+
+    expect(visibilityListeners).toHaveLength(1);
+    transport.close();
+    expect(visibilityListeners).toHaveLength(0);
   });
 });

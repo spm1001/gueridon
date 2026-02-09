@@ -991,3 +991,151 @@ describe("reset", () => {
     expect(sent[0]).toContain("[Context:");
   });
 });
+
+// --- Replay mode ---
+
+describe("replay mode", () => {
+  it("startReplay resets state and suppresses emit", () => {
+    // Build some state first
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "hi" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+    events.length = 0; // clear event log
+
+    agent.startReplay();
+
+    // State should be reset
+    expect(agent.state.messages).toEqual([]);
+    // emit() is suppressed — agent_end from reset() should NOT fire
+    // (startReplay sets replayMode before reset's emit would fire...
+    //  actually reset() emits agent_end, but startReplay calls reset() first then sets flag)
+    // Let's check by replaying an event — subscribers should NOT fire
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "replayed" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+    expect(events).toEqual([]); // No events emitted during replay
+    expect(agent.state.messages).toHaveLength(1); // But state IS built
+    expect(agent.state.messages[0].content[0]).toEqual({ type: "text", text: "replayed" });
+  });
+
+  it("endReplay re-enables emit and fires agent_start sync event", () => {
+    agent.startReplay();
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "replayed" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+    agent.handleCCEvent({ type: "result", subtype: "success", usage: { input_tokens: 20, output_tokens: 10 } });
+    events.length = 0;
+
+    agent.endReplay();
+
+    // Should fire agent_start (sync trigger)
+    expect(events.some((e) => e.type === "agent_start")).toBe(true);
+    // And emit should work again for future events
+    events.length = 0;
+    agent.handleCCEvent({ type: "system", cwd: "/test" });
+    // system doesn't emit events, but streaming would. Check emit is unblocked:
+    expect((agent as any)._replayMode).toBe(false);
+  });
+
+  it("endReplay mid-stream emits message_update before sync", () => {
+    agent.startReplay();
+    // Start a streaming message
+    agent.handleCCEvent({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { model: "claude-opus-4-6", id: "msg_r", role: "assistant", content: [], stop_reason: null, usage: {} },
+      },
+    });
+    agent.handleCCEvent({
+      type: "stream_event",
+      event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    });
+    agent.handleCCEvent({
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } },
+    });
+    events.length = 0;
+
+    agent.endReplay();
+
+    // Should emit message_update (with partial stream message) then agent_start
+    const types = events.map((e) => e.type);
+    expect(types).toContain("message_update");
+    expect(types).toContain("agent_start");
+    expect(types.indexOf("message_update")).toBeLessThan(types.indexOf("agent_start"));
+  });
+
+  it("suppresses onAskUser during replay", () => {
+    const askSpy = vi.fn();
+    agent.onAskUser = askSpy;
+
+    agent.startReplay();
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{
+          type: "tool_use",
+          id: "toolu_ask",
+          name: "AskUserQuestion",
+          input: { questions: [{ question: "Pick one", header: "Q", options: [{ label: "A" }, { label: "B" }], multiSelect: false }] },
+        }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+
+    expect(askSpy).not.toHaveBeenCalled();
+  });
+
+  it("suppresses onCompaction during replay", () => {
+    const compactionSpy = vi.fn();
+    agent.onCompaction = compactionSpy;
+
+    agent.startReplay();
+    // First result with high tokens
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 100000, output_tokens: 0 },
+    });
+    // Second result with much lower tokens (triggers compaction detection)
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 50000, output_tokens: 0 },
+    });
+
+    expect(compactionSpy).not.toHaveBeenCalled();
+  });
+
+  it("suppresses onCwdChange during replay", () => {
+    const cwdSpy = vi.fn();
+    agent.onCwdChange = cwdSpy;
+
+    agent.startReplay();
+    agent.handleCCEvent({ type: "system", subtype: "init", cwd: "/replayed/path" });
+
+    expect(cwdSpy).not.toHaveBeenCalled();
+    expect(agent.cwd).toBe("/replayed/path"); // State IS updated
+  });
+});

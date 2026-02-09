@@ -252,7 +252,7 @@ describe("connecting phase", () => {
       sessionId: "new-session-123",
     });
     expect(state).toEqual({ phase: "idle" });
-    expect(effectTypes(effects)).toEqual(["clear_timeout", "close_dialog", "focus_input"]);
+    expect(effectTypes(effects)).toEqual(["clear_timeout", "close_dialog", "store_folder", "focus_input"]);
   });
 
   it("folder_list → no-op (stale list during connect)", () => {
@@ -273,25 +273,25 @@ describe("connecting phase", () => {
     expect((effects[0] as any).path).toBe("/home/user/Repos/alpha");
   });
 
-  it("lobby_entered at max retries → idle, shows error, lists folders", () => {
+  it("lobby_entered at max retries → idle, clears stored folder, shows error, lists folders", () => {
     const atMax: FolderPhase = { ...connecting, retries: MAX_CONNECT_RETRIES - 1 };
     const { state, effects } = transition(atMax, {
       type: "lobby_entered",
     });
     expect(state).toEqual({ phase: "idle" });
-    expect(effectTypes(effects)).toEqual(["clear_timeout", "show_error", "list_folders"]);
-    expect((effects[1] as any).message).toContain("Failed to connect");
-    expect((effects[1] as any).message).toContain("alpha");
+    expect(effectTypes(effects)).toEqual(["clear_timeout", "clear_stored_folder", "show_error", "list_folders"]);
+    expect((effects[2] as any).message).toContain("Failed to connect");
+    expect((effects[2] as any).message).toContain("alpha");
   });
 
-  it("connection_failed → idle, shows error, lists folders", () => {
+  it("connection_failed → idle, clears stored folder, shows error, lists folders", () => {
     const { state, effects } = transition(connecting, {
       type: "connection_failed",
       reason: "Connection timed out",
     });
     expect(state).toEqual({ phase: "idle" });
-    expect(effectTypes(effects)).toEqual(["clear_timeout", "show_error", "list_folders"]);
-    expect((effects[1] as any).message).toBe("Connection timed out");
+    expect(effectTypes(effects)).toEqual(["clear_timeout", "clear_stored_folder", "show_error", "list_folders"]);
+    expect((effects[2] as any).message).toBe("Connection timed out");
   });
 
   it("dialog_cancelled → idle, clears timeout (user escaped mid-connect)", () => {
@@ -339,7 +339,7 @@ describe("full paths", () => {
     r = transition(s, { type: "session_started", sessionId: "sess-1" });
     s = r.state;
     expect(s.phase).toBe("idle");
-    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "close_dialog", "focus_input"]);
+    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "close_dialog", "store_folder", "focus_input"]);
   });
 
   it("mid-session switch: idle → open → list → select(inSession) → lobby → session", () => {
@@ -383,7 +383,7 @@ describe("full paths", () => {
     r = transition(s, { type: "session_started", sessionId: "sess-2" });
     s = r.state;
     expect(s.phase).toBe("idle");
-    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "close_dialog", "focus_input"]);
+    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "close_dialog", "store_folder", "focus_input"]);
   });
 
   it("cancel during browsing: browsing → idle", () => {
@@ -420,7 +420,7 @@ describe("full paths", () => {
     // Third WS drop — max reached, gives up
     r = transition(s, { type: "lobby_entered" });
     expect(r.state.phase).toBe("idle");
-    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "show_error", "list_folders"]);
+    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "clear_stored_folder", "show_error", "list_folders"]);
   });
 
   it("disconnect during connecting: succeeds before max retries", () => {
@@ -434,7 +434,7 @@ describe("full paths", () => {
     // Succeeds on second try
     const r = transition(s, { type: "session_started", sessionId: "recovered" });
     expect(r.state.phase).toBe("idle");
-    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "close_dialog", "focus_input"]);
+    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "close_dialog", "store_folder", "focus_input"]);
   });
 
   it("timeout during connecting: returns to folder picker with error", () => {
@@ -447,7 +447,7 @@ describe("full paths", () => {
 
     const r = transition(s, { type: "connection_failed", reason: "Connection timed out" });
     expect(r.state.phase).toBe("idle");
-    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "show_error", "list_folders"]);
+    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "clear_stored_folder", "show_error", "list_folders"]);
   });
 
   it("timeout during switching: returns to folder picker with error", () => {
@@ -475,7 +475,8 @@ describe("full paths", () => {
       reason: "CC process exited (signal SIGKILL)",
     });
     expect(r.state.phase).toBe("idle");
-    expect((r.effects[1] as any).message).toContain("SIGKILL");
+    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "clear_stored_folder", "show_error", "list_folders"]);
+    expect((r.effects[2] as any).message).toContain("SIGKILL");
   });
 
   it("escape during connecting: user cancels, connection may succeed silently", () => {
@@ -514,6 +515,48 @@ describe("full paths", () => {
     // lobby_entered arrives — lists folders, user sees selector again
     r = transition(s, { type: "lobby_entered" });
     expect(effectTypes(r.effects)).toEqual(["list_folders"]);
+  });
+
+  it("auto_connect: idle → connecting, skips dialog, sets cwd", () => {
+    let s = initial();
+    const r = transition(s, {
+      type: "auto_connect",
+      path: folders[0].path,
+      name: folders[0].name,
+    });
+    expect(r.state).toEqual({
+      phase: "connecting",
+      folderPath: folders[0].path,
+      folderName: folders[0].name,
+      retries: 0,
+    });
+    expect(effectTypes(r.effects)).toEqual(["set_cwd", "connect_folder", "start_timeout"]);
+    expect((r.effects[0] as any).name).toBe(folders[0].name);
+    expect((r.effects[1] as any).path).toBe(folders[0].path);
+  });
+
+  it("auto_connect → session_started: stores folder, focuses input", () => {
+    let s = initial();
+    let r = transition(s, { type: "auto_connect", path: folders[0].path, name: folders[0].name });
+    r = transition(r.state, { type: "session_started", sessionId: "auto-123" });
+    expect(r.state.phase).toBe("idle");
+    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "close_dialog", "store_folder", "focus_input"]);
+    expect((r.effects[2] as any).path).toBe(folders[0].path);
+  });
+
+  it("auto_connect → connection_failed: clears stored folder, opens picker", () => {
+    let s = initial();
+    let r = transition(s, { type: "auto_connect", path: "/gone", name: "gone" });
+    r = transition(r.state, { type: "connection_failed", reason: "Folder not found" });
+    expect(r.state.phase).toBe("idle");
+    expect(effectTypes(r.effects)).toEqual(["clear_timeout", "clear_stored_folder", "show_error", "list_folders"]);
+  });
+
+  it("auto_connect in non-idle phase is a no-op", () => {
+    const browsing: FolderPhase = { phase: "browsing", folders };
+    const r = transition(browsing, { type: "auto_connect", path: "/x", name: "x" });
+    expect(r.state).toBe(browsing);
+    expect(r.effects).toEqual([]);
   });
 
   it("flash bug scenario: session_started while browsing does NOT close dialog", () => {

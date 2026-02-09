@@ -63,6 +63,10 @@ export class ClaudeCodeAgent {
   private partialMessageId: string | null = null;
   private currentContentIndex = -1;
 
+  // Replay mode — events are processed to rebuild state, but
+  // subscribers and callbacks are suppressed (no UI animation, no AskUser popup)
+  private _replayMode = false;
+
   // Track tool call IDs → names for tool_result mapping
   private toolCallNames = new Map<string, string>();
 
@@ -136,6 +140,25 @@ export class ClaudeCodeAgent {
     this._contextNote = null;
     // Notify subscribers so UI clears stale messages
     this.emit({ type: "agent_end" });
+  }
+
+  /** Begin replaying history — suppresses emit() and callbacks until endReplay() */
+  startReplay(): void {
+    this._replayMode = true;
+    this.reset();
+  }
+
+  /** End replay — re-enables notifications and triggers a sync so UI renders all at once */
+  endReplay(): void {
+    this._replayMode = false;
+    // If CC was mid-turn when we reconnected, the adapter has a partial
+    // streamMessage but isStreaming may be false (it's set by prompt(), not
+    // stream events). Mark streaming and emit the partial so the UI picks up.
+    if (this._state.streamMessage) {
+      this._state.isStreaming = true;
+      this.emit({ type: "message_update", message: this._state.streamMessage } as any);
+    }
+    this.emit({ type: "agent_start" }); // triggers syncState in GueridonInterface
   }
 
   get state(): AgentState {
@@ -266,7 +289,7 @@ export class ClaudeCodeAgent {
     // Init fires on every user message — extract CWD on first
     if (event.cwd && !this._cwd) {
       this._cwd = event.cwd;
-      this.onCwdChange?.(event.cwd);
+      if (!this._replayMode) this.onCwdChange?.(event.cwd);
     }
   }
 
@@ -315,10 +338,12 @@ export class ClaudeCodeAgent {
       if (block.type === "tool_use" && block.name === "AskUserQuestion") {
         askUserIds.add(block.id);
         this.askUserToolCallIds.add(block.id);
-        this.onAskUser?.({
-          questions: block.input?.questions || [],
-          toolCallId: block.id,
-        });
+        if (!this._replayMode) {
+          this.onAskUser?.({
+            questions: block.input?.questions || [],
+            toolCallId: block.id,
+          });
+        }
       }
     }
 
@@ -445,7 +470,7 @@ export class ClaudeCodeAgent {
 
       // Detect compaction: significant drop (>15%) in token count between turns
       if (prevTokens > 0 && this._lastInputTokens < prevTokens * 0.85) {
-        this.onCompaction?.(prevTokens, this._lastInputTokens);
+        if (!this._replayMode) this.onCompaction?.(prevTokens, this._lastInputTokens);
       }
 
       // Track threshold crossings — inject context note for CC on band change
@@ -624,6 +649,7 @@ export class ClaudeCodeAgent {
   // --- Helpers ---
 
   private emit(e: AgentEvent): void {
+    if (this._replayMode) return;
     for (const listener of this.listeners) {
       listener(e);
     }

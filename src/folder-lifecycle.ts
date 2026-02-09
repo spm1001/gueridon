@@ -30,7 +30,8 @@ export type FolderEvent =
   | { type: "dialog_cancelled" }
   | { type: "lobby_entered" }
   | { type: "session_started"; sessionId: string }
-  | { type: "connection_failed"; reason: string };
+  | { type: "connection_failed"; reason: string }
+  | { type: "auto_connect"; path: string; name: string };
 
 // --- Effects (instructions, not side effects) ---
 
@@ -46,7 +47,9 @@ export type FolderEffect =
   | { type: "focus_input" }
   | { type: "show_error"; message: string }
   | { type: "start_timeout"; ms: number }
-  | { type: "clear_timeout" };
+  | { type: "clear_timeout" }
+  | { type: "store_folder"; path: string; name: string }
+  | { type: "clear_stored_folder" };
 
 // --- Transition result ---
 
@@ -98,6 +101,22 @@ function transitionIdle(
         ],
       };
     }
+
+    case "auto_connect":
+      // Page reload with stored folder — skip dialog, connect directly
+      return {
+        state: {
+          phase: "connecting",
+          folderPath: event.path,
+          folderName: event.name,
+          retries: 0,
+        },
+        effects: [
+          { type: "set_cwd", name: event.name },
+          { type: "connect_folder", path: event.path },
+          { type: "start_timeout", ms: 30_000 },
+        ],
+      };
 
     case "lobby_entered":
       // WS connected in lobby mode (initial load or after returnToLobby without deferred)
@@ -250,10 +269,15 @@ function transitionConnecting(
 ): TransitionResult {
   switch (event.type) {
     case "session_started":
-      // Session connected — close dialog, focus input, return to idle
+      // Session connected — store folder, close dialog, focus input, return to idle
       return {
         state: { phase: "idle" },
-        effects: [{ type: "clear_timeout" }, { type: "close_dialog" }, { type: "focus_input" }],
+        effects: [
+          { type: "clear_timeout" },
+          { type: "close_dialog" },
+          { type: "store_folder", path: state.folderPath, name: state.folderName },
+          { type: "focus_input" },
+        ],
       };
 
     case "lobby_entered": {
@@ -264,6 +288,7 @@ function transitionConnecting(
           state: { phase: "idle" },
           effects: [
             { type: "clear_timeout" },
+            { type: "clear_stored_folder" },
             { type: "show_error", message: `Failed to connect to ${state.folderName} after ${MAX_CONNECT_RETRIES} attempts` },
             { type: "list_folders" },
           ],
@@ -281,6 +306,7 @@ function transitionConnecting(
         state: { phase: "idle" },
         effects: [
           { type: "clear_timeout" },
+          { type: "clear_stored_folder" },
           { type: "show_error", message: event.reason },
           { type: "list_folders" },
         ],

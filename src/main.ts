@@ -8,6 +8,21 @@ import { GueridonInterface } from "./gueridon-interface.js";
 import { initial, transition, type FolderEvent, type FolderEffect } from "./folder-lifecycle.js";
 import "./app.css";
 
+// --- Persistent folder (survives page refresh) ---
+
+const STORAGE_KEY = "gueridon:lastFolder";
+
+function getStoredFolder(): { path: string; name: string } | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+function storeFolder(path: string, name: string): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ path, name }));
+}
+
 // --- Configuration ---
 
 const BRIDGE_URL =
@@ -126,6 +141,12 @@ function executeEffect(effect: FolderEffect) {
     case "show_error":
       gi.showToast(effect.message);
       break;
+    case "store_folder":
+      storeFolder(effect.path, effect.name);
+      break;
+    case "clear_stored_folder":
+      localStorage.removeItem(STORAGE_KEY);
+      break;
     case "start_timeout":
       clearConnectTimeout();
       connectTimeout = setTimeout(() => {
@@ -159,8 +180,17 @@ const transport = new WSTransport({
     console.error(`[guéridon] bridge error: ${err}`);
     dispatch({ type: "connection_failed", reason: err });
   },
-  onLobbyConnected: () => dispatch({ type: "lobby_entered" }),
+  onLobbyConnected: () => {
+    const stored = getStoredFolder();
+    if (stored) {
+      dispatch({ type: "auto_connect", path: stored.path, name: stored.name });
+    } else {
+      dispatch({ type: "lobby_entered" });
+    }
+  },
   onFolderList: (folders) => dispatch({ type: "folder_list", folders }),
+  onHistoryStart: () => agent.startReplay(),
+  onHistoryEnd: () => agent.endReplay(),
   onProcessExit: (code, signal) => {
     const detail = signal ? `signal ${signal}` : `code ${code}`;
     dispatch({ type: "connection_failed", reason: `Claude process exited (${detail})` });

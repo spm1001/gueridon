@@ -44,6 +44,10 @@ export interface WSTransportOptions {
   onFolderList?: (folders: FolderInfo[]) => void;
   /** Called when CC process exits (code/signal) */
   onProcessExit?: (code: number | null, signal: string | null) => void;
+  /** Called when bridge begins replaying history buffer */
+  onHistoryStart?: () => void;
+  /** Called when bridge finishes replaying history buffer */
+  onHistoryEnd?: () => void;
 }
 
 // --- Reconnect backoff ---
@@ -65,6 +69,7 @@ export class WSTransport implements CCTransport {
   private promptTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false; // True after explicit close() — stops reconnect
   private _state: ConnectionState = "disconnected";
+  private boundVisibilityHandler: (() => void) | null = null;
 
   constructor(options: WSTransportOptions) {
     this.options = {
@@ -91,6 +96,7 @@ export class WSTransport implements CCTransport {
 
   close(): void {
     this.closed = true;
+    this.unlistenVisibility();
     this.clearTimers();
     if (this.ws) {
       this.ws.close(1000, "Client closing");
@@ -107,6 +113,7 @@ export class WSTransport implements CCTransport {
 
   connect(): void {
     this.closed = false;
+    this.listenVisibility();
     this.doConnect();
   }
 
@@ -213,6 +220,14 @@ export class WSTransport implements CCTransport {
           this.options.onBridgeError?.(msg.error);
           break;
 
+        case "historyStart":
+          this.options.onHistoryStart?.();
+          break;
+
+        case "historyEnd":
+          this.options.onHistoryEnd?.();
+          break;
+
         case "processExit":
           // CC process died. Normal exits (result/success) are handled by
           // the adapter via CC events. But abnormal exits (crash, abort,
@@ -280,6 +295,37 @@ export class WSTransport implements CCTransport {
     if (this._state === state) return;
     this._state = state;
     this.options.onStateChange?.(state, detail);
+  }
+
+  // --- Visibility (mobile tab resume) ---
+
+  private listenVisibility(): void {
+    if (this.boundVisibilityHandler) return; // already listening
+    if (typeof document === "undefined") return; // SSR/test safety
+    this.boundVisibilityHandler = () => this.handleVisibilityChange();
+    document.addEventListener("visibilitychange", this.boundVisibilityHandler);
+  }
+
+  private unlistenVisibility(): void {
+    if (!this.boundVisibilityHandler) return;
+    if (typeof document === "undefined") return;
+    document.removeEventListener("visibilitychange", this.boundVisibilityHandler);
+    this.boundVisibilityHandler = null;
+  }
+
+  private handleVisibilityChange(): void {
+    if (document.visibilityState !== "visible") return;
+    if (this.closed) return;
+    if (this.ws?.readyState === WebSocket.OPEN) return; // already healthy
+
+    // Tab came back and WS is dead — reconnect immediately.
+    // Cancel any pending backoff timer and reset attempts.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempts = 0;
+    this.doConnect();
   }
 
   // --- Cleanup ---
