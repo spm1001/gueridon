@@ -8,7 +8,9 @@
     "dev": "vite",
     "bridge": "tsx server/bridge.ts",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@mariozechner/mini-lit": "^0.2.1",
@@ -21,8 +23,10 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.18",
     "@types/ws": "^8.18.1",
+    "jsdom": "^28.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vitest": "^4.0.18"
   }
 }
