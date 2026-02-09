@@ -65,10 +65,12 @@ python3 scripts/hello-cc.py "What tools do you have?"
 ## Dev Server
 
 ```bash
-npm run dev         # Vite on localhost:5173
-npm run build       # Production build to dist/
-npm test            # Run all tests (227 tests, ~1.2s)
-npm run test:watch  # Watch mode for development
+npm run dev            # Vite on localhost:5173
+npm run build          # Production build to dist/
+npm test               # Run all tests (234 tests, ~1.3s)
+npm run test:watch     # Watch mode for development
+npm run test:mobile    # Launch mobile test harness (Chrome Debug + dev + bridge + CDP viewport)
+npm run test:mobile:stop  # Tear down test harness
 ```
 
 ## Dependencies
