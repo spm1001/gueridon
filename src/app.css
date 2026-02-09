@@ -6,7 +6,7 @@
 /* Tell Tailwind to scan component libraries for utility classes.
    Without these, classes used inside pi-web-ui and mini-lit templates
    won't be generated — layout breaks especially at mobile widths. */
-@source "../../node_modules/@mariozechner/mini-lit/dist";
+@source "../node_modules/@mariozechner/mini-lit/dist";
 @source "/Users/modha/Repos/pi-mono/packages/web-ui/src";
 
 /* Custom styles from pi-web-ui's app.css that aren't Tailwind utilities.

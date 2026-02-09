@@ -17,11 +17,17 @@ import type {
   AgentTool,
 } from "@mariozechner/pi-agent-core";
 
-// Importing these registers the custom elements (<message-list>,
-// <streaming-message-container>, <user-message>, <assistant-message>, etc.)
+// These imports register custom elements via @customElement decorators.
+// MessageList/StreamingMessageContainer are used directly in our template.
+// The message components (UserMessage, AssistantMessage, etc.) must be imported
+// for their side effects — MessageList renders <user-message>, <assistant-message>
+// tags that are empty shells until these classes register the elements.
 import {
   MessageList,
   StreamingMessageContainer,
+  UserMessage,
+  AssistantMessage,
+  ToolMessage,
 } from "@mariozechner/pi-web-ui";
 import type { ClaudeCodeAgent } from "./claude-code-agent.js";
 
@@ -61,6 +67,13 @@ export class GueridonInterface extends LitElement {
 
   createRenderRoot() {
     return this; // Light DOM — Tailwind classes work
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    // Host element must fill its flex parent — without this, h-full on
+    // the inner div resolves to auto and the input bar floats to the top.
+    this.classList.add("flex-1", "min-h-0");
   }
 
   firstUpdated() {

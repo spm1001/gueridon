@@ -45,6 +45,7 @@ function updateStatus(state: ConnectionState) {
 
 let folderDialog: FolderSelector | null = null;
 let cachedFolders: FolderInfo[] = [];
+let pendingFolderConnect = false; // True after user selects folder, cleared on session connect
 
 function openFolderSelector() {
   if (folderDialog) return;
@@ -52,11 +53,13 @@ function openFolderSelector() {
   folderDialog = FolderSelector.show(
     cachedFolders,
     (folder) => {
+      pendingFolderConnect = true;
       gi.setCwd(folder.name);
       transport.connectFolder(folder.path);
     },
     () => {
       folderDialog = null;
+      pendingFolderConnect = false;
     },
   );
 }
@@ -67,11 +70,14 @@ const transport = new WSTransport({
   url: BRIDGE_URL,
   onStateChange: updateStatus,
   onSessionId: (id) => {
-    console.log(`[guéridon] session: ${id} (folderDialog=${!!folderDialog})`);
-    if (folderDialog) {
+    console.log(`[guéridon] session: ${id} (folderDialog=${!!folderDialog}, pending=${pendingFolderConnect})`);
+    if (folderDialog && pendingFolderConnect) {
       console.log("[guéridon] closing folder dialog due to session connect");
       folderDialog.close();
+    } else if (folderDialog) {
+      console.warn("[guéridon] onSessionId fired with dialog open but no pending connect — NOT closing (was the flash bug)");
     }
+    pendingFolderConnect = false;
     gi.focusInput();
   },
   onBridgeError: (err) => console.error(`[guéridon] bridge error: ${err}`),

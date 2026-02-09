@@ -50,6 +50,7 @@ export class FolderSelector extends DialogBase {
   }
 
   override close() {
+    console.trace("[guéridon] FolderSelector.close() called");
     this.connectingPath = null;
     this.filter = "";
     super.close();
