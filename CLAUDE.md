@@ -51,8 +51,10 @@ python3 scripts/hello-cc.py "What tools do you have?"
 ## Dev Server
 
 ```bash
-npm run dev    # Vite on localhost:5173
-npm run build  # Production build to dist/
+npm run dev         # Vite on localhost:5173
+npm run build       # Production build to dist/
+npm test            # Run unit tests (105 tests, ~450ms)
+npm run test:watch  # Watch mode for development
 ```
 
 ## Dependencies
