@@ -374,11 +374,11 @@ function attachWsToSession(ws: WebSocket, session: Session): void {
 }
 
 /** Handle messages on a session-mode connection. */
-function handleSessionMessage(
+async function handleSessionMessage(
   ws: WebSocket,
   session: Session,
   msg: ClientMessage,
-): void {
+): Promise<void> {
   switch (msg.type) {
     case "prompt": {
       // Lazy spawn: start CC process on first prompt (or respawn if dead)
@@ -404,12 +404,19 @@ function handleSessionMessage(
       break;
     }
 
-    case "listFolders":
+    case "listFolders": {
+      // Allow folder listing even in session mode — read-only, needed for
+      // the folder picker to show accurate state (active dots, timestamps)
+      const folders = await scanFolders(getActiveProcesses());
+      sendToClient(ws, { source: "bridge", type: "folderList", folders });
+      break;
+    }
+
     case "connectFolder":
       sendToClient(ws, {
         source: "bridge",
         type: "error",
-        error: `Cannot ${msg.type} on an active session`,
+        error: `Cannot connectFolder on an active session`,
       });
       break;
 
@@ -597,7 +604,9 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     }
 
     if (conn.state.mode === "session") {
-      handleSessionMessage(ws, conn.state.session, msg);
+      handleSessionMessage(ws, conn.state.session, msg).catch((err) =>
+        console.error(`[bridge] session message error:`, err),
+      );
     } else {
       lobbyQueue = lobbyQueue.then(() => handleLobbyMessage(ws, conn, msg));
     }
