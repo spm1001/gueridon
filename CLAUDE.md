@@ -20,14 +20,14 @@ Process-per-session with `--session-id <uuid>`. Resume via `--resume` after proc
 | `docs/bridge-protocol.md` | WebSocket protocol between browser and bridge. Message types, session lifecycle, reliability. |
 | `docs/decisions.md` | Architecture decisions with rationale. Permissions, session model, UI choices. |
 
-## Known Bugs (from code review 2026-02-09)
+## Fixed Bugs (from code review 2026-02-09)
 
-Start here before building features. See `docs/architecture-and-review.md` for full list.
+All critical findings from the initial review are resolved. See `docs/architecture-and-review.md` for the original analysis.
 
-1. **Agent state never resets on folder switch** (gdn-walaco) — singleton accumulates messages/tokens across sessions. Fix first.
-2. **prompt() swallows null transport** (gdn-vosejo) — UI stuck streaming forever if called before WS connects
-3. **Unknown CC events silently dropped** (gdn-pudaco) — no default case in handleCCEvent
-4. **main.ts folder lifecycle** — deferred connect / pendingFolderConnect is a state machine hidden in callbacks. Source of dialog flash bug.
+1. **~~Agent state never resets on folder switch~~** (gdn-walaco) — `reset()` method added to ClaudeCodeAgent, called on folder switch
+2. **~~prompt() swallows null transport~~** (gdn-vosejo) — guard sets error + emits agent_end
+3. **~~Unknown CC events silently dropped~~** (gdn-pudaco) — default cases log unknown types
+4. **~~main.ts folder lifecycle~~** (gdn-jegosi) — replaced flags with pure state machine (`src/folder-lifecycle.ts`). Dialog flash bug (gdn-jebudo) structurally prevented.
 
 ## Working Pattern: Write Analysis to Files
 
@@ -67,7 +67,7 @@ python3 scripts/hello-cc.py "What tools do you have?"
 ```bash
 npm run dev         # Vite on localhost:5173
 npm run build       # Production build to dist/
-npm test            # Run all tests (183 tests, ~2.25s)
+npm test            # Run all tests (227 tests, ~1.2s)
 npm run test:watch  # Watch mode for development
 ```
 

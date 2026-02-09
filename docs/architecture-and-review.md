@@ -105,11 +105,11 @@ The `litClassFieldFix` plugin is critical — without it, `@state()` properties 
 
 | # | Finding | Source | Action |
 |---|---------|--------|--------|
-| 1 | **Agent state never resets between folder switches** — singleton `ClaudeCodeAgent` accumulates messages, toolCallNames, context tokens across folder changes. Old session messages render in new session. | Epimetheus | Add `reset()` method, call on folder switch |
+| 1 | ~~**Agent state never resets between folder switches**~~ **FIXED (gdn-walaco)** — `reset()` method added, called on folder switch. | Epimetheus | ~~Add `reset()` method, call on folder switch~~ Done |
 | 2 | **`pi-web-ui` still in package.json** — dead dependency, pulls entire transitive chain (pdfjs, xlsx, @aws-sdk). Directly contradicts the vendoring work. | All three | Remove from package.json |
-| 3 | **`message_end` emitted before `pendingToolCalls` populated** — the known wiring gap. UI briefly shows tool calls as "complete" before results arrive. | Epimetheus | Handle `tool_execution_start/end` in subscription |
-| 4 | **`prompt()` swallows transport absence** — if transport is null, user message added to state, streaming set to true, but message silently dropped. UI stuck in "streaming" forever. | Epimetheus | Guard against null transport |
-| 5 | **Unknown CC event types silently dropped** — no `default` case in `handleCCEvent` or `handleStreamEvent`. When CC adds new events, they're invisible. | Prometheus | Add default case with logging |
+| 3 | ~~**`message_end` emitted before `pendingToolCalls` populated**~~ **FIXED (gdn-zuhacu)** — `tool_execution_start/end` added to setupSubscription. | Epimetheus | ~~Handle `tool_execution_start/end` in subscription~~ Done |
+| 4 | ~~**`prompt()` swallows transport absence**~~ **FIXED (gdn-vosejo)** — guard sets error + emits agent_end. | Epimetheus | ~~Guard against null transport~~ Done |
+| 5 | ~~**Unknown CC event types silently dropped**~~ **FIXED (gdn-pudaco)** — default cases with `console.debug` in both handlers. | Prometheus | ~~Add default case with logging~~ Done |
 | 6 | **`litClassFieldFix` regex fragility** — depends on exact esbuild output format. Failure = blank components. Warning exists but build test doesn't catch it. | Prometheus, Epimetheus | Investigate `useDefineForClassFields: false` as alternative |
 | 7 | **No client-side message persistence** — page refresh loses entire conversation. The biggest UX gap for mobile (tabs get killed). | Prometheus | IndexedDB persistence or replay capture |
 
