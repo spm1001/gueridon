@@ -123,6 +123,29 @@ function executeEffect(effect: FolderEffect) {
     case "focus_input":
       gi.focusInput();
       break;
+    case "show_error":
+      gi.showToast(effect.message);
+      break;
+    case "start_timeout":
+      clearConnectTimeout();
+      connectTimeout = setTimeout(() => {
+        dispatch({ type: "connection_failed", reason: "Connection timed out" });
+      }, effect.ms);
+      break;
+    case "clear_timeout":
+      clearConnectTimeout();
+      break;
+  }
+}
+
+// --- Connect timeout ---
+
+let connectTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function clearConnectTimeout() {
+  if (connectTimeout) {
+    clearTimeout(connectTimeout);
+    connectTimeout = null;
   }
 }
 
@@ -132,9 +155,16 @@ const transport = new WSTransport({
   url: BRIDGE_URL,
   onStateChange: updateStatus,
   onSessionId: (id) => dispatch({ type: "session_started", sessionId: id }),
-  onBridgeError: (err) => console.error(`[guéridon] bridge error: ${err}`),
+  onBridgeError: (err) => {
+    console.error(`[guéridon] bridge error: ${err}`);
+    dispatch({ type: "connection_failed", reason: err });
+  },
   onLobbyConnected: () => dispatch({ type: "lobby_entered" }),
   onFolderList: (folders) => dispatch({ type: "folder_list", folders }),
+  onProcessExit: (code, signal) => {
+    const detail = signal ? `signal ${signal}` : `code ${code}`;
+    dispatch({ type: "connection_failed", reason: `Claude process exited (${detail})` });
+  },
 });
 
 agent.connectTransport(transport);

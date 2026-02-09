@@ -17,9 +17,11 @@ export type FolderPhase =
   | { phase: "idle" }
   | { phase: "browsing"; folders: FolderInfo[] }
   | { phase: "switching"; folderPath: string; folderName: string }
-  | { phase: "connecting"; folderPath: string; folderName: string };
+  | { phase: "connecting"; folderPath: string; folderName: string; retries: number };
 
 // --- Events ---
+
+export const MAX_CONNECT_RETRIES = 3;
 
 export type FolderEvent =
   | { type: "open_requested"; cachedFolders?: FolderInfo[] }
@@ -27,7 +29,8 @@ export type FolderEvent =
   | { type: "folder_selected"; path: string; name: string; inSession: boolean }
   | { type: "dialog_cancelled" }
   | { type: "lobby_entered" }
-  | { type: "session_started"; sessionId: string };
+  | { type: "session_started"; sessionId: string }
+  | { type: "connection_failed"; reason: string };
 
 // --- Effects (instructions, not side effects) ---
 
@@ -40,7 +43,10 @@ export type FolderEffect =
   | { type: "return_to_lobby" }
   | { type: "reset_agent" }
   | { type: "set_cwd"; name: string }
-  | { type: "focus_input" };
+  | { type: "focus_input" }
+  | { type: "show_error"; message: string }
+  | { type: "start_timeout"; ms: number }
+  | { type: "clear_timeout" };
 
 // --- Transition result ---
 
@@ -145,6 +151,7 @@ function transitionBrowsing(
             { type: "reset_agent" },
             { type: "set_cwd", name: event.name },
             { type: "return_to_lobby" },
+            { type: "start_timeout", ms: 30_000 },
           ],
         };
       } else {
@@ -154,11 +161,13 @@ function transitionBrowsing(
             phase: "connecting",
             folderPath: event.path,
             folderName: event.name,
+            retries: 0,
           },
           effects: [
             { type: "reset_agent" },
             { type: "set_cwd", name: event.name },
             { type: "connect_folder", path: event.path },
+            { type: "start_timeout", ms: 30_000 },
           ],
         };
       }
@@ -193,22 +202,33 @@ function transitionSwitching(
   switch (event.type) {
     case "lobby_entered":
       // We're back in lobby after returnToLobby — now connect to the deferred folder
+      // Timeout continues from switching phase (not restarted)
       return {
         state: {
           phase: "connecting",
           folderPath: state.folderPath,
           folderName: state.folderName,
+          retries: 0,
         },
         effects: [{ type: "connect_folder", path: state.folderPath }],
       };
 
-    case "dialog_cancelled":
-      // User escaped during switch — abandon. We've already returnToLobby'd,
-      // so we're disconnected. Idle + eventual lobby_entered → list_folders
-      // → user sees folder selector again.
+    case "connection_failed":
+      // Bridge error or timeout during switch — return to folder picker
       return {
         state: { phase: "idle" },
-        effects: [],
+        effects: [
+          { type: "clear_timeout" },
+          { type: "show_error", message: event.reason },
+          { type: "list_folders" },
+        ],
+      };
+
+    case "dialog_cancelled":
+      // User escaped during switch — abandon
+      return {
+        state: { phase: "idle" },
+        effects: [{ type: "clear_timeout" }],
       };
 
     case "folder_list":
@@ -233,23 +253,44 @@ function transitionConnecting(
       // Session connected — close dialog, focus input, return to idle
       return {
         state: { phase: "idle" },
-        effects: [{ type: "close_dialog" }, { type: "focus_input" }],
+        effects: [{ type: "clear_timeout" }, { type: "close_dialog" }, { type: "focus_input" }],
       };
 
-    case "lobby_entered":
-      // WS dropped and reconnected during connect — retry
+    case "lobby_entered": {
+      // WS dropped and reconnected during connect — retry with counter
+      const nextRetry = state.retries + 1;
+      if (nextRetry >= MAX_CONNECT_RETRIES) {
+        return {
+          state: { phase: "idle" },
+          effects: [
+            { type: "clear_timeout" },
+            { type: "show_error", message: `Failed to connect to ${state.folderName} after ${MAX_CONNECT_RETRIES} attempts` },
+            { type: "list_folders" },
+          ],
+        };
+      }
       return {
-        state,
+        state: { ...state, retries: nextRetry },
         effects: [{ type: "connect_folder", path: state.folderPath }],
+      };
+    }
+
+    case "connection_failed":
+      // Bridge error, processExit, or timeout during connect — return to folder picker
+      return {
+        state: { phase: "idle" },
+        effects: [
+          { type: "clear_timeout" },
+          { type: "show_error", message: event.reason },
+          { type: "list_folders" },
+        ],
       };
 
     case "dialog_cancelled":
-      // User escaped during connect — abandon. Connection may still succeed
-      // in background (session_started in idle → no-op). User can re-open
-      // folder selector later.
+      // User escaped during connect — abandon
       return {
         state: { phase: "idle" },
-        effects: [],
+        effects: [{ type: "clear_timeout" }],
       };
 
     case "folder_list":

@@ -151,7 +151,7 @@ export class GueridonInterface extends LitElement {
     this.showToast(`Context compacted: ${fromK}k → ${toK}k`);
   }
 
-  private showToast(text: string) {
+  showToast(text: string) {
     // Lazy-create toast element
     if (!this._toast) {
       this._toast = document.createElement("div");

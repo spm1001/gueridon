@@ -42,6 +42,8 @@ export interface WSTransportOptions {
   onLobbyConnected?: () => void;
   /** Called with folder list from bridge */
   onFolderList?: (folders: FolderInfo[]) => void;
+  /** Called when CC process exits (code/signal) */
+  onProcessExit?: (code: number | null, signal: string | null) => void;
 }
 
 // --- Reconnect backoff ---
@@ -223,6 +225,7 @@ export class WSTransport implements CCTransport {
             subtype: "error",
             error: `CC process exited (code=${msg.code}, signal=${msg.signal})`,
           });
+          this.options.onProcessExit?.(msg.code ?? null, msg.signal ?? null);
           break;
       }
     } else if (msg.source === "cc") {
