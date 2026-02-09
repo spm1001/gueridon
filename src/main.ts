@@ -1,10 +1,10 @@
 import { html, render } from "lit";
 import { ClaudeCodeAgent } from "./claude-code-agent.js";
 import { WSTransport, type ConnectionState } from "./ws-transport.js";
-import type { FolderInfo } from "./ws-transport.js";
 import { FolderSelector } from "./folder-selector.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
 import { GueridonInterface } from "./gueridon-interface.js";
+import { initial, transition, type FolderEvent, type FolderEffect } from "./folder-lifecycle.js";
 import "./app.css";
 
 // --- Configuration ---
@@ -41,37 +41,71 @@ function updateStatus(state: ConnectionState) {
   gi.updateConnectionStatus(statusLabels[state], statusColors[state]);
 }
 
-// --- Folder selector dialog ---
+// --- Folder lifecycle state machine ---
 
+let lifecycle = initial();
 let folderDialog: FolderSelector | null = null;
-let cachedFolders: FolderInfo[] = [];
-let pendingFolderConnect = false; // True after user selects folder, cleared on session connect
-let deferredFolderPath: string | null = null; // Set when switching folders mid-session
 
-function openFolderSelector() {
-  if (folderDialog) return;
-  console.log("[guéridon] opening folder selector");
-  folderDialog = FolderSelector.show(
-    cachedFolders,
-    (folder) => {
-      pendingFolderConnect = true;
-      agent.reset();
-      gi.setCwd(folder.name);
-      // If already in a session, must return to lobby first — bridge rejects
-      // connectFolder on active sessions. Defer the connect until lobby mode.
-      if (transport.state === "connected") {
-        deferredFolderPath = folder.path;
-        transport.returnToLobby();
-      } else {
-        transport.connectFolder(folder.path);
+function dispatch(event: FolderEvent) {
+  const result = transition(lifecycle, event);
+  lifecycle = result.state;
+  for (const effect of result.effects) {
+    executeEffect(effect);
+  }
+}
+
+function executeEffect(effect: FolderEffect) {
+  switch (effect.type) {
+    case "open_dialog":
+      if (!folderDialog) {
+        folderDialog = FolderSelector.show(
+          effect.folders,
+          (folder) => {
+            dispatch({
+              type: "folder_selected",
+              path: folder.path,
+              name: folder.name,
+              inSession: transport.state === "connected",
+            });
+          },
+          () => {
+            folderDialog = null;
+            dispatch({ type: "dialog_cancelled" });
+          },
+        );
       }
-    },
-    () => {
+      break;
+    case "update_dialog":
+      folderDialog?.updateFolders(effect.folders);
+      break;
+    case "close_dialog": {
+      // Null ref before close — close() triggers onCloseCallback which
+      // dispatches dialog_cancelled. With ref nulled, that's a harmless
+      // no-op (idle + dialog_cancelled → no effects).
+      const d = folderDialog;
       folderDialog = null;
-      pendingFolderConnect = false;
-      deferredFolderPath = null;
-    },
-  );
+      d?.close();
+      break;
+    }
+    case "list_folders":
+      transport.listFolders();
+      break;
+    case "connect_folder":
+      transport.connectFolder(effect.path);
+      break;
+    case "return_to_lobby":
+      transport.returnToLobby();
+      break;
+    case "reset_agent":
+      agent.reset();
+      break;
+    case "set_cwd":
+      gi.setCwd(effect.name);
+      break;
+    case "focus_input":
+      gi.focusInput();
+      break;
+  }
 }
 
 // --- Transport ---
@@ -79,37 +113,10 @@ function openFolderSelector() {
 const transport = new WSTransport({
   url: BRIDGE_URL,
   onStateChange: updateStatus,
-  onSessionId: (id) => {
-    console.log(`[guéridon] session: ${id} (folderDialog=${!!folderDialog}, pending=${pendingFolderConnect})`);
-    if (folderDialog && pendingFolderConnect) {
-      console.log("[guéridon] closing folder dialog due to session connect");
-      folderDialog.close();
-    } else if (folderDialog) {
-      console.warn("[guéridon] onSessionId fired with dialog open but no pending connect — NOT closing (was the flash bug)");
-    }
-    pendingFolderConnect = false;
-    gi.focusInput();
-  },
+  onSessionId: (id) => dispatch({ type: "session_started", sessionId: id }),
   onBridgeError: (err) => console.error(`[guéridon] bridge error: ${err}`),
-  onLobbyConnected: () => {
-    // If we returned to lobby to switch folders, connect immediately
-    if (deferredFolderPath) {
-      const path = deferredFolderPath;
-      deferredFolderPath = null;
-      transport.connectFolder(path);
-      return;
-    }
-    transport.listFolders();
-  },
-  onFolderList: (folders) => {
-    console.log(`[guéridon] folderList: ${folders.length} folders, state=${transport.state}, dialog=${!!folderDialog}`);
-    cachedFolders = folders;
-    if (folderDialog) {
-      folderDialog.updateFolders(folders);
-    } else if (transport.state === "lobby") {
-      openFolderSelector();
-    }
-  },
+  onLobbyConnected: () => dispatch({ type: "lobby_entered" }),
+  onFolderList: (folders) => dispatch({ type: "folder_list", folders }),
 });
 
 agent.connectTransport(transport);
@@ -132,10 +139,7 @@ agent.subscribe((event) => {
   if (event.type === "agent_end") gi.setContextPercent(agent.contextPercent);
 });
 
-gi.onFolderSelect = () => {
-  openFolderSelector();
-  transport.listFolders();
-};
+gi.onFolderSelect = () => dispatch({ type: "open_requested" });
 
 // --- Connect and render ---
 
