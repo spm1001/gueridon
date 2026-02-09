@@ -10,30 +10,35 @@ globalThis.ResizeObserver = class {
   disconnect() {}
 } as any;
 
-// Mock pi-web-ui rendering components with lightweight stubs.
-// GueridonInterface passes Lit .property bindings to these — we just need
-// them registered as custom elements so they appear in the DOM.
-//
-// Mock pi-web-ui rendering components with lightweight stubs.
+// Mock vendored + local rendering components with lightweight stubs.
 // GueridonInterface passes Lit .property bindings to these — we just need
 // them registered as custom elements so they appear in the DOM.
 //
 // Gotcha: jsdom doesn't upgrade custom elements created inside Lit templates
 // (innerHTML → importNode path bypasses constructors and connectedCallback).
 // Stub methods are patched onto elements in createElement() instead.
-vi.mock("@mariozechner/pi-web-ui", () => {
-  class MessageList extends HTMLElement {}
-  class StreamingMessageContainer extends HTMLElement {}
 
+vi.mock("./vendor/MessageList.js", () => {
+  class MessageList extends HTMLElement {}
   if (!customElements.get("message-list")) {
     customElements.define("message-list", MessageList);
   }
+  return { MessageList };
+});
+
+vi.mock("./vendor/StreamingMessageContainer.js", () => {
+  class StreamingMessageContainer extends HTMLElement {}
   if (!customElements.get("streaming-message-container")) {
     customElements.define("streaming-message-container", StreamingMessageContainer);
   }
-
-  return { MessageList, StreamingMessageContainer };
+  return { StreamingMessageContainer };
 });
+
+vi.mock("./vendor/ThinkingBlock.js", () => ({}));
+vi.mock("./vendor/ConsoleBlock.js", () => ({}));
+vi.mock("./message-components.js", () => ({}));
+vi.mock("@mariozechner/mini-lit/dist/MarkdownBlock.js", () => ({}));
+vi.mock("@mariozechner/mini-lit/dist/CodeBlock.js", () => ({}));
 
 import { GueridonInterface } from "./gueridon-interface.js";
 import { ClaudeCodeAgent } from "./claude-code-agent.js";

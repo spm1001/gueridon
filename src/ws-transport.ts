@@ -129,8 +129,19 @@ export class WSTransport implements CCTransport {
   /** Disconnect from current session and reconnect in lobby mode */
   returnToLobby(): void {
     this.sessionId = null;
-    this.close();
-    this.connect(); // Reconnects without ?session= → lobby mode
+    this.clearTimers();
+    // Close old WS — detach handlers first to prevent onclose race
+    // (onclose would set this.ws = null and trigger scheduleReconnect,
+    // clobbering the new WS we're about to create)
+    const oldWs = this.ws;
+    this.ws = null;
+    if (oldWs) {
+      oldWs.onclose = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.close(1000, "Returning to lobby");
+    }
+    this.doConnect(); // Reconnects without ?session= → lobby mode
   }
 
   // --- Internal ---

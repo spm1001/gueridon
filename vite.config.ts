@@ -38,19 +38,12 @@ function litClassFieldFix(): Plugin {
   };
 }
 
-// Consume pi-web-ui from local fork source (~/Repos/pi-mono) instead of npm.
-// Benefits: no build step, no stale dist/, HMR on component edits, and esbuild
-// compiles with [[Set]] semantics (es2020 target) so Lit reactivity just works.
-const PI_WEB_UI_SRC = "/Users/modha/Repos/pi-mono/packages/web-ui/src";
-
 export default defineConfig({
   plugins: [litClassFieldFix(), tailwindcss()],
   resolve: {
     alias: {
-      "@mariozechner/pi-web-ui": PI_WEB_UI_SRC,
-      // Deduplicate Lit: web-ui source resolves lit from pi-mono's node_modules,
-      // guéridon has its own copy. Two Lit runtimes = broken instanceof checks.
-      // Force everything through guéridon's copy.
+      // Deduplicate Lit: vendored files import lit, which must resolve to
+      // guéridon's copy. Two Lit runtimes = broken instanceof checks.
       "lit": resolve("node_modules/lit"),
       "lit/": resolve("node_modules/lit") + "/",
       "@lit/reactive-element": resolve("node_modules/@lit/reactive-element"),
@@ -62,19 +55,8 @@ export default defineConfig({
     target: "es2020",
   },
   optimizeDeps: {
-    // Don't pre-bundle the aliased source — Vite transforms it directly.
-    exclude: ["@mariozechner/pi-web-ui"],
     esbuildOptions: {
       target: "es2020",
-    },
-  },
-  build: {
-    rollupOptions: {
-      // pi-ai bundles @aws-sdk/client-bedrock-runtime which pulls in Node.js-only
-      // @smithy packages (stream, http, net). We don't use Bedrock — CC handles
-      // the LLM call server-side. Externalizing prevents Rollup from failing on
-      // Node.js imports that can't resolve in a browser bundle.
-      external: [/^@smithy\//, /^@aws-sdk\//],
     },
   },
 });

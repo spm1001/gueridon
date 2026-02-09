@@ -46,6 +46,7 @@ function updateStatus(state: ConnectionState) {
 let folderDialog: FolderSelector | null = null;
 let cachedFolders: FolderInfo[] = [];
 let pendingFolderConnect = false; // True after user selects folder, cleared on session connect
+let deferredFolderPath: string | null = null; // Set when switching folders mid-session
 
 function openFolderSelector() {
   if (folderDialog) return;
@@ -55,11 +56,19 @@ function openFolderSelector() {
     (folder) => {
       pendingFolderConnect = true;
       gi.setCwd(folder.name);
-      transport.connectFolder(folder.path);
+      // If already in a session, must return to lobby first — bridge rejects
+      // connectFolder on active sessions. Defer the connect until lobby mode.
+      if (transport.state === "connected") {
+        deferredFolderPath = folder.path;
+        transport.returnToLobby();
+      } else {
+        transport.connectFolder(folder.path);
+      }
     },
     () => {
       folderDialog = null;
       pendingFolderConnect = false;
+      deferredFolderPath = null;
     },
   );
 }
@@ -82,6 +91,13 @@ const transport = new WSTransport({
   },
   onBridgeError: (err) => console.error(`[guéridon] bridge error: ${err}`),
   onLobbyConnected: () => {
+    // If we returned to lobby to switch folders, connect immediately
+    if (deferredFolderPath) {
+      const path = deferredFolderPath;
+      deferredFolderPath = null;
+      transport.connectFolder(path);
+      return;
+    }
     transport.listFolders();
   },
   onFolderList: (folders) => {

@@ -59,42 +59,40 @@ npm run test:watch  # Watch mode for development
 
 ## Dependencies
 
-- **pi-web-ui:** Consumed from local fork source (NOT npm). See below.
-- **pi-agent-core, pi-ai, mini-lit:** From npm (`@mariozechner/*`)
-- **Bundler:** Vite with `@tailwindcss/vite`
-- **Reference project:** `~/Repos/persistent-assistant` (David's Telegram bot, spawn-per-message approach)
+**pi-web-ui is NOT a dependency.** We vendored the 4 container/display components we need into `src/vendor/` and wrote our own message leaf renderers in `src/message-components.ts`. See `src/vendor/README.md` for provenance.
 
-## pi-mono Fork (Critical)
+| Package | Role | Import type |
+|---------|------|-------------|
+| `@mariozechner/mini-lit` | Design system: MarkdownBlock, CodeBlock, CopyButton, DialogBase, `icon()`, CSS theme | npm (value + types) |
+| `@mariozechner/pi-agent-core` | AgentEvent, AgentMessage, AgentState, AgentTool | npm (types only) |
+| `@mariozechner/pi-ai` | Model, Usage | npm (types only — no `getModel` value import) |
+| `lit`, `lucide` | Lit framework, icon library | npm |
 
-**guéridon consumes pi-web-ui TypeScript source directly from `~/Repos/pi-mono`.**
+**Bundler:** Vite with `@tailwindcss/vite`
 
-- Fork: `~/Repos/pi-mono`, branch `gueridon` (all our patches)
-- Remote `origin` = spm1001/pi-mono, `upstream` = badlogic/pi-mono
-- `main` tracks upstream clean. Rebase `gueridon` on `main` when upstream updates.
+### What's vendored (src/vendor/)
 
-### How it works
+One-time copy from `pi-mono` commit `41c4157b` (2026-02-09):
+- `MessageList.ts` — renders message sequence
+- `StreamingMessageContainer.ts` — in-flight message with batched updates
+- `ThinkingBlock.ts` — thinking collapse/expand
+- `ConsoleBlock.ts` — bash output display
+- `message-renderer-registry.ts` — extensibility hook
+- `i18n.ts` — trimmed i18n wrapper (10 keys, not 200+)
 
-`vite.config.ts` aliases `@mariozechner/pi-web-ui` → `~/Repos/pi-mono/packages/web-ui/src`. Vite compiles the TypeScript directly with `esbuild.target: "es2020"`, which uses `[[Set]]` semantics for class fields — this fixes Lit reactivity at source (no more tsgo class field bug).
+### What we own (src/message-components.ts)
 
-**No build step.** Edit web-ui source → Vite HMR picks it up.
+Our own `<user-message>`, `<assistant-message>`, `<tool-message>`. Replaces
+pi-web-ui's Messages.ts + renderTool chain. No pdfjs-dist, xlsx, jszip, or
+@aws-sdk transitive deps.
 
-Lit is deduplicated across pi-mono and guéridon to prevent duplicate runtime issues.
-
-### Our patches
-
-The `gueridon` branch carries patches on top of upstream:
-- `customStats` property on AgentInterface (fuel gauge hook)
-- Per-message token stats removed (we use the fuel gauge instead)
-- Double render fix (clear streaming container on `message_end`)
-- Streaming line-buffer, tool call buffering, padding fix, /exit alias
-
-### If pi-web-ui components render blank
+### If components render blank
 
 Debug in this order:
 1. `element.hasUpdated` — false means Lit never completed first render
 2. Check `esbuild.target` in vite.config.ts — must be `"es2020"` for [[Set]] semantics
-3. Check Vite alias is resolving to source, not stale npm package
-4. `litClassFieldFix()` plugin is belt-and-suspenders (probably dead code now)
+3. `litClassFieldFix()` plugin — still needed for Lit decorators in our code + vendored files
+4. Lit dedup aliases — vendored files import `lit`, must resolve to our single copy
 
 ## Bridge Server
 

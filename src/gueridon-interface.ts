@@ -17,18 +17,24 @@ import type {
   AgentTool,
 } from "@mariozechner/pi-agent-core";
 
-// These imports register custom elements via @customElement decorators.
-// MessageList/StreamingMessageContainer are used directly in our template.
-// The message components (UserMessage, AssistantMessage, etc.) must be imported
-// for their side effects — MessageList renders <user-message>, <assistant-message>
-// tags that are empty shells until these classes register the elements.
-import {
-  MessageList,
-  StreamingMessageContainer,
-  UserMessage,
-  AssistantMessage,
-  ToolMessage,
-} from "@mariozechner/pi-web-ui";
+// --- Custom element registration (side-effect imports) ---
+// No barrel, no alias, no fork. See src/vendor/README.md for provenance.
+
+// Our message components (replaces pi-web-ui's Messages.ts + renderTool chain)
+import "./message-components.js";
+
+// Vendored container components (from pi-web-ui, one-time copy)
+import "./vendor/MessageList.js";
+import "./vendor/StreamingMessageContainer.js";
+import "./vendor/ThinkingBlock.js";
+import "./vendor/ConsoleBlock.js";
+
+// Leaf elements from mini-lit (npm dist, self-registering)
+import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
+import "@mariozechner/mini-lit/dist/CodeBlock.js";
+
+// Type-only (for @query decorator)
+import type { StreamingMessageContainer } from "./vendor/StreamingMessageContainer.js";
 import type { ClaudeCodeAgent } from "./claude-code-agent.js";
 
 @customElement("gueridon-interface")
@@ -234,6 +240,7 @@ export class GueridonInterface extends LitElement {
     this._tools = s.tools;
     this._pendingToolCalls = s.pendingToolCalls;
     this._isStreaming = s.isStreaming;
+
   }
 
   /** Build toolResultsById map for StreamingMessageContainer */

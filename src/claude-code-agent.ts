@@ -15,7 +15,7 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
-import { getModel, type Model, type Usage } from "@mariozechner/pi-ai";
+import type { Model, Usage } from "@mariozechner/pi-ai";
 
 // --- Transport interface (WebSocket later) ---
 
@@ -97,7 +97,7 @@ export class ClaudeCodeAgent {
   constructor() {
     this._state = {
       systemPrompt: "",
-      model: getModel("anthropic", "claude-opus-4-6"),
+      model: { api: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" } as Model<any>,
       thinkingLevel: "off" as ThinkingLevel,
       tools: [],
       messages: [],

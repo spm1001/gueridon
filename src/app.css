@@ -7,7 +7,7 @@
    Without these, classes used inside pi-web-ui and mini-lit templates
    won't be generated — layout breaks especially at mobile widths. */
 @source "../node_modules/@mariozechner/mini-lit/dist";
-@source "/Users/modha/Repos/pi-mono/packages/web-ui/src";
+@source "./vendor";
 
 /* Custom styles from pi-web-ui's app.css that aren't Tailwind utilities.
    We import the theme and @source separately, but these are plain CSS
@@ -78,7 +78,3 @@ body {
   }
 }
 
-/* Hide pi-web-ui's per-message token stats (↑N ↓N RNk WNk) */
-assistant-message > .px-4.mt-2.text-xs.text-muted-foreground {
-  display: none !important;
-}
