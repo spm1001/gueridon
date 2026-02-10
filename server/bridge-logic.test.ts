@@ -8,7 +8,16 @@ import {
   getActiveProcesses,
   parseSessionJSONL,
   CC_FLAGS,
+  checkIdle,
+  createActiveTurnGuard,
+  DEFAULT_IDLE_GUARDS,
+  IDLE_TIMEOUT_MS,
+  MAX_IDLE_MS,
+  STALE_OUTPUT_MS,
+  IDLE_RECHECK_MS,
   type SessionProcessInfo,
+  type IdleGuard,
+  type IdleSessionState,
 } from "./bridge-logic.js";
 
 // --- resolveSessionForFolder ---
@@ -627,5 +636,309 @@ describe("parseSessionJSONL with real JSONL fixture", () => {
     for (const r of result) {
       expect(parse(r).source).toBe("cc");
     }
+  });
+});
+
+// --- checkIdle ---
+// The idle guard system replaces the old single-timer idle logic.
+// Pure function: takes state, returns action. Caller handles side effects.
+
+describe("checkIdle", () => {
+  const T0 = 1_000_000; // arbitrary "now" for deterministic tests
+  const idle: IdleSessionState = { turnInProgress: false, lastOutputTime: null };
+  const noGuards: IdleGuard[] = [];
+
+  describe("no guards (baseline — original behavior)", () => {
+    it("kills after idle timeout with no guards", () => {
+      const result = checkIdle(T0, false, noGuards, idle, T0 + IDLE_TIMEOUT_MS + 1);
+      // No guards to defer, guardWasDeferred is false → kill
+      expect(result.action).toBe("kill");
+      expect(result.reason).toBe("idle timeout");
+    });
+
+    it("kills even if called early with no guards", () => {
+      // checkIdle is called by the timer, so it should kill if no guard objects
+      const result = checkIdle(T0, false, noGuards, idle, T0 + 1);
+      expect(result.action).toBe("kill");
+    });
+  });
+
+  describe("safety cap", () => {
+    it("kills when safety cap exceeded regardless of guards", () => {
+      const keepAliveGuard: IdleGuard = {
+        name: "always-keep",
+        shouldKeepAlive: () => ({ keep: true, reason: "testing" }),
+      };
+      const result = checkIdle(
+        T0,
+        false,
+        [keepAliveGuard],
+        idle,
+        T0 + MAX_IDLE_MS + 1,
+      );
+      expect(result.action).toBe("kill");
+      expect(result.reason).toBe("safety cap exceeded");
+    });
+
+    it("does not kill at exactly MAX_IDLE_MS", () => {
+      const keepAliveGuard: IdleGuard = {
+        name: "always-keep",
+        shouldKeepAlive: () => ({ keep: true, reason: "testing" }),
+      };
+      const result = checkIdle(
+        T0,
+        false,
+        [keepAliveGuard],
+        idle,
+        T0 + MAX_IDLE_MS, // exactly at boundary, not exceeded
+      );
+      expect(result.action).toBe("recheck");
+    });
+  });
+
+  describe("guard deferral", () => {
+    it("rechecks when a guard keeps alive", () => {
+      const guard: IdleGuard = {
+        name: "test-guard",
+        shouldKeepAlive: () => ({
+          keep: true,
+          reason: "working hard",
+          recheckMs: 15_000,
+        }),
+      };
+      const result = checkIdle(T0, false, [guard], idle, T0 + IDLE_TIMEOUT_MS);
+      expect(result).toEqual({
+        action: "recheck",
+        delayMs: 15_000,
+        guardDeferred: true,
+        reason: "kept alive by test-guard: working hard",
+      });
+    });
+
+    it("uses default recheck interval when guard omits recheckMs", () => {
+      const guard: IdleGuard = {
+        name: "minimal",
+        shouldKeepAlive: () => ({ keep: true, reason: "yes" }),
+      };
+      const result = checkIdle(T0, false, [guard], idle, T0 + IDLE_TIMEOUT_MS);
+      expect(result.action).toBe("recheck");
+      if (result.action === "recheck") {
+        expect(result.delayMs).toBe(IDLE_RECHECK_MS);
+      }
+    });
+
+    it("first guard wins — stops checking after first deferral", () => {
+      let secondCalled = false;
+      const guards: IdleGuard[] = [
+        {
+          name: "first",
+          shouldKeepAlive: () => ({ keep: true, reason: "first wins" }),
+        },
+        {
+          name: "second",
+          shouldKeepAlive: () => {
+            secondCalled = true;
+            return { keep: true, reason: "should not reach" };
+          },
+        },
+      ];
+      const result = checkIdle(T0, false, guards, idle, T0 + IDLE_TIMEOUT_MS);
+      expect(result.action).toBe("recheck");
+      if (result.action === "recheck") {
+        expect(result.reason).toContain("first");
+      }
+      expect(secondCalled).toBe(false);
+    });
+
+    it("falls through to next guard when first declines", () => {
+      const guards: IdleGuard[] = [
+        {
+          name: "declines",
+          shouldKeepAlive: () => ({ keep: false }),
+        },
+        {
+          name: "keeps",
+          shouldKeepAlive: () => ({ keep: true, reason: "I'm here" }),
+        },
+      ];
+      const result = checkIdle(T0, false, guards, idle, T0 + IDLE_TIMEOUT_MS);
+      expect(result.action).toBe("recheck");
+      if (result.action === "recheck") {
+        expect(result.reason).toContain("keeps");
+      }
+    });
+  });
+
+  describe("grace period", () => {
+    it("grants grace period when guard stops deferring", () => {
+      // guardWasDeferred=true means a guard was keeping alive last check.
+      // Now no guard keeps alive → CC just finished working → grace period.
+      const result = checkIdle(T0, true, noGuards, idle, T0 + IDLE_TIMEOUT_MS);
+      expect(result).toEqual({
+        action: "recheck",
+        delayMs: IDLE_TIMEOUT_MS,
+        guardDeferred: false,
+        reason: "grace period — CC finished working, restarting idle countdown",
+      });
+    });
+
+    it("kills after grace period elapses", () => {
+      // Second call: guardWasDeferred is now false (set by previous call),
+      // no guards keep alive → kill.
+      const result = checkIdle(T0, false, noGuards, idle, T0 + 2 * IDLE_TIMEOUT_MS);
+      expect(result.action).toBe("kill");
+      expect(result.reason).toBe("idle timeout");
+    });
+
+    it("guard re-activating during grace period defers again", () => {
+      // Grace period started (guardWasDeferred=false from previous recheck).
+      // But CC started a new turn — guard defers again.
+      const midTurn: IdleSessionState = {
+        turnInProgress: true,
+        lastOutputTime: T0 + IDLE_TIMEOUT_MS + 1000,
+      };
+      const result = checkIdle(
+        T0,
+        false,
+        DEFAULT_IDLE_GUARDS,
+        midTurn,
+        T0 + IDLE_TIMEOUT_MS + 2000,
+      );
+      expect(result.action).toBe("recheck");
+      if (result.action === "recheck") {
+        expect(result.guardDeferred).toBe(true);
+      }
+    });
+  });
+});
+
+// --- ActiveTurnGuard ---
+
+describe("createActiveTurnGuard", () => {
+  const T0 = 1_000_000;
+  const guard = createActiveTurnGuard();
+
+  it("does not keep alive when no turn in progress", () => {
+    const result = guard.shouldKeepAlive(
+      { turnInProgress: false, lastOutputTime: T0 },
+      T0,
+    );
+    expect(result.keep).toBe(false);
+  });
+
+  it("keeps alive when mid-turn with recent output", () => {
+    const result = guard.shouldKeepAlive(
+      { turnInProgress: true, lastOutputTime: T0 - 1000 },
+      T0,
+    );
+    expect(result.keep).toBe(true);
+    expect(result.reason).toBe("CC is mid-turn");
+  });
+
+  it("keeps alive when mid-turn with no output yet", () => {
+    // lastOutputTime is null — CC just started, hasn't produced output.
+    // This is expected during the initial API call (~8s cold start).
+    const result = guard.shouldKeepAlive(
+      { turnInProgress: true, lastOutputTime: null },
+      T0,
+    );
+    expect(result.keep).toBe(true);
+  });
+
+  it("declines when mid-turn but output is stale", () => {
+    const result = guard.shouldKeepAlive(
+      { turnInProgress: true, lastOutputTime: T0 - STALE_OUTPUT_MS - 1 },
+      T0,
+    );
+    expect(result.keep).toBe(false);
+    expect(result.reason).toContain("stale");
+  });
+
+  it("keeps alive at exactly stale threshold (not exceeded)", () => {
+    const result = guard.shouldKeepAlive(
+      { turnInProgress: true, lastOutputTime: T0 - STALE_OUTPUT_MS },
+      T0,
+    );
+    expect(result.keep).toBe(true);
+  });
+
+  it("accepts custom stale threshold", () => {
+    const shortGuard = createActiveTurnGuard(5000); // 5 seconds
+    const result = shortGuard.shouldKeepAlive(
+      { turnInProgress: true, lastOutputTime: T0 - 6000 },
+      T0,
+    );
+    expect(result.keep).toBe(false);
+  });
+
+  it("uses IDLE_RECHECK_MS as recheck interval", () => {
+    const result = guard.shouldKeepAlive(
+      { turnInProgress: true, lastOutputTime: T0 },
+      T0,
+    );
+    expect(result.recheckMs).toBe(IDLE_RECHECK_MS);
+  });
+});
+
+// --- DEFAULT_IDLE_GUARDS ---
+
+describe("DEFAULT_IDLE_GUARDS", () => {
+  it("contains exactly one guard (active-turn)", () => {
+    expect(DEFAULT_IDLE_GUARDS).toHaveLength(1);
+    expect(DEFAULT_IDLE_GUARDS[0].name).toBe("active-turn");
+  });
+});
+
+// --- Full scenario: client disconnects while CC is working ---
+
+describe("idle guard scenario: CC working while client away", () => {
+  const T0 = 1_000_000;
+
+  it("keeps alive → CC finishes → grace period → kill", () => {
+    // 1. Client disconnects, CC is mid-turn. First check at T0 + 5min.
+    const r1 = checkIdle(
+      T0,
+      false,
+      DEFAULT_IDLE_GUARDS,
+      { turnInProgress: true, lastOutputTime: T0 + IDLE_TIMEOUT_MS - 1000 },
+      T0 + IDLE_TIMEOUT_MS,
+    );
+    expect(r1.action).toBe("recheck");
+    expect(r1).toHaveProperty("guardDeferred", true);
+
+    // 2. CC finishes work (turnInProgress = false). Recheck at +5min30s.
+    const r2 = checkIdle(
+      T0,
+      true, // guardWasDeferred from r1
+      DEFAULT_IDLE_GUARDS,
+      { turnInProgress: false, lastOutputTime: T0 + IDLE_TIMEOUT_MS + 10_000 },
+      T0 + IDLE_TIMEOUT_MS + IDLE_RECHECK_MS,
+    );
+    expect(r2.action).toBe("recheck");
+    expect(r2).toHaveProperty("guardDeferred", false); // grace period
+    expect(r2).toHaveProperty("delayMs", IDLE_TIMEOUT_MS); // full countdown
+
+    // 3. Grace period elapses. Recheck at +10min30s.
+    const r3 = checkIdle(
+      T0,
+      false, // guardWasDeferred from r2
+      DEFAULT_IDLE_GUARDS,
+      { turnInProgress: false, lastOutputTime: T0 + IDLE_TIMEOUT_MS + 10_000 },
+      T0 + 2 * IDLE_TIMEOUT_MS + IDLE_RECHECK_MS,
+    );
+    expect(r3.action).toBe("kill");
+    expect(r3.reason).toBe("idle timeout");
+  });
+
+  it("safety cap overrides active guard after 30 minutes", () => {
+    const result = checkIdle(
+      T0,
+      true,
+      DEFAULT_IDLE_GUARDS,
+      { turnInProgress: true, lastOutputTime: T0 + MAX_IDLE_MS },
+      T0 + MAX_IDLE_MS + 1,
+    );
+    expect(result.action).toBe("kill");
+    expect(result.reason).toBe("safety cap exceeded");
   });
 });
