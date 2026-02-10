@@ -376,20 +376,12 @@ describe("getActiveProcesses", () => {
     expect(getActiveProcesses(sessions).size).toBe(0);
   });
 
-  it("excludes session without folder (legacy ?session= path)", () => {
-    const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: null, process: { exitCode: null } }],
-    ]);
-    expect(getActiveProcesses(sessions).size).toBe(0);
-  });
-
   it("handles mixed sessions correctly", () => {
     const sessions = new Map<string, SessionProcessInfo>([
       ["active-1", { folder: "/repos/a", process: { exitCode: null } }],
       ["exited-2", { folder: "/repos/b", process: { exitCode: 1 } }],
       ["unspawned-3", { folder: "/repos/c", process: null }],
       ["active-4", { folder: "/repos/d", process: { exitCode: null } }],
-      ["legacy-5", { folder: null, process: { exitCode: null } }],
     ]);
     const active = getActiveProcesses(sessions);
     expect(active.size).toBe(2);

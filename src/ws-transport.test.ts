@@ -282,14 +282,41 @@ describe("URL construction", () => {
     expect(wsInstances[0].url).toBe("ws://localhost:3001");
   });
 
-  it("appends session query param when sessionId is set", () => {
+  it("always connects with plain URL (no ?session= param)", () => {
     const transport = new WSTransport({
       url: "ws://localhost:3001",
-      sessionId: "my-session",
     });
     transport.connect();
 
-    expect(wsInstances[0].url).toBe("ws://localhost:3001?session=my-session");
+    expect(wsInstances[0].url).toBe("ws://localhost:3001");
+  });
+
+  it("re-sends connectFolder on reconnect when folder is set", () => {
+    const transport = new WSTransport({ url: "ws://localhost:3001" });
+    transport.connect();
+    const ws1 = wsInstances[0];
+    ws1.simulateOpen();
+    ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // User picks a folder
+    transport.connectFolder("/repos/my-project");
+    ws1.simulateMessage({
+      source: "bridge",
+      type: "connected",
+      sessionId: "session-123",
+    });
+
+    // WS drops and reconnects
+    ws1.simulateClose();
+    vi.advanceTimersByTime(1000);
+    const ws2 = wsInstances[wsInstances.length - 1];
+    expect(ws2.url).toBe("ws://localhost:3001"); // plain URL
+    ws2.simulateOpen();
+    ws2.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Should auto-send connectFolder for the stored folder
+    const sent = ws2.sent.map((s: string) => JSON.parse(s));
+    expect(sent).toContainEqual({ type: "connectFolder", path: "/repos/my-project" });
   });
 });
 
@@ -444,21 +471,36 @@ describe("processExit", () => {
 // --- returnToLobby ---
 
 describe("returnToLobby", () => {
-  it("disconnects and reconnects without session param", () => {
+  it("clears folder and reconnects in lobby mode", () => {
+    const callbacks = { onLobbyConnected: vi.fn() };
     const transport = new WSTransport({
       url: "ws://localhost:3001",
-      sessionId: "old-session",
+      ...callbacks,
     });
     transport.connect();
     const ws1 = wsInstances[0];
-    expect(ws1.url).toContain("?session=old-session");
     ws1.simulateOpen();
+    ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+    transport.connectFolder("/repos/old-project");
+    ws1.simulateMessage({
+      source: "bridge",
+      type: "connected",
+      sessionId: "old-session",
+    });
 
     transport.returnToLobby();
 
-    // Should create a new WS without session param
+    // Should create a new WS with plain URL
     const ws2 = wsInstances[wsInstances.length - 1];
     expect(ws2.url).toBe("ws://localhost:3001");
+    ws2.simulateOpen();
+    ws2.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Should NOT auto-send connectFolder (folderPath was cleared)
+    const sent = ws2.sent.map((s: string) => JSON.parse(s));
+    expect(sent.filter((m: any) => m.type === "connectFolder")).toHaveLength(0);
+    // Should fire onLobbyConnected (user sees folder picker)
+    expect(callbacks.onLobbyConnected).toHaveBeenCalled();
   });
 });
 

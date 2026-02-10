@@ -8,8 +8,27 @@
 import WebSocket from "ws";
 
 const BRIDGE_URL = "ws://localhost:3001";
+const TEST_FOLDER = `${process.env.HOME}/Repos/gueridon`;
 
 let sessionId: string | null = null;
+
+/** Helper: connect to bridge via lobby → connectFolder. Returns ws + sessionId. */
+function connectViaLobby(
+  ws: WebSocket,
+  folderPath: string,
+  onConnected: (sessionId: string) => void,
+): void {
+  ws.on("message", function lobbyHandler(data) {
+    const msg = JSON.parse(data.toString());
+    if (msg.type === "lobbyConnected") {
+      ws.send(JSON.stringify({ type: "connectFolder", path: folderPath }));
+    }
+    if (msg.type === "connected") {
+      ws.removeListener("message", lobbyHandler);
+      onConnected(msg.sessionId);
+    }
+  });
+}
 
 // --- Test 1: Basic prompt/response with lazy spawn ---
 
@@ -24,22 +43,22 @@ async function testBasicFlow(): Promise<void> {
 
     ws.on("open", () => console.log("[t1] connected"));
 
+    connectViaLobby(ws, TEST_FOLDER, (sid) => {
+      sessionId = sid;
+      console.log(`[t1] session=${sessionId} resumed=...`);
+      console.log('[t1] sending prompt: "Say exactly: hello gueridon"');
+      ws.send(
+        JSON.stringify({
+          type: "prompt",
+          text: "Say exactly: hello gueridon",
+        })
+      );
+    });
+
     ws.on("message", (data) => {
       const msg = JSON.parse(data.toString());
 
       if (msg.source === "bridge") {
-        if (msg.type === "connected") {
-          sessionId = msg.sessionId;
-          console.log(`[t1] session=${sessionId} resumed=${msg.resumed}`);
-          // Lazy spawn: send prompt immediately, CC spawns on demand
-          console.log('[t1] sending prompt: "Say exactly: hello gueridon"');
-          ws.send(
-            JSON.stringify({
-              type: "prompt",
-              text: "Say exactly: hello gueridon",
-            })
-          );
-        }
         if (msg.type === "promptReceived") {
           gotPromptReceived = true;
           console.log("[t1] promptReceived ack");
@@ -80,22 +99,22 @@ async function testMultiTurn(): Promise<void> {
   console.log("\n=== Test 2: Multi-turn (second message, same process) ===");
 
   return new Promise((resolve, reject) => {
-    // Reconnect to same session — process should still be running
-    const ws = new WebSocket(`${BRIDGE_URL}?session=${sessionId}`);
+    // Reconnect to same session via lobby → connectFolder
+    const ws = new WebSocket(BRIDGE_URL);
     let turnCount = 0;
+
+    connectViaLobby(ws, TEST_FOLDER, (sid) => {
+      console.log(`[t2] reconnected session=${sid.slice(0, 8)}`);
+      ws.send(
+        JSON.stringify({
+          type: "prompt",
+          text: "Say exactly: turn two",
+        })
+      );
+    });
 
     ws.on("message", (data) => {
       const msg = JSON.parse(data.toString());
-
-      if (msg.source === "bridge" && msg.type === "connected") {
-        console.log(`[t2] reconnected, resumed=${msg.resumed}`);
-        ws.send(
-          JSON.stringify({
-            type: "prompt",
-            text: "Say exactly: turn two",
-          })
-        );
-      }
 
       if (msg.source === "cc" && msg.event?.type === "result") {
         turnCount++;
@@ -123,34 +142,31 @@ async function testReconnect(): Promise<void> {
   );
 
   return new Promise((resolve, reject) => {
-    // Connect, then immediately disconnect, then reconnect and send prompt
-    const ws1 = new WebSocket(`${BRIDGE_URL}?session=${sessionId}`);
+    // Connect via lobby, then immediately disconnect, then reconnect via lobby
+    const ws1 = new WebSocket(BRIDGE_URL);
 
-    ws1.on("message", (data) => {
-      const msg = JSON.parse(data.toString());
-      if (msg.source === "bridge" && msg.type === "connected") {
-        console.log("[t3] connected, disconnecting immediately...");
-        ws1.close();
-      }
+    connectViaLobby(ws1, TEST_FOLDER, (_sid) => {
+      console.log("[t3] connected, disconnecting immediately...");
+      ws1.close();
     });
 
     ws1.on("close", () => {
       // Brief pause then reconnect
       setTimeout(() => {
-        const ws2 = new WebSocket(`${BRIDGE_URL}?session=${sessionId}`);
+        const ws2 = new WebSocket(BRIDGE_URL);
+
+        connectViaLobby(ws2, TEST_FOLDER, (sid) => {
+          console.log(`[t3] reconnected session=${sid.slice(0, 8)}`);
+          ws2.send(
+            JSON.stringify({
+              type: "prompt",
+              text: "Say exactly: reconnected",
+            })
+          );
+        });
 
         ws2.on("message", (data) => {
           const msg = JSON.parse(data.toString());
-
-          if (msg.source === "bridge" && msg.type === "connected") {
-            console.log(`[t3] reconnected, resumed=${msg.resumed}`);
-            ws2.send(
-              JSON.stringify({
-                type: "prompt",
-                text: "Say exactly: reconnected",
-              })
-            );
-          }
 
           if (msg.source === "cc" && msg.event?.type === "result") {
             const text =

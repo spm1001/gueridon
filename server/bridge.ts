@@ -108,7 +108,7 @@ type ServerMessage =
 
 interface Session {
   id: string;
-  folder: string | null; // Folder path (null for legacy ?session= connections)
+  folder: string; // Folder path — always set via connectFolder
   resumable: boolean; // True when CC has state for this session ID.
   // Used for both spawn strategy (--resume vs --session-id) and the `resumed`
   // field on the `connected` message to the client. These overlap today but are
@@ -153,17 +153,17 @@ function getActiveProcesses(): Map<string, string> {
 
 // --- CC process management ---
 
-function spawnCC(sessionId: string, resume: boolean, cwd?: string): ChildProcess {
+function spawnCC(sessionId: string, resume: boolean, cwd: string): ChildProcess {
   const args = buildCCArgs(sessionId, resume);
 
   const proc = spawn("claude", args, {
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env },
-    ...(cwd && { cwd }),
+    cwd,
   });
 
   console.log(
-    `[bridge] spawned CC pid=${proc.pid} session=${sessionId}${resume ? " (resume)" : ""}${cwd ? ` cwd=${cwd}` : ""}`
+    `[bridge] spawned CC pid=${proc.pid} session=${sessionId}${resume ? " (resume)" : ""} cwd=${cwd}`
   );
   return proc;
 }
@@ -370,7 +370,7 @@ function ensureProcess(session: Session, resume: boolean): boolean {
   if (session.process && session.process.exitCode === null) return true;
 
   try {
-    session.process = spawnCC(session.id, resume, session.folder ?? undefined);
+    session.process = spawnCC(session.id, resume, session.folder);
     wireProcessToSession(session);
     return true;
   } catch (err) {
@@ -675,60 +675,16 @@ async function handleLobbyMessage(
 
 // --- Connection handler ---
 
-wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
-  const url = new URL(req.url || "/", `http://localhost:${PORT}`);
-  const requestedSessionId = url.searchParams.get("session");
-
+wss.on("connection", (ws: WebSocket) => {
   // Every connection gets its own ping/pong state and a single set of handlers.
+  // All connections start in lobby mode — client sends connectFolder to join a session.
   const ping: PingPongState = { pingTimer: null, pongTimer: null };
   const conn: Connection = { ping, state: { mode: "lobby" } };
   connections.set(ws, conn);
   startPingPong(ws, ping);
 
-  if (requestedSessionId) {
-    // --- Legacy ?session= path (backwards compat) ---
-    let session: Session;
-
-    if (sessions.has(requestedSessionId)) {
-      session = sessions.get(requestedSessionId)!;
-      attachWsToSession(ws, session);
-    } else {
-      // Client provided ID implies existing CC session
-      session = {
-        id: requestedSessionId,
-        folder: null,
-        resumable: true,
-        process: null,
-        clients: new Set([ws]),
-        messageBuffer: [],
-        stderrBuffer: [],
-        spawnedAt: null,
-        turnInProgress: false,
-        lastOutputTime: null,
-        idleStart: null,
-        idleCheckTimer: null,
-        guardWasDeferred: false,
-      };
-      sessions.set(requestedSessionId, session);
-    }
-
-    conn.state = { mode: "session", session };
-
-    sendToClient(ws, {
-      source: "bridge",
-      type: "connected",
-      sessionId: session.id,
-      resumed: session.resumable,
-    });
-
-    console.log(
-      `[bridge] client connected session=${session.id} (legacy ?session= path)`
-    );
-  } else {
-    // --- Lobby mode ---
-    sendToClient(ws, { source: "bridge", type: "lobbyConnected" });
-    console.log("[bridge] client connected (lobby mode)");
-  }
+  sendToClient(ws, { source: "bridge", type: "lobbyConnected" });
+  console.log("[bridge] client connected (lobby mode)");
 
   // Single message handler — dispatches based on current mode.
   // Lobby messages are async (scanFolders, getLatestSession) so we chain them

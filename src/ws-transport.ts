@@ -28,8 +28,6 @@ export interface FolderInfo {
 export interface WSTransportOptions {
   /** Bridge WebSocket URL, e.g. "ws://localhost:3001" */
   url: string;
-  /** Session ID for reconnect. If provided, appended as ?session=<id> */
-  sessionId?: string;
   /** Timeout (ms) waiting for promptReceived ack before treating as dead. Default 10000. */
   promptTimeout?: number;
   /** Called when connection state changes */
@@ -63,7 +61,8 @@ export class WSTransport implements CCTransport {
     Pick<WSTransportOptions, "url" | "promptTimeout">
   > & WSTransportOptions;
 
-  private sessionId: string | null;
+  private sessionId: string | null = null;
+  private folderPath: string | null = null; // Current folder — used to re-send connectFolder on reconnect
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private promptTimer: ReturnType<typeof setTimeout> | null = null;
@@ -76,7 +75,6 @@ export class WSTransport implements CCTransport {
       promptTimeout: 10_000,
       ...options,
     };
-    this.sessionId = options.sessionId ?? null;
   }
 
   // --- CCTransport interface ---
@@ -131,6 +129,7 @@ export class WSTransport implements CCTransport {
 
   /** Connect to a folder — transitions from lobby to session mode */
   connectFolder(path: string): void {
+    this.folderPath = path;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "connectFolder", path }));
   }
@@ -138,6 +137,7 @@ export class WSTransport implements CCTransport {
   /** Disconnect from current session and reconnect in lobby mode */
   returnToLobby(): void {
     this.sessionId = null;
+    this.folderPath = null;
     this.clearTimers();
     // Close old WS — detach handlers first to prevent onclose race
     // (onclose would set this.ws = null and trigger scheduleReconnect,
@@ -150,7 +150,7 @@ export class WSTransport implements CCTransport {
       oldWs.onerror = null;
       oldWs.close(1000, "Returning to lobby");
     }
-    this.doConnect(); // Reconnects without ?session= → lobby mode
+    this.doConnect(); // folderPath cleared above → arrives in lobby mode
   }
 
   // --- Internal ---
@@ -158,12 +158,8 @@ export class WSTransport implements CCTransport {
   private doConnect(): void {
     if (this.closed) return;
 
-    const url = this.sessionId
-      ? `${this.options.url}?session=${this.sessionId}`
-      : this.options.url;
-
     this.setState("connecting");
-    this.ws = new WebSocket(url);
+    this.ws = new WebSocket(this.options.url);
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
@@ -198,8 +194,15 @@ export class WSTransport implements CCTransport {
     if (msg.source === "bridge") {
       switch (msg.type) {
         case "lobbyConnected":
-          this.setState("lobby");
-          this.options.onLobbyConnected?.();
+          if (this.folderPath) {
+            // Reconnecting to an existing session — re-send connectFolder
+            // immediately so the bridge finds (or recreates) the session
+            // with the correct folder path. No lobby UI flash needed.
+            this.ws!.send(JSON.stringify({ type: "connectFolder", path: this.folderPath }));
+          } else {
+            this.setState("lobby");
+            this.options.onLobbyConnected?.();
+          }
           break;
 
         case "folderList":

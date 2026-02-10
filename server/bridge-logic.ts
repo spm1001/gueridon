@@ -282,7 +282,7 @@ export function parseSessionJSONL(content: string): string[] {
 
 /** Minimal session shape needed for getActiveProcesses. */
 export interface SessionProcessInfo {
-  folder: string | null;
+  folder: string;
   process: { exitCode: number | null } | null;
 }
 
@@ -295,7 +295,7 @@ export function getActiveProcesses(
 ): Map<string, string> {
   const active = new Map<string, string>();
   for (const [id, session] of sessions) {
-    if (session.folder && session.process && session.process.exitCode === null) {
+    if (session.process && session.process.exitCode === null) {
       active.set(session.folder, id);
     }
   }
