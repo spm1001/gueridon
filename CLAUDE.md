@@ -62,16 +62,26 @@ python3 scripts/hello-cc.py
 python3 scripts/hello-cc.py "What tools do you have?"
 ```
 
-## Dev Server
+## Running
 
 ```bash
-npm run dev            # Vite on localhost:5173
-npm run build          # Production build to dist/
-npm test               # Run all tests (280 tests, ~1.5s)
-npm run test:watch     # Watch mode for development
-npm run test:mobile    # Launch mobile test harness (Chrome Debug + dev + bridge + CDP viewport)
-npm run test:mobile:stop  # Tear down test harness
+# Production (single process — bridge serves static files + WS on :3001)
+npm run start              # Build + launch bridge
+npm run bridge             # Launch bridge only (assumes dist/ exists)
+
+# Development (two processes — Vite HMR on :5173, bridge WS on :3001)
+npm run dev                # Vite dev server with HMR
+npm run bridge             # Bridge in separate terminal
+
+# Testing
+npm test                   # Run all tests (285 tests, ~1.2s)
+npm run test:watch         # Watch mode for development
+npm run test:mobile        # Launch mobile test harness (Chrome Debug + dev + bridge + CDP viewport)
+npm run test:mobile --prod # Same but using production build on :3001
+npm run test:mobile:stop   # Tear down test harness
 ```
+
+**BRIDGE_URL logic:** `import.meta.env.DEV` (Vite) selects between dev (`ws://hostname:3001`) and prod (`same-origin`). In prod, the browser's own origin is the bridge — no separate URL needed.
 
 ## Dependencies
 
@@ -112,14 +122,15 @@ Debug in this order:
 
 ## Bridge Server
 
-`server/bridge.ts` — WebSocket-to-stdio proxy. Full protocol in `docs/bridge-protocol.md`.
+`server/bridge.ts` — HTTP + WebSocket server. Serves static files from `dist/` and proxies WebSocket connections to CC processes. Full protocol in `docs/bridge-protocol.md`.
 
 ```bash
-npm run bridge              # Start on :3001
 npx tsx scripts/test-bridge.ts  # Integration tests (needs bridge running)
 ```
 
 Key design decisions:
+- **Single process:** HTTP static serving + WS on one port (:3001). Deployable as-is.
+- **Static files from `dist/`:** SPA fallback (extensionless paths → `index.html`), path traversal guard, MIME types, cache headers for Vite hashed assets.
 - **Lazy spawn:** CC process starts on first prompt, not on WS connect. No wasted processes.
 - **`source` discriminator:** All server messages carry `source: "bridge"` or `source: "cc"` — structural, not string-convention.
 - **`promptReceived` ack:** Confirms prompt hit CC stdin. Hook point for "sending → waiting" UI transition.
