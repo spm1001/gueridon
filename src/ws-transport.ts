@@ -221,6 +221,13 @@ export class WSTransport implements CCTransport {
 
         case "error":
           this.options.onBridgeError?.(msg.error);
+          // If we're still in "connecting" state (auto-connectFolder failed),
+          // fall back to lobby so the user can pick a different folder.
+          if (this._state === "connecting") {
+            this.folderPath = null;
+            this.setState("lobby");
+            this.options.onLobbyConnected?.();
+          }
           break;
 
         case "historyStart":

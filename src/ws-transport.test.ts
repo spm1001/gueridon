@@ -318,6 +318,45 @@ describe("URL construction", () => {
     const sent = ws2.sent.map((s: string) => JSON.parse(s));
     expect(sent).toContainEqual({ type: "connectFolder", path: "/repos/my-project" });
   });
+
+  it("falls back to lobby if auto-connectFolder fails on reconnect", () => {
+    const callbacks = {
+      onLobbyConnected: vi.fn(),
+      onBridgeError: vi.fn(),
+    };
+    const transport = new WSTransport({ url: "ws://localhost:3001", ...callbacks });
+    transport.connect();
+    const ws1 = wsInstances[0];
+    ws1.simulateOpen();
+    ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Connect to a folder
+    transport.connectFolder("/repos/my-project");
+    ws1.simulateMessage({
+      source: "bridge",
+      type: "connected",
+      sessionId: "session-123",
+    });
+
+    // WS drops and reconnects
+    ws1.simulateClose();
+    vi.advanceTimersByTime(1000);
+    const ws2 = wsInstances[wsInstances.length - 1];
+    ws2.simulateOpen();
+    ws2.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Bridge rejects connectFolder (folder deleted, etc.)
+    ws2.simulateMessage({
+      source: "bridge",
+      type: "error",
+      error: "Folder path must be within scan root",
+    });
+
+    // Should fall back to lobby
+    expect(callbacks.onBridgeError).toHaveBeenCalledWith("Folder path must be within scan root");
+    expect(callbacks.onLobbyConnected).toHaveBeenCalled();
+    expect(transport.state).toBe("lobby");
+  });
 });
 
 // --- Reconnect backoff ---
