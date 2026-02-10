@@ -25,10 +25,11 @@ function storeFolder(path: string, name: string): void {
 
 // --- Configuration ---
 
-const BRIDGE_URL =
-  location.hostname === "localhost"
-    ? `ws://localhost:3001`
-    : `wss://${location.host}/ws`;
+// Dev: Vite on :5173, bridge on :3001 — need explicit bridge URL
+// Prod: bridge serves everything — same-origin works
+const BRIDGE_URL = import.meta.env.DEV
+  ? `ws://${location.hostname}:3001`
+  : `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 
 // --- Core objects (created first, wired below) ---
 

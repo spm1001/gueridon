@@ -3,7 +3,8 @@ import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
 import { readFile } from "node:fs/promises";
-import { IncomingMessage } from "http";
+import { createServer, IncomingMessage, ServerResponse } from "node:http";
+import { join, extname } from "node:path";
 import { scanFolders, getLatestSession, getLatestHandoff, getSessionJSONLPath, FolderInfo, SCAN_ROOT } from "./folders.js";
 import {
   IDLE_TIMEOUT_MS,
@@ -362,15 +363,59 @@ function stopPingPong(ping: PingPongState): void {
   }
 }
 
-// --- WebSocket server ---
+// --- Static file serving ---
 
-const wss = new WebSocketServer({ port: PORT });
+const DIST_DIR = join(import.meta.dirname, "..", "dist");
 
-wss.on("listening", () => {
-  console.log(`[bridge] WebSocket server listening on ws://localhost:${PORT}`);
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".json": "application/json",
+  ".map": "application/json",
+};
+
+async function serveStatic(req: IncomingMessage, res: ServerResponse) {
+  let pathname = new URL(req.url || "/", "http://localhost").pathname;
+  // SPA fallback: extensionless paths serve index.html
+  if (pathname === "/" || !pathname.includes(".")) pathname = "/index.html";
+
+  const filePath = join(DIST_DIR, pathname);
+  // Path traversal guard
+  if (!filePath.startsWith(DIST_DIR)) {
+    res.writeHead(403).end();
+    return;
+  }
+
+  try {
+    const data = await readFile(filePath);
+    const mime = MIME[extname(filePath)] || "application/octet-stream";
+    // Vite hashed assets are immutable — cache aggressively
+    if (pathname.startsWith("/assets/")) {
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    }
+    res.writeHead(200, { "Content-Type": mime }).end(data);
+  } catch {
+    res.writeHead(404).end("Not found");
+  }
+}
+
+// --- HTTP + WebSocket server ---
+
+const httpServer = createServer(serveStatic);
+const wss = new WebSocketServer({ server: httpServer });
+
+httpServer.listen(PORT, () => {
+  console.log(`[bridge] HTTP + WebSocket server listening on http://localhost:${PORT}`);
 });
 
-wss.on("error", (err: NodeJS.ErrnoException) => {
+httpServer.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
     console.error(
       `[bridge] Port ${PORT} is already in use. Is another bridge running?\n` +
@@ -718,7 +763,8 @@ function shutdown() {
   }
   sessions.clear();
 
-  wss.close(() => {
+  wss.close();
+  httpServer.close(() => {
     console.log("[bridge] closed");
     process.exit(0);
   });

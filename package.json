@@ -6,6 +6,7 @@
   "description": "Mobile web UI for Claude Code",
   "scripts": {
     "dev": "vite",
+    "start": "npm run build && tsx server/bridge.ts",
     "bridge": "tsx server/bridge.ts",
     "build": "vite build",
     "preview": "vite preview",

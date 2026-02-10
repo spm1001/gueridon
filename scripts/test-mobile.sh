@@ -31,6 +31,7 @@ CDP_PORT=9222
 DEV_PORT=5173
 BRIDGE_PORT=3001
 PID_DIR="$PROJECT_DIR/.test-pids"
+# APP_URL set dynamically: --prod uses bridge (:3001), default uses Vite (:5173)
 APP_URL="http://localhost:$DEV_PORT"
 
 # iPhone 14 Pro
@@ -79,7 +80,7 @@ cdp_send() {
             process.stdin.on('data',c=>d+=c);
             process.stdin.on('end',()=>{
                 const pages=JSON.parse(d);
-                const p=pages.find(p=>p.url.includes('localhost:$DEV_PORT'));
+                const p=pages.find(p=>p.url.includes('localhost:$DEV_PORT')||p.url.includes('localhost:$BRIDGE_PORT'));
                 if(p) console.log(p.webSocketDebuggerUrl);
                 else process.exit(1);
             });
@@ -140,6 +141,7 @@ clear_mobile_viewport() {
 
 do_start() {
     local mobile=${1:-true}
+    local prod=${2:-false}
 
     # 0. Check Chrome Debug
     if ! check_port $CDP_PORT; then
@@ -152,36 +154,66 @@ do_start() {
 
     mkdir -p "$PID_DIR"
 
-    # 1. Dev server
-    local dev_pid
-    dev_pid=$(read_pid dev)
-    if is_alive "$dev_pid"; then
-        log "Dev server already running (pid $dev_pid)"
-    else
-        log "Starting dev server..."
-        cd "$PROJECT_DIR"
-        npm run dev > "$PID_DIR/dev.log" 2>&1 &
-        echo $! > "$PID_DIR/dev.pid"
-        wait_for_port $DEV_PORT "Dev server" || exit 1
-    fi
+    if [ "$prod" = true ]; then
+        # --- Production mode: build + bridge serves everything on :3001 ---
+        APP_URL="http://localhost:$BRIDGE_PORT"
 
-    # 2. Bridge
-    local bridge_pid
-    bridge_pid=$(read_pid bridge)
-    if is_alive "$bridge_pid"; then
-        log "Bridge already running (pid $bridge_pid)"
-    else
-        log "Starting bridge..."
+        log "Building for production..."
         cd "$PROJECT_DIR"
-        npm run bridge > "$PID_DIR/bridge.log" 2>&1 &
-        echo $! > "$PID_DIR/bridge.pid"
-        sleep 2
+        npm run build
+
+        # Bridge (serves static files + WS)
+        local bridge_pid
         bridge_pid=$(read_pid bridge)
         if is_alive "$bridge_pid"; then
-            log "Bridge started (pid $bridge_pid)"
+            log "Bridge already running (pid $bridge_pid)"
         else
-            warn "Bridge failed to start — check $PID_DIR/bridge.log"
-            exit 1
+            log "Starting bridge..."
+            npm run bridge > "$PID_DIR/bridge.log" 2>&1 &
+            echo $! > "$PID_DIR/bridge.pid"
+            sleep 2
+            bridge_pid=$(read_pid bridge)
+            if is_alive "$bridge_pid"; then
+                log "Bridge started (pid $bridge_pid)"
+            else
+                warn "Bridge failed to start — check $PID_DIR/bridge.log"
+                exit 1
+            fi
+        fi
+    else
+        # --- Dev mode: Vite :5173 + bridge :3001 ---
+
+        # 1. Dev server
+        local dev_pid
+        dev_pid=$(read_pid dev)
+        if is_alive "$dev_pid"; then
+            log "Dev server already running (pid $dev_pid)"
+        else
+            log "Starting dev server..."
+            cd "$PROJECT_DIR"
+            npm run dev > "$PID_DIR/dev.log" 2>&1 &
+            echo $! > "$PID_DIR/dev.pid"
+            wait_for_port $DEV_PORT "Dev server" || exit 1
+        fi
+
+        # 2. Bridge
+        local bridge_pid
+        bridge_pid=$(read_pid bridge)
+        if is_alive "$bridge_pid"; then
+            log "Bridge already running (pid $bridge_pid)"
+        else
+            log "Starting bridge..."
+            cd "$PROJECT_DIR"
+            npm run bridge > "$PID_DIR/bridge.log" 2>&1 &
+            echo $! > "$PID_DIR/bridge.pid"
+            sleep 2
+            bridge_pid=$(read_pid bridge)
+            if is_alive "$bridge_pid"; then
+                log "Bridge started (pid $bridge_pid)"
+            else
+                warn "Bridge failed to start — check $PID_DIR/bridge.log"
+                exit 1
+            fi
         fi
     fi
 
@@ -213,6 +245,7 @@ do_start() {
 case "${1:-}" in
     --stop)     do_stop ;;
     --status)   do_status ;;
+    --prod)     do_start true true ;;    # Build + bridge serves everything
     --desktop)  do_start false ;;
     --mobile)   set_mobile_viewport ;;   # Toggle on existing page
     --help|-h)  head -25 "$0" | grep '^#' | sed 's/^# \?//' ;;
