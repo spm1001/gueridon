@@ -10,7 +10,10 @@ import { resolve } from "node:path";
 
 // --- Configuration constants ---
 
-export const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+export const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || "", 10) || 5 * 60 * 1000; // 5 minutes
+export const MAX_IDLE_MS = parseInt(process.env.MAX_IDLE_MS || "", 10) || 30 * 60 * 1000; // 30 minutes — absolute cap
+export const STALE_OUTPUT_MS = parseInt(process.env.STALE_OUTPUT_MS || "", 10) || 10 * 60 * 1000; // 10 minutes — stdout silence → stuck
+export const IDLE_RECHECK_MS = 30_000; // 30 seconds between guard rechecks
 export const PING_INTERVAL_MS = 30_000; // 30 seconds
 export const PONG_TIMEOUT_MS = 10_000; // 10 seconds to respond
 export const KILL_ESCALATION_MS = 3_000; // SIGTERM → SIGKILL after 3 seconds
@@ -143,3 +146,127 @@ export function getActiveProcesses(
   }
   return active;
 }
+
+// --- Idle guards ---
+
+/** Session state visible to idle guards. */
+export interface IdleSessionState {
+  turnInProgress: boolean;
+  lastOutputTime: number | null;
+}
+
+/** A guard that can keep a session alive during idle checks. */
+export interface IdleGuard {
+  name: string;
+  shouldKeepAlive(
+    state: IdleSessionState,
+    now?: number,
+  ): { keep: boolean; reason?: string; recheckMs?: number };
+}
+
+/** Action returned by checkIdle — pure, no side effects. */
+export type IdleAction =
+  | { action: "kill"; reason: string }
+  | {
+      action: "recheck";
+      delayMs: number;
+      guardDeferred: boolean;
+      reason: string;
+    };
+
+/**
+ * Decide whether to kill an idle session or recheck later.
+ *
+ * Pure function — takes state, returns an action. Caller handles side effects.
+ *
+ * Flow:
+ * 1. Safety cap exceeded → kill (inviolable)
+ * 2. Any guard says keepAlive → recheck (guard is deferred)
+ * 3. Guard WAS deferred last check but isn't now → grace period (CC just finished)
+ * 4. Nothing keeping alive, grace elapsed → kill
+ */
+export function checkIdle(
+  idleStart: number,
+  guardWasDeferred: boolean,
+  guards: IdleGuard[],
+  sessionState: IdleSessionState,
+  now: number = Date.now(),
+): IdleAction {
+  // Safety cap — absolute maximum since client disconnect
+  if (now - idleStart > MAX_IDLE_MS) {
+    return { action: "kill", reason: "safety cap exceeded" };
+  }
+
+  // Consult guards
+  for (const guard of guards) {
+    const result = guard.shouldKeepAlive(sessionState, now);
+    if (result.keep) {
+      return {
+        action: "recheck",
+        delayMs: result.recheckMs ?? IDLE_RECHECK_MS,
+        guardDeferred: true,
+        reason: `kept alive by ${guard.name}: ${result.reason}`,
+      };
+    }
+  }
+
+  // No guard keeping alive. Did a guard JUST stop deferring?
+  // If so, CC transitioned from working → idle. Grant a grace period
+  // (full idle countdown) before killing.
+  if (guardWasDeferred) {
+    return {
+      action: "recheck",
+      delayMs: IDLE_TIMEOUT_MS,
+      guardDeferred: false,
+      reason: "grace period — CC finished working, restarting idle countdown",
+    };
+  }
+
+  // Nothing keeping alive, no grace period pending — kill
+  return { action: "kill", reason: "idle timeout" };
+}
+
+/**
+ * Create an ActiveTurnGuard that keeps sessions alive when CC is mid-turn.
+ *
+ * Two signals:
+ * - Protocol state: turnInProgress (prompt sent, no result yet)
+ * - Staleness: stdout has produced output within staleThresholdMs
+ *
+ * If mid-turn but no output for staleThresholdMs, declines to keep alive
+ * (CC is likely stuck). Safety cap provides the backstop.
+ */
+export function createActiveTurnGuard(
+  staleThresholdMs: number = STALE_OUTPUT_MS,
+): IdleGuard {
+  return {
+    name: "active-turn",
+    shouldKeepAlive(
+      state: IdleSessionState,
+      now: number = Date.now(),
+    ) {
+      if (!state.turnInProgress) {
+        return { keep: false };
+      }
+
+      // Mid-turn — but is CC actually making progress?
+      if (
+        state.lastOutputTime !== null &&
+        now - state.lastOutputTime > staleThresholdMs
+      ) {
+        return { keep: false, reason: "mid-turn but stale — likely stuck" };
+      }
+
+      return {
+        keep: true,
+        reason: "CC is mid-turn",
+        recheckMs: IDLE_RECHECK_MS,
+      };
+    },
+  };
+}
+
+/** Default guard set. Extensible — add guards to this array. */
+export const DEFAULT_IDLE_GUARDS: IdleGuard[] = [
+  createActiveTurnGuard(),
+];

@@ -14,6 +14,9 @@ import {
   getActiveProcesses as getActiveProcessesFromSessions,
   resolveSessionForFolder,
   validateFolderPath,
+  checkIdle,
+  DEFAULT_IDLE_GUARDS,
+  type IdleSessionState,
 } from "./bridge-logic.js";
 
 // --- Configuration ---
@@ -109,10 +112,15 @@ interface Session {
   // session" from "WS reconnecting to active bridge session", split this field.
   process: ChildProcess | null;
   clients: Set<WebSocket>; // All browser tabs connected to this session
-  idleTimer: ReturnType<typeof setTimeout> | null;
   messageBuffer: string[]; // Serialized CC events for replay on reconnect
   stderrBuffer: string[]; // Capture stderr for early-exit diagnostics
   spawnedAt: number | null; // Timestamp of last spawn, for early-exit detection
+  // Idle guard state
+  turnInProgress: boolean; // True between user prompt and result event
+  lastOutputTime: number | null; // Updated on every parsed stdout line
+  idleStart: number | null; // When last client disconnected (null = clients connected)
+  idleCheckTimer: ReturnType<typeof setTimeout> | null; // Replaces old idleTimer
+  guardWasDeferred: boolean; // For grace period detection
 }
 
 const sessions = new Map<string, Session>();
@@ -192,6 +200,56 @@ function broadcast(session: Session, msg: ServerMessage): void {
   }
 }
 
+// --- Idle check lifecycle ---
+
+function startIdleCheck(session: Session): void {
+  cancelIdleCheck(session);
+  session.idleStart = Date.now();
+  session.guardWasDeferred = false;
+  scheduleIdleCheck(session, IDLE_TIMEOUT_MS);
+}
+
+function cancelIdleCheck(session: Session): void {
+  if (session.idleCheckTimer) {
+    clearTimeout(session.idleCheckTimer);
+    session.idleCheckTimer = null;
+  }
+  session.idleStart = null;
+  session.guardWasDeferred = false;
+}
+
+function scheduleIdleCheck(session: Session, delayMs: number): void {
+  session.idleCheckTimer = setTimeout(() => {
+    if (session.idleStart === null) return; // client reconnected — cancelled
+
+    const state: IdleSessionState = {
+      turnInProgress: session.turnInProgress,
+      lastOutputTime: session.lastOutputTime,
+    };
+
+    const action = checkIdle(
+      session.idleStart,
+      session.guardWasDeferred,
+      DEFAULT_IDLE_GUARDS,
+      state,
+    );
+
+    if (action.action === "kill") {
+      console.log(
+        `[bridge] idle check: killing CC session=${session.id} (${action.reason})`,
+      );
+      if (session.process) {
+        killWithEscalation(session.process, session.id);
+      }
+      sessions.delete(session.id);
+    } else {
+      console.log(`[bridge] idle check: session=${session.id} — ${action.reason}`);
+      session.guardWasDeferred = action.guardDeferred;
+      scheduleIdleCheck(session, action.delayMs);
+    }
+  }, delayMs);
+}
+
 /** Write to CC stdin with error handling (fixes TOCTOU race) */
 function writeToStdin(session: Session, data: string): boolean {
   const stdin = session.process?.stdin;
@@ -228,6 +286,12 @@ function wireProcessToSession(session: Session): void {
     if (!trimmed) return;
     try {
       const event = JSON.parse(trimmed);
+      // Track output time for idle guard staleness detection
+      session.lastOutputTime = Date.now();
+      // Detect turn completion: result event means CC finished its turn
+      if (event.type === "result") {
+        session.turnInProgress = false;
+      }
       // Inline broadcast + buffer: serialize once, send to clients, push to buffer
       const serialized = JSON.stringify({ source: "cc", event });
       for (const client of session.clients) {
@@ -282,6 +346,7 @@ function wireProcessToSession(session: Session): void {
     });
     session.process = null;
     session.spawnedAt = null;
+    session.turnInProgress = false;
   });
 
   proc.on("error", (err) => {
@@ -380,12 +445,9 @@ wss.on("error", (err: NodeJS.ErrnoException) => {
   throw err;
 });
 
-/** Attach a WebSocket to a session, clearing any idle timer. */
+/** Attach a WebSocket to a session, cancelling any idle check. */
 function attachWsToSession(ws: WebSocket, session: Session): void {
-  if (session.idleTimer) {
-    clearTimeout(session.idleTimer);
-    session.idleTimer = null;
-  }
+  cancelIdleCheck(session);
   // Replay history BEFORE adding to clients — synchronous within one event-loop
   // tick, so no readline callback can interleave live events with replay.
   if (session.messageBuffer.length > 0) {
@@ -416,6 +478,7 @@ async function handleSessionMessage(
         message: { role: "user", content: msg.text },
       });
       if (writeToStdin(session, envelope + "\n")) {
+        session.turnInProgress = true;
         sendToClient(ws, { source: "bridge", type: "promptReceived" });
       }
       break;
@@ -517,10 +580,14 @@ async function handleLobbyMessage(
           resumable: resolution.resumable,
           process: null,
           clients: new Set([ws]),
-          idleTimer: null,
           messageBuffer: [],
           stderrBuffer: [],
           spawnedAt: null,
+          turnInProgress: false,
+          lastOutputTime: null,
+          idleStart: null,
+          idleCheckTimer: null,
+          guardWasDeferred: false,
         };
         sessions.set(resolution.sessionId, session);
       }
@@ -586,9 +653,14 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
         resumable: true,
         process: null,
         clients: new Set([ws]),
-        idleTimer: null,
+        messageBuffer: [],
         stderrBuffer: [],
         spawnedAt: null,
+        turnInProgress: false,
+        lastOutputTime: null,
+        idleStart: null,
+        idleCheckTimer: null,
+        guardWasDeferred: false,
       };
       sessions.set(requestedSessionId, session);
     }
@@ -651,15 +723,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
         console.log(
           `[bridge] last client disconnected session=${session.id} code=${code}`
         );
-        session.idleTimer = setTimeout(() => {
-          console.log(
-            `[bridge] idle timeout, killing CC session=${session.id}`
-          );
-          if (session.process) {
-            killWithEscalation(session.process, session.id);
-          }
-          sessions.delete(session.id);
-        }, IDLE_TIMEOUT_MS);
+        startIdleCheck(session);
       } else {
         console.log(
           `[bridge] client disconnected session=${session.id} code=${code} (${session.clients.size} remaining)`
@@ -691,9 +755,9 @@ function shutdown() {
   }
   connections.clear();
 
-  // Kill all CC processes and clear idle timers
+  // Kill all CC processes and clear idle check timers
   for (const [id, session] of sessions) {
-    if (session.idleTimer) clearTimeout(session.idleTimer);
+    cancelIdleCheck(session);
     if (session.process) killWithEscalation(session.process, id);
   }
   sessions.clear();
