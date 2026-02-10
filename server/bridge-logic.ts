@@ -6,7 +6,7 @@
  * IO — session resolution, path validation, arg construction.
  */
 
-import { resolve } from "node:path";
+import { resolve, join, extname } from "node:path";
 
 // --- Configuration constants ---
 
@@ -37,6 +37,57 @@ export const CC_FLAGS = [
     "in their next message. Do not apologize for the error or retry the tool. " +
     "End your turn and wait for the user's response.",
 ];
+
+// --- Static file serving ---
+
+export const MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".json": "application/json",
+  ".map": "application/json",
+};
+
+/** Result of resolving a static file request. */
+export type StaticFileResult =
+  | { ok: true; filePath: string; mime: string; cache: boolean }
+  | { ok: false; status: 403 | 404 };
+
+/**
+ * Resolve a URL pathname to a static file path with security checks.
+ *
+ * Pure function — no IO. Caller handles readFile and HTTP response.
+ *
+ * - SPA fallback: extensionless paths (including "/") → index.html
+ * - Path traversal guard: resolved path must be within distDir
+ * - MIME lookup with fallback to application/octet-stream
+ * - Cache flag for /assets/ paths (Vite hashed, immutable)
+ */
+export function resolveStaticFile(
+  pathname: string,
+  distDir: string,
+): StaticFileResult {
+  // SPA fallback: extensionless paths serve index.html
+  if (pathname === "/" || !pathname.includes(".")) {
+    pathname = "/index.html";
+  }
+
+  const filePath = join(distDir, pathname);
+  // Path traversal guard
+  if (!filePath.startsWith(distDir)) {
+    return { ok: false, status: 403 };
+  }
+
+  const mime = MIME_TYPES[extname(filePath)] || "application/octet-stream";
+  const cache = pathname.startsWith("/assets/");
+  return { ok: true, filePath, mime, cache };
+}
 
 // --- Session resolution ---
 

@@ -8,6 +8,8 @@ import {
   getActiveProcesses,
   parseSessionJSONL,
   CC_FLAGS,
+  resolveStaticFile,
+  MIME_TYPES,
   checkIdle,
   createActiveTurnGuard,
   DEFAULT_IDLE_GUARDS,
@@ -19,6 +21,111 @@ import {
   type IdleGuard,
   type IdleSessionState,
 } from "./bridge-logic.js";
+
+// --- resolveStaticFile ---
+
+describe("resolveStaticFile", () => {
+  const DIST = "/app/dist";
+
+  describe("SPA fallback", () => {
+    it("/ serves index.html", () => {
+      const r = resolveStaticFile("/", DIST);
+      expect(r).toEqual({ ok: true, filePath: "/app/dist/index.html", mime: "text/html; charset=utf-8", cache: false });
+    });
+
+    it("extensionless paths serve index.html", () => {
+      const r = resolveStaticFile("/some/route", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.filePath).toBe("/app/dist/index.html");
+    });
+
+    it("/about serves index.html (SPA deep link)", () => {
+      const r = resolveStaticFile("/about", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.filePath).toBe("/app/dist/index.html");
+    });
+  });
+
+  describe("path traversal guard", () => {
+    it("blocks /../etc/passwd", () => {
+      const r = resolveStaticFile("/../etc/passwd", DIST);
+      expect(r).toEqual({ ok: false, status: 403 });
+    });
+
+    it("blocks /..%2f..%2fetc/passwd (encoded)", () => {
+      // URL constructor decodes %2f, so the pathname arrives decoded
+      const r = resolveStaticFile("/../../etc/passwd", DIST);
+      expect(r).toEqual({ ok: false, status: 403 });
+    });
+
+    it("allows normal nested paths", () => {
+      const r = resolveStaticFile("/assets/index-abc123.js", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.filePath).toBe("/app/dist/assets/index-abc123.js");
+    });
+  });
+
+  describe("MIME types", () => {
+    it("resolves .js files", () => {
+      const r = resolveStaticFile("/app.js", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.mime).toBe("application/javascript; charset=utf-8");
+    });
+
+    it("resolves .css files", () => {
+      const r = resolveStaticFile("/style.css", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.mime).toBe("text/css; charset=utf-8");
+    });
+
+    it("resolves .woff2 font files", () => {
+      const r = resolveStaticFile("/fonts/inter.woff2", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.mime).toBe("font/woff2");
+    });
+
+    it("resolves .svg files", () => {
+      const r = resolveStaticFile("/icon.svg", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.mime).toBe("image/svg+xml");
+    });
+
+    it("falls back to application/octet-stream for unknown extensions", () => {
+      const r = resolveStaticFile("/data.bin", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.mime).toBe("application/octet-stream");
+    });
+  });
+
+  describe("cache headers", () => {
+    it("sets cache flag for /assets/ paths", () => {
+      const r = resolveStaticFile("/assets/index-abc123.js", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.cache).toBe(true);
+    });
+
+    it("does not set cache flag for root files", () => {
+      const r = resolveStaticFile("/index.html", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.cache).toBe(false);
+    });
+
+    it("does not set cache flag for non-assets paths", () => {
+      const r = resolveStaticFile("/favicon.ico", DIST);
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.cache).toBe(false);
+    });
+  });
+
+  describe("MIME_TYPES coverage", () => {
+    it("all expected extensions are present", () => {
+      const expected = [".html", ".js", ".css", ".woff", ".woff2", ".ttf", ".png", ".svg", ".ico", ".json", ".map"];
+      for (const ext of expected) {
+        expect(MIME_TYPES[ext]).toBeDefined();
+      }
+    });
+  });
+});
 
 // --- resolveSessionForFolder ---
 // This is the critical decision tree. The resume bug from session 8 was
