@@ -15,7 +15,7 @@ export const MAX_IDLE_MS = parseInt(process.env.MAX_IDLE_MS || "", 10) || 30 * 6
 export const STALE_OUTPUT_MS = parseInt(process.env.STALE_OUTPUT_MS || "", 10) || 10 * 60 * 1000; // 10 minutes — stdout silence → stuck
 export const IDLE_RECHECK_MS = 30_000; // 30 seconds between guard rechecks
 export const PING_INTERVAL_MS = 30_000; // 30 seconds
-export const PONG_TIMEOUT_MS = 10_000; // 10 seconds to respond
+export const PONG_TIMEOUT_MS = 30_000; // 30 seconds — generous for DERP relay on cellular
 export const KILL_ESCALATION_MS = 3_000; // SIGTERM → SIGKILL after 3 seconds
 export const EARLY_EXIT_MS = 2_000; // Process dying within 2s = flag/version problem
 
