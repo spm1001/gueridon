@@ -306,12 +306,12 @@ async function testLobbyConnectFolder(): Promise<void> {
 
       if (msg.type === "connected") {
         console.log(`[t7] transitioned to session=${msg.sessionId.slice(0, 8)} resumed=${msg.resumed}`);
-        // Now try listFolders — should be rejected in session mode
+        // listFolders is allowed in session mode (read-only, needed for folder picker)
         ws.send(JSON.stringify({ type: "listFolders" }));
       }
 
-      if (msg.type === "error" && msg.error.includes("active session")) {
-        console.log(`[t7] correctly rejected post-transition: ${msg.error}`);
+      if (msg.type === "folderList") {
+        console.log(`[t7] listFolders in session mode returned ${msg.folders.length} folders`);
         console.log(`[t7] event sequence: ${events.join(" → ")}`);
         console.log("[t7] PASS");
         ws.close();
