@@ -331,14 +331,15 @@ export class ClaudeCodeAgent {
     const msg = event.message;
     if (!msg) return;
 
-    // Detect AskUserQuestion tool calls first — fire callback, track IDs,
-    // and filter them from the content so no tool call card shows in chat
+    // Detect AskUserQuestion tool calls — during live operation, fire callback,
+    // track IDs, and filter them from content (overlay handles display).
+    // During replay, let them through as regular tool calls so history shows Q&A.
     const askUserIds = new Set<string>();
-    for (const block of msg.content || []) {
-      if (block.type === "tool_use" && block.name === "AskUserQuestion") {
-        askUserIds.add(block.id);
-        this.askUserToolCallIds.add(block.id);
-        if (!this._replayMode) {
+    if (!this._replayMode) {
+      for (const block of msg.content || []) {
+        if (block.type === "tool_use" && block.name === "AskUserQuestion") {
+          askUserIds.add(block.id);
+          this.askUserToolCallIds.add(block.id);
           this.onAskUser?.({
             questions: block.input?.questions || [],
             toolCallId: block.id,

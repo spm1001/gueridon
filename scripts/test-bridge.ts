@@ -384,6 +384,115 @@ async function testMultiWS(): Promise<void> {
   });
 }
 
+// --- Test 9: Replay — disconnect and reconnect replays buffered events ---
+
+async function testReplay(): Promise<void> {
+  console.log("\n=== Test 9: Replay — disconnect/reconnect replays buffered CC events ===");
+
+  const folderPath = `${process.env.HOME}/Repos/gueridon`;
+  let preDisconnectEventCount = 0;
+
+  // Phase 1: Connect, send prompt, count CC events through to result
+  const phase1SessionId = await new Promise<string>((resolve, reject) => {
+    const ws = new WebSocket(BRIDGE_URL);
+    let sid: string | null = null;
+    let ccEventCount = 0;
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+
+      if (msg.type === "lobbyConnected") {
+        ws.send(JSON.stringify({ type: "connectFolder", path: folderPath }));
+      }
+
+      if (msg.type === "connected") {
+        sid = msg.sessionId;
+        console.log(`[t9] phase1: connected session=${sid!.slice(0, 8)} resumed=${msg.resumed}`);
+        ws.send(JSON.stringify({ type: "prompt", text: "Say exactly: replay test" }));
+      }
+
+      if (msg.source === "cc") {
+        ccEventCount++;
+        if (msg.event?.type === "result") {
+          preDisconnectEventCount = ccEventCount;
+          console.log(`[t9] phase1: got result after ${ccEventCount} CC events`);
+          ws.close();
+        }
+      }
+    });
+
+    ws.on("close", () => {
+      if (!sid) reject(new Error("t9 phase1: never got sessionId"));
+      else resolve(sid);
+    });
+    ws.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("t9 phase1 timeout")), 60_000);
+  });
+
+  // Brief pause to ensure bridge registers disconnect
+  await new Promise((r) => setTimeout(r, 500));
+
+  // Phase 2: Reconnect to same folder — expect historyStart, buffered events, historyEnd
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(BRIDGE_URL);
+    let gotHistoryStart = false;
+    let gotHistoryEnd = false;
+    let replayEventCount = 0;
+    let replaySessionId: string | null = null;
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+
+      if (msg.type === "lobbyConnected") {
+        ws.send(JSON.stringify({ type: "connectFolder", path: folderPath }));
+      }
+
+      if (msg.type === "historyStart") {
+        gotHistoryStart = true;
+        console.log("[t9] phase2: historyStart received");
+      }
+
+      if (msg.source === "cc" && gotHistoryStart && !gotHistoryEnd) {
+        replayEventCount++;
+      }
+
+      if (msg.type === "historyEnd") {
+        gotHistoryEnd = true;
+        console.log(`[t9] phase2: historyEnd received, ${replayEventCount} replayed events`);
+      }
+
+      if (msg.type === "connected") {
+        replaySessionId = msg.sessionId;
+        console.log(`[t9] phase2: connected session=${msg.sessionId.slice(0, 8)} resumed=${msg.resumed}`);
+
+        if (!gotHistoryStart) {
+          reject(new Error("t9: no historyStart received before connected"));
+          return;
+        }
+        if (!gotHistoryEnd) {
+          reject(new Error("t9: no historyEnd received before connected"));
+          return;
+        }
+        if (replayEventCount === 0) {
+          reject(new Error("t9: replay had 0 events"));
+          return;
+        }
+        if (replaySessionId !== phase1SessionId) {
+          reject(new Error(`t9: session mismatch: phase1=${phase1SessionId} phase2=${replaySessionId}`));
+          return;
+        }
+
+        console.log(`[t9] PASS — replayed ${replayEventCount} events (pre-disconnect: ${preDisconnectEventCount})`);
+        ws.close();
+      }
+    });
+
+    ws.on("close", () => resolve());
+    ws.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("t9 phase2 timeout")), 15_000);
+  });
+}
+
 // --- Run all tests ---
 
 async function main() {
@@ -401,6 +510,7 @@ async function main() {
     await testLobbyPathValidation();
     await testLobbyConnectFolder();
     await testMultiWS();
+    await testReplay();
     console.log("\n=== ALL TESTS PASSED ===");
     process.exit(0);
   } catch (err) {

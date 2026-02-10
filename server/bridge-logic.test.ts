@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   resolveSessionForFolder,
   validateFolderPath,
   buildCCArgs,
   getActiveProcesses,
+  parseSessionJSONL,
   CC_FLAGS,
   type SessionProcessInfo,
 } from "./bridge-logic.js";
@@ -276,5 +279,353 @@ describe("getActiveProcesses", () => {
     expect(active.size).toBe(2);
     expect(active.get("/repos/a")).toBe("active-1");
     expect(active.get("/repos/d")).toBe("active-4");
+  });
+});
+
+// --- parseSessionJSONL ---
+
+describe("parseSessionJSONL", () => {
+  /** Helper: make a JSONL line for a user text message */
+  function userLine(content: string, extra?: Record<string, any>): string {
+    return JSON.stringify({
+      type: "user",
+      message: { role: "user", content },
+      ...extra,
+    });
+  }
+
+  /** Helper: make a JSONL line for an assistant message */
+  function assistantLine(
+    content: any[],
+    opts?: { id?: string; usage?: any; model?: string },
+  ): string {
+    return JSON.stringify({
+      type: "assistant",
+      message: {
+        id: opts?.id || "msg_1",
+        model: opts?.model || "claude-opus-4-6",
+        role: "assistant",
+        content,
+        stop_reason: null,
+        usage: opts?.usage || { input_tokens: 100, output_tokens: 10 },
+      },
+    });
+  }
+
+  /** Parse a result string back to check its shape */
+  function parse(serialized: string): any {
+    return JSON.parse(serialized);
+  }
+
+  it("returns empty array for empty input", () => {
+    expect(parseSessionJSONL("")).toEqual([]);
+  });
+
+  it("returns empty array for whitespace-only input", () => {
+    expect(parseSessionJSONL("  \n  \n  ")).toEqual([]);
+  });
+
+  it("parses simple text conversation (user + assistant)", () => {
+    const input = [
+      userLine("hello"),
+      assistantLine([{ type: "text", text: "Hi there!" }]),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+
+    // user + assistant + synthetic result = 3
+    expect(result).toHaveLength(3);
+
+    const user = parse(result[0]);
+    expect(user.source).toBe("cc");
+    expect(user.event.type).toBe("user");
+    expect(user.event.message.content).toBe("hello");
+
+    const assistant = parse(result[1]);
+    expect(assistant.source).toBe("cc");
+    expect(assistant.event.type).toBe("assistant");
+    expect(assistant.event.message.content).toHaveLength(1);
+    expect(assistant.event.message.content[0].text).toBe("Hi there!");
+  });
+
+  it("groups consecutive assistant lines by message.id", () => {
+    const input = [
+      assistantLine(
+        [{ type: "thinking", thinking: "Let me think..." }],
+        { id: "msg_multi", usage: { input_tokens: 50, output_tokens: 5 } },
+      ),
+      assistantLine(
+        [{ type: "text", text: "Here is my answer" }],
+        { id: "msg_multi", usage: { input_tokens: 50, output_tokens: 20 } },
+      ),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+
+    // One merged assistant + synthetic result = 2
+    expect(result).toHaveLength(2);
+
+    const assistant = parse(result[0]);
+    expect(assistant.event.message.content).toHaveLength(2);
+    expect(assistant.event.message.content[0].type).toBe("thinking");
+    expect(assistant.event.message.content[1].type).toBe("text");
+    expect(assistant.event.message.usage.output_tokens).toBe(20);
+  });
+
+  it("handles tool use cycle (assistant tool_use + user tool_result + assistant text)", () => {
+    const input = [
+      userLine("read the file"),
+      assistantLine(
+        [{ type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/foo.ts" } }],
+        { id: "msg_tool" },
+      ),
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "file contents here" }],
+        },
+      }),
+      assistantLine(
+        [{ type: "text", text: "The file contains..." }],
+        { id: "msg_reply" },
+      ),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+
+    expect(result).toHaveLength(5);
+
+    expect(parse(result[0]).event.type).toBe("user");
+    expect(parse(result[1]).event.type).toBe("assistant");
+    expect(parse(result[1]).event.message.content[0].name).toBe("Read");
+    expect(parse(result[2]).event.type).toBe("user");
+    expect(parse(result[2]).event.message.content[0].type).toBe("tool_result");
+    expect(parse(result[3]).event.type).toBe("assistant");
+    expect(parse(result[3]).event.message.content[0].text).toBe("The file contains...");
+  });
+
+  it("skips queue-operation events", () => {
+    const input = [
+      JSON.stringify({ type: "queue-operation", operation: "dequeue", timestamp: "2026-01-01" }),
+      userLine("hi"),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+    expect(result).toHaveLength(1);
+    expect(parse(result[0]).event.type).toBe("user");
+  });
+
+  it("skips progress events", () => {
+    const input = [
+      JSON.stringify({ type: "progress", data: { type: "hook_progress" } }),
+      userLine("hi"),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+    expect(result).toHaveLength(1);
+  });
+
+  it("skips system events", () => {
+    const input = [
+      JSON.stringify({ type: "system", subtype: "init", cwd: "/test" }),
+      assistantLine([{ type: "text", text: "ok" }]),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+    expect(result).toHaveLength(2);
+    expect(parse(result[0]).event.type).toBe("assistant");
+  });
+
+  it("skips user messages with isMeta: true", () => {
+    const input = [
+      JSON.stringify({ type: "user", isMeta: true, message: { role: "user", content: "internal" } }),
+      userLine("real message"),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+    expect(result).toHaveLength(1);
+    expect(parse(result[0]).event.message.content).toBe("real message");
+  });
+
+  it("preserves user string content as-is", () => {
+    const input = userLine("hello world");
+    const result = parseSessionJSONL(input);
+    expect(parse(result[0]).event.message.content).toBe("hello world");
+  });
+
+  it("preserves user tool_result array content", () => {
+    const input = JSON.stringify({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "result data" }],
+      },
+    });
+
+    const result = parseSessionJSONL(input);
+    const parsed = parse(result[0]);
+    expect(Array.isArray(parsed.event.message.content)).toBe(true);
+    expect(parsed.event.message.content[0].type).toBe("tool_result");
+  });
+
+  it("preserves multi-turn conversation order", () => {
+    const input = [
+      userLine("first question"),
+      assistantLine([{ type: "text", text: "first answer" }], { id: "msg_a" }),
+      userLine("second question"),
+      assistantLine([{ type: "text", text: "second answer" }], { id: "msg_b" }),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+    expect(result).toHaveLength(5);
+
+    const types = result.slice(0, 4).map((r) => parse(r).event.type);
+    expect(types).toEqual(["user", "assistant", "user", "assistant"]);
+
+    expect(parse(result[0]).event.message.content).toBe("first question");
+    expect(parse(result[1]).event.message.content[0].text).toBe("first answer");
+    expect(parse(result[2]).event.message.content).toBe("second question");
+    expect(parse(result[3]).event.message.content[0].text).toBe("second answer");
+  });
+
+  it("appends synthetic result event with last usage data", () => {
+    const input = assistantLine(
+      [{ type: "text", text: "hello" }],
+      { usage: { input_tokens: 5000, output_tokens: 500, cache_read_input_tokens: 10000 } },
+    );
+
+    const result = parseSessionJSONL(input);
+    const synthetic = parse(result[result.length - 1]);
+
+    expect(synthetic.source).toBe("cc");
+    expect(synthetic.event.type).toBe("result");
+    expect(synthetic.event.subtype).toBe("success");
+    expect(synthetic.event.result.usage.input_tokens).toBe(5000);
+    expect(synthetic.event.result.usage.cache_read_input_tokens).toBe(10000);
+  });
+
+  it("does not append synthetic result when no assistant messages", () => {
+    const input = userLine("just a question with no answer");
+    const result = parseSessionJSONL(input);
+    expect(result).toHaveLength(1);
+    expect(parse(result[0]).event.type).toBe("user");
+  });
+
+  it("skips corrupted lines silently", () => {
+    const input = [
+      "this is not valid json",
+      userLine("valid message"),
+      "{incomplete json",
+      assistantLine([{ type: "text", text: "valid reply" }]),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+    expect(result).toHaveLength(3);
+  });
+
+  it("flushes assistant group when user message follows", () => {
+    const input = [
+      assistantLine(
+        [{ type: "thinking", thinking: "hmm" }],
+        { id: "msg_flush" },
+      ),
+      assistantLine(
+        [{ type: "text", text: "answer" }],
+        { id: "msg_flush" },
+      ),
+      userLine("follow up"),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+    expect(result).toHaveLength(3);
+    const assistant = parse(result[0]);
+    expect(assistant.event.type).toBe("assistant");
+    expect(assistant.event.message.content).toHaveLength(2);
+    expect(parse(result[1]).event.type).toBe("user");
+  });
+});
+
+// --- parseSessionJSONL: real fixture ---
+
+describe("parseSessionJSONL with real JSONL fixture", () => {
+  const fixturePath = join(__dirname, "..", "fixtures", "session-history.jsonl");
+  const fixtureContent = readFileSync(fixturePath, "utf-8");
+
+  function parse(serialized: string): any {
+    return JSON.parse(serialized);
+  }
+
+  it("parses the fixture without errors", () => {
+    const result = parseSessionJSONL(fixtureContent);
+    expect(result.length).toBeGreaterThan(0);
+  });
+
+  it("skips queue-operation, progress, and isMeta lines", () => {
+    const result = parseSessionJSONL(fixtureContent);
+    const types = result.map((r) => parse(r).event.type);
+    expect(types).not.toContain("queue-operation");
+    expect(types).not.toContain("progress");
+    const userMessages = result
+      .map((r) => parse(r))
+      .filter((p) => p.event.type === "user");
+    for (const u of userMessages) {
+      expect(u.event.message).toBeDefined();
+    }
+  });
+
+  it("produces correct event sequence: user, assistant(tool), user(tool_result), assistant(tool), user(tool_result), assistant(text), result", () => {
+    const result = parseSessionJSONL(fixtureContent);
+
+    expect(result).toHaveLength(7);
+
+    const events = result.map((r) => parse(r));
+    expect(events[0].event.type).toBe("user");
+    expect(events[0].event.message.content).toContain("Search my Google Drive");
+
+    expect(events[1].event.type).toBe("assistant");
+    expect(events[1].event.message.content[0].name).toBe("Skill");
+
+    expect(events[2].event.type).toBe("user");
+    expect(events[2].event.message.content[0].type).toBe("tool_result");
+
+    expect(events[3].event.type).toBe("assistant");
+    expect(events[3].event.message.content[0].name).toBe("mcp__mise__search");
+
+    expect(events[4].event.type).toBe("user");
+    expect(events[4].event.message.content[0].type).toBe("tool_result");
+
+    expect(events[5].event.type).toBe("assistant");
+    expect(events[5].event.message.content[0].type).toBe("text");
+    expect(events[5].event.message.content[0].text).toContain("No results");
+
+    expect(events[6].event.type).toBe("result");
+    expect(events[6].event.result.usage).toBeDefined();
+  });
+
+  it("preserves envelope fields needed by the adapter", () => {
+    const result = parseSessionJSONL(fixtureContent);
+    const assistant = parse(result[1]);
+
+    expect(assistant.event.message.id).toBe("msg_01HeZYXk68NFgKUpAE4MeM9E");
+    expect(assistant.event.message.model).toBe("claude-opus-4-6");
+    expect(assistant.event.message.usage.input_tokens).toBe(3);
+    expect(assistant.event.message.usage.cache_read_input_tokens).toBe(20640);
+  });
+
+  it("synthetic result uses the last assistant's usage data", () => {
+    const result = parseSessionJSONL(fixtureContent);
+    const synthetic = parse(result[result.length - 1]);
+
+    expect(synthetic.event.result.usage.input_tokens).toBe(1);
+    expect(synthetic.event.result.usage.cache_read_input_tokens).toBe(34443);
+    expect(synthetic.event.result.usage.cache_creation_input_tokens).toBe(168);
+  });
+
+  it("all output events have source: cc", () => {
+    const result = parseSessionJSONL(fixtureContent);
+    for (const r of result) {
+      expect(parse(r).source).toBe("cc");
+    }
   });
 });

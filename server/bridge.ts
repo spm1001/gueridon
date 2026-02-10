@@ -2,8 +2,9 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
+import { readFile } from "node:fs/promises";
 import { IncomingMessage } from "http";
-import { scanFolders, getLatestSession, getLatestHandoff, FolderInfo, SCAN_ROOT } from "./folders.js";
+import { scanFolders, getLatestSession, getLatestHandoff, getSessionJSONLPath, FolderInfo, SCAN_ROOT } from "./folders.js";
 import {
   IDLE_TIMEOUT_MS,
   PING_INTERVAL_MS,
@@ -14,6 +15,7 @@ import {
   getActiveProcesses as getActiveProcessesFromSessions,
   resolveSessionForFolder,
   validateFolderPath,
+  parseSessionJSONL,
 } from "./bridge-logic.js";
 
 // --- Configuration ---
@@ -516,13 +518,31 @@ async function handleLobbyMessage(
           folder: folderPath,
           resumable: resolution.resumable,
           process: null,
-          clients: new Set([ws]),
+          clients: new Set(),
           idleTimer: null,
           messageBuffer: [],
           stderrBuffer: [],
           spawnedAt: null,
         };
+
+        // Pre-populate message buffer from JSONL for paused sessions
+        // so the existing replay mechanism shows conversation history
+        if (resolution.resumable) {
+          try {
+            const jsonlPath = getSessionJSONLPath(folderPath, resolution.sessionId);
+            const jsonlContent = await readFile(jsonlPath, "utf-8");
+            session.messageBuffer = parseSessionJSONL(jsonlContent);
+            console.log(
+              `[bridge] loaded ${session.messageBuffer.length} events from JSONL for session=${resolution.sessionId}`,
+            );
+          } catch {
+            // No JSONL file or read error — not fatal, just no history
+          }
+        }
+
         sessions.set(resolution.sessionId, session);
+        // Attach after buffer is populated so attachWsToSession replays history
+        attachWsToSession(ws, session);
       }
 
       // Transition: lobby → session (no listener surgery — dispatcher reads mode)

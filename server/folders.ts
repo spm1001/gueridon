@@ -19,7 +19,7 @@ export interface FolderInfo {
 
 export const SCAN_ROOT =
   process.env.SCAN_ROOT || join(homedir(), "Repos");
-const CC_PROJECTS_DIR = join(homedir(), ".claude", "projects");
+export const CC_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 const HANDOFFS_DIR = join(homedir(), ".claude", "handoffs");
 
 // --- Path encoding ---
@@ -27,6 +27,11 @@ const HANDOFFS_DIR = join(homedir(), ".claude", "handoffs");
 /** Encode an absolute path the same way CC does for project/handoff directories. */
 export function encodePath(absolutePath: string): string {
   return absolutePath.replace(/[^a-zA-Z0-9-]/g, "-");
+}
+
+/** Get the absolute path to a CC session JSONL file for a given folder and session ID. */
+export function getSessionJSONLPath(folderPath: string, sessionId: string): string {
+  return join(CC_PROJECTS_DIR, encodePath(folderPath), `${sessionId}.jsonl`);
 }
 
 // --- Session file lookup ---

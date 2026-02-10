@@ -120,6 +120,110 @@ export function buildCCArgs(
   ];
 }
 
+// --- Session JSONL parsing ---
+
+/**
+ * Parse a CC session JSONL file into bridge-format messages for replay.
+ *
+ * JSONL format (per line):
+ * - `type: "user"` — user messages. `content` is a string (text) or array (tool_result).
+ *   Lines with `isMeta: true` are internal and should be skipped.
+ * - `type: "assistant"` — assistant messages. `content` is always an array of blocks.
+ *   Multiple lines can share the same `message.id` when a response has multiple content
+ *   blocks (e.g. text + tool_use). These must be grouped and their content arrays merged.
+ * - `type: "queue-operation"`, `"progress"`, `"system"` — bookkeeping, skip these.
+ *
+ * Returns serialized `{source:"cc", event}` strings matching the wire format that
+ * `attachWsToSession` replays into `messageBuffer`.
+ *
+ * Appends a synthetic `result` event with the last assistant's usage data so the
+ * adapter's `handleResult()` sets `_lastInputTokens` and the gauge works after replay.
+ */
+export function parseSessionJSONL(content: string): string[] {
+  const lines = content.split("\n");
+  const result: string[] = [];
+
+  // Group assistant lines by message.id to merge content blocks
+  let currentAssistantId: string | null = null;
+  let currentAssistantMsg: any = null;
+  let lastUsage: any = null;
+
+  function flushAssistant() {
+    if (currentAssistantMsg) {
+      result.push(
+        JSON.stringify({ source: "cc", event: { type: "assistant", message: currentAssistantMsg } }),
+      );
+      currentAssistantId = null;
+      currentAssistantMsg = null;
+    }
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue; // skip corrupted lines
+    }
+
+    if (parsed.type === "user") {
+      // Skip meta messages (internal CC bookkeeping)
+      if (parsed.isMeta) continue;
+      const msg = parsed.message;
+      if (!msg) continue;
+
+      // Flush any pending assistant group before user message
+      flushAssistant();
+
+      result.push(
+        JSON.stringify({ source: "cc", event: { type: "user", message: msg } }),
+      );
+    } else if (parsed.type === "assistant") {
+      const msg = parsed.message;
+      if (!msg) continue;
+
+      const msgId = msg.id;
+      if (msgId && msgId === currentAssistantId && currentAssistantMsg) {
+        // Same message.id — merge content blocks
+        currentAssistantMsg.content = [
+          ...(currentAssistantMsg.content || []),
+          ...(msg.content || []),
+        ];
+        // Update usage to latest (later lines may have more complete data)
+        if (msg.usage) {
+          currentAssistantMsg.usage = msg.usage;
+          lastUsage = msg.usage;
+        }
+      } else {
+        // New assistant message — flush previous and start new group
+        flushAssistant();
+        currentAssistantId = msgId || null;
+        currentAssistantMsg = { ...msg };
+        if (msg.usage) lastUsage = msg.usage;
+      }
+    }
+    // Skip queue-operation, progress, system, and anything else
+  }
+
+  // Flush final assistant group
+  flushAssistant();
+
+  // Append synthetic result event with last usage so gauge works after replay
+  if (lastUsage) {
+    result.push(
+      JSON.stringify({
+        source: "cc",
+        event: { type: "result", subtype: "success", result: { usage: lastUsage } },
+      }),
+    );
+  }
+
+  return result;
+}
+
 // --- Active process map ---
 
 /** Minimal session shape needed for getActiveProcesses. */

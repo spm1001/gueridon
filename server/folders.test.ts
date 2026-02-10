@@ -15,6 +15,7 @@ import {
   encodePath,
   getLatestSession,
   getLatestHandoff,
+  getSessionJSONLPath,
   scanFolders,
 } from "./folders.js";
 
@@ -110,6 +111,15 @@ describe("encodePath", () => {
 
   it("handles empty string", () => {
     expect(encodePath("")).toBe("");
+  });
+});
+
+// --- getSessionJSONLPath ---
+
+describe("getSessionJSONLPath", () => {
+  it("builds correct path from folder and session ID", () => {
+    const result = getSessionJSONLPath("/test-home/Repos/gueridon", "abc-123-uuid");
+    expect(result).toBe("/test-home/.claude/projects/-test-home-Repos-gueridon/abc-123-uuid.jsonl");
   });
 });
 

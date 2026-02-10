@@ -1191,4 +1191,95 @@ describe("replay mode", () => {
 
     expect(agent.contextPercent).toBeGreaterThan(0);
   });
+
+  it("preserves AskUser tool_use in message content during replay", () => {
+    agent.startReplay();
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [
+          { type: "text", text: "Let me ask you something." },
+          {
+            type: "tool_use",
+            id: "toolu_ask_replay",
+            name: "AskUserQuestion",
+            input: {
+              questions: [{
+                question: "Which option?",
+                header: "Choice",
+                options: [{ label: "A" }, { label: "B" }],
+                multiSelect: false,
+              }],
+            },
+          },
+        ],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 100, output_tokens: 20 },
+      },
+    });
+
+    const msg = agent.state.messages[0];
+    expect(msg.content).toHaveLength(2);
+    expect(msg.content[0].type).toBe("text");
+    expect(msg.content[1].type).toBe("toolCall");
+    expect(msg.content[1].name).toBe("AskUserQuestion");
+  });
+
+  it("renders AskUser tool_result during replay (not suppressed)", () => {
+    agent.startReplay();
+
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{
+          type: "tool_use",
+          id: "toolu_ask_replay2",
+          name: "AskUserQuestion",
+          input: { questions: [] },
+        }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 50, output_tokens: 10 },
+      },
+    });
+
+    agent.handleCCEvent({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_ask_replay2", content: "Error: AskUserQuestion denied", is_error: true },
+        ],
+      },
+    });
+
+    const toolResults = agent.state.messages.filter((m) => (m as any).role === "toolResult");
+    expect(toolResults).toHaveLength(1);
+    expect((toolResults[0] as any).toolCallId).toBe("toolu_ask_replay2");
+    expect((toolResults[0] as any).toolName).toBe("AskUserQuestion");
+  });
+
+  it("does NOT trigger AskUser overlay during replay", () => {
+    const askSpy = vi.fn();
+    agent.onAskUser = askSpy;
+
+    agent.startReplay();
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{
+          type: "tool_use",
+          id: "toolu_ask_replay3",
+          name: "AskUserQuestion",
+          input: { questions: [{ question: "Pick", header: "Q", options: [{ label: "X" }], multiSelect: false }] },
+        }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+
+    expect(askSpy).not.toHaveBeenCalled();
+  });
 });
