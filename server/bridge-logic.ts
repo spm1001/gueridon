@@ -427,6 +427,13 @@ export const DEFAULT_IDLE_GUARDS: IdleGuard[] = [
 ];
 
 // --- Conflation (tick-based coalescing of CC partial events) ---
+//
+// IMPORTANT ASSUMPTION: All three delta types (text_delta, input_json_delta,
+// thinking) are APPEND-ONLY — each delta's payload is concatenated to the
+// previous. The merge in buildMergedDelta relies on this: it produces one
+// delta with the concatenated payload. If CC ever sends replacement or
+// positional deltas, this merge would produce garbage. As of CC 2.1.37,
+// all content_block_delta payloads are strictly additive.
 
 export const CONFLATION_INTERVAL_MS = 250; // Flush merged deltas every 250ms (~4/sec)
 export const MESSAGE_BUFFER_CAP = 10_000; // Max events in replay buffer

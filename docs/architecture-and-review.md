@@ -27,7 +27,7 @@ Two processes. Browser talks to bridge via WebSocket. Bridge talks to Claude Cod
 | File | Does |
 |------|------|
 | `server/bridge.ts` | WebSocket server, spawns CC processes, routes messages. Module-level side effect (WSS starts on import). |
-| `server/bridge-logic.ts` | Pure functions: session resolution, path validation, CC CLI args. Testable. |
+| `server/bridge-logic.ts` | Pure functions: session resolution, path validation, CC CLI args, conflation helpers, idle guards. Testable. |
 | `server/folders.ts` | Scans `~/Repos`, enriches with CC session/handoff state from filesystem. |
 
 **Client application (browser, port 5173)**
@@ -148,3 +148,18 @@ All three noted the code is **well-structured for its age and scope**. Specific 
 - Correct Lit idioms (light DOM, connectedCallback classes, @query guards)
 - `bridge-logic.ts` extraction was the right call
 - State derivation in `folders.ts` encodes hard-won knowledge well
+
+## Message Replay: Two Paths
+
+There are two distinct replay mechanisms, both producing the same wire format for the adapter:
+
+| Path | When | Source | User messages from |
+|------|------|--------|--------------------|
+| **Live buffer replay** | Page refresh during active session | `session.messageBuffer` (CC stdout events) | Bridge injects at prompt time |
+| **JSONL replay** | Resuming a paused session | `parseSessionJSONL()` reads CC's `~/.claude/projects/` file | CC's own session JSONL |
+
+Both produce `{source: "cc", event: {type: "user", message: {role: "user", content: "..."}}}`.
+
+**Why two paths:** The live buffer captures events as they happen (including conflated deltas). The JSONL file is CC's own record, which has different structure (grouped by message ID, no stream_events). `parseSessionJSONL` translates the JSONL format into the same wire events the adapter expects.
+
+**Conflation note (2026-02-11):** Live buffer now stores *merged* content_block_delta events (one per 250ms tick) rather than raw token-rate deltas. JSONL replay produces no deltas at all (only complete assistant messages). Both paths work because the adapter handles either format — stream events build up `streamMessage`, complete `assistant` events replace it.
