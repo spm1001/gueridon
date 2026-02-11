@@ -86,7 +86,7 @@ export class MessageList extends LitElement {
 
 	override render() {
 		const items = this.buildRenderItems();
-		return html`<div class="flex flex-col gap-3">
+		return html`<div class="flex flex-col gap-2">
 			${repeat(
 				items,
 				(it) => it.key,

@@ -228,7 +228,7 @@ const app = document.getElementById("app");
 if (!app) throw new Error("App container not found");
 
 render(
-  html`<div class="w-full h-[100dvh] flex flex-col bg-background text-foreground overflow-hidden">
+  html`<div class="w-full bg-background text-foreground">
     ${gi}
   </div>`,
   app,

@@ -16,6 +16,9 @@
 body {
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
+  /* Prevent pull-to-refresh on mobile — scroll gestures should stay
+     within our scroll container, not trigger browser chrome. */
+  overscroll-behavior: none;
 }
 
 * {
@@ -44,6 +47,32 @@ body {
 .fixed.inset-0 button[aria-label*="Close"],
 .fixed.inset-0 button[type="button"] {
   cursor: pointer;
+}
+
+/* Mobile spacing overrides — tighten mini-lit's markdown defaults.
+   leading-relaxed (1.625) is generous for desktop, wasteful on phones.
+   mt-4 (16px) between paragraphs feels like double-spacing on a small screen. */
+.markdown-content p {
+  @apply leading-snug mt-2 first:mt-0;
+}
+.markdown-content li {
+  @apply leading-snug;
+}
+.markdown-content ul,
+.markdown-content ol {
+  @apply my-2 space-y-1;
+}
+/* Headings: tighten top margins */
+.markdown-content h1 { @apply mt-3 mb-1; }
+.markdown-content h2 { @apply mt-3 mb-1; }
+.markdown-content h3 { @apply mt-2 mb-1; }
+
+/* Prevent vertical scroll capture on code/console blocks.
+   Horizontal scroll (long lines) is fine — it doesn't intercept page scroll. */
+code-block pre,
+console-block .console-scroll {
+  overflow-y: hidden !important;
+  max-height: none !important;
 }
 
 @keyframes shimmer {

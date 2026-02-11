@@ -65,9 +65,10 @@ export class GueridonInterface extends LitElement {
 
   // --- Auto-scroll state ---
 
-  private scrollEl?: HTMLElement;
   private resizeObs?: ResizeObserver;
-  private userScrolled = false;
+  private inputBarObs?: ResizeObserver;
+  @state() private userScrolled = false;
+  private _scrollLockUntil = 0;
 
   // --- Lit lifecycle ---
 
@@ -77,35 +78,59 @@ export class GueridonInterface extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    // Host element must fill its flex parent — without this, h-full on
-    // the inner div resolves to auto and the input bar floats to the top.
-    this.classList.add("flex-1", "min-h-0");
+  }
+
+  private _onScroll = () => {
+    // Ignore scroll events caused by our own scrollTo or iOS keyboard animation
+    if (Date.now() < this._scrollLockUntil) return;
+    this.userScrolled =
+      document.documentElement.scrollHeight -
+        window.scrollY -
+        window.innerHeight >
+      50;
+  };
+
+  /** Scroll to bottom, suppressing the scroll listener briefly to avoid
+   *  iOS keyboard scroll events re-setting userScrolled mid-animation. */
+  private scrollToBottom(smooth = false) {
+    this.userScrolled = false;
+    this._scrollLockUntil = Date.now() + 800;
+    window.scrollTo({
+      top: document.documentElement.scrollHeight,
+      behavior: smooth ? "smooth" : "instant",
+    });
   }
 
   firstUpdated() {
-    this.scrollEl = this.querySelector(".gdn-scroll") as HTMLElement;
-    if (!this.scrollEl) return;
+    window.addEventListener("scroll", this._onScroll, { passive: true });
 
-    this.scrollEl.addEventListener("scroll", () => {
-      const el = this.scrollEl!;
-      this.userScrolled =
-        el.scrollHeight - el.scrollTop - el.clientHeight > 50;
-    });
-
-    const inner = this.scrollEl.querySelector(".gdn-scroll-inner");
+    const inner = this.querySelector(".gdn-scroll-inner") as HTMLElement;
     if (inner) {
       this.resizeObs = new ResizeObserver(() => {
         if (!this.userScrolled) {
-          this.scrollEl!.scrollTop = this.scrollEl!.scrollHeight;
+          this.scrollToBottom();
         }
       });
       this.resizeObs.observe(inner);
     }
+
+    // Match content padding-bottom to input bar height so the last message
+    // sits exactly above the fixed bar, not behind it.
+    const bar = this.querySelector(".gdn-input-bar") as HTMLElement;
+    if (bar && inner) {
+      this.inputBarObs = new ResizeObserver(() => {
+        inner.style.paddingBottom = `${bar.offsetHeight}px`;
+      });
+      this.inputBarObs.observe(bar);
+    }
+
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    window.removeEventListener("scroll", this._onScroll);
     this.resizeObs?.disconnect();
+    this.inputBarObs?.disconnect();
     this.unsubscribe?.();
   }
 
@@ -201,8 +226,14 @@ export class GueridonInterface extends LitElement {
         case "message_start":
         case "turn_start":
         case "turn_end":
+          this.syncState();
+          break;
+
         case "agent_start":
           this.syncState();
+          // After replay, pin to bottom — the ResizeObserver handles streaming,
+          // but replay lands all messages in one batch before the observer fires.
+          requestAnimationFrame(() => this.scrollToBottom(true));
           break;
 
         case "message_end":
@@ -290,6 +321,15 @@ export class GueridonInterface extends LitElement {
     ta.style.height = Math.min(ta.scrollHeight, 128) + "px";
   }
 
+  private handleTapInput() {
+    // Tapping the input implies intent to reply — jump to latest.
+    // Can't use focus: iOS keeps textarea focused during touch scroll,
+    // so re-tapping it doesn't fire a new focus event.
+    if (this.userScrolled) {
+      this.scrollToBottom(true);
+    }
+  }
+
   // --- Gauge helpers ---
 
   private get remaining(): number {
@@ -307,9 +347,9 @@ export class GueridonInterface extends LitElement {
 
   render() {
     return html`
-      <div class="flex flex-col h-full bg-background text-foreground">
+      <div class="flex flex-col min-h-[100dvh] bg-background text-foreground">
         <!-- Messages -->
-        <div class="flex-1 overflow-y-auto gdn-scroll">
+        <div class="flex-1">
           <div class="max-w-3xl mx-auto p-4 pb-0 gdn-scroll-inner">
             <message-list
               .messages=${this._messages}
@@ -326,8 +366,8 @@ export class GueridonInterface extends LitElement {
           </div>
         </div>
 
-        <!-- Input area -->
-        <div class="shrink-0">
+        <!-- Input area — fixed to viewport bottom -->
+        <div class="gdn-input-bar fixed bottom-0 left-0 right-0 bg-background">
           <div
             class="max-w-3xl mx-auto px-2"
             style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0.5rem))"
@@ -341,6 +381,7 @@ export class GueridonInterface extends LitElement {
                 placeholder="Message Claude…"
                 .value=${this._inputText}
                 @input=${this.handleInput}
+                @click=${this.handleTapInput}
                 @keydown=${this.handleKeydown}
               ></textarea>
 
