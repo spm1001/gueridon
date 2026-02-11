@@ -191,7 +191,7 @@ export class BridgeClient {
   dispose(): void {
     if (this.ws) {
       this.ws.removeAllListeners();
-      this.ws.close();
+      this.ws.terminate();
       this.ws = null;
     }
   }
@@ -263,7 +263,7 @@ export class BridgeClient {
 
       case "result": {
         this._isStreaming = false;
-        this.updateUsage(event.usage);
+        this.updateUsage((event.result || event).usage);
         this.cb.onStreamEnd?.();
         break;
       }
@@ -391,6 +391,7 @@ export class BridgeClient {
     if (!usage) return;
     const total =
       (usage.input_tokens || 0) +
+      (usage.output_tokens || 0) +
       (usage.cache_read_input_tokens || 0) +
       (usage.cache_creation_input_tokens || 0);
     if (total > 0) {

@@ -192,7 +192,7 @@ const client = new BridgeClient({
 
 function gauge(): string {
   if (lastUsage.inputTokens === 0) return "";
-  const pct = lastUsage.percent;
+  const pct = Math.min(lastUsage.percent, 100);
   const barWidth = 20;
   const filled = Math.round((pct / 100) * barWidth);
   const empty = barWidth - filled;
@@ -202,7 +202,7 @@ function gauge(): string {
   else if (pct >= 75) color = YELLOW;
 
   const bar = color + "█".repeat(filled) + DIM + "░".repeat(empty) + RESET;
-  return ` ${bar} ${color}${pct}%${RESET}`;
+  return ` ${bar} ${color}${lastUsage.percent}%${RESET}`;
 }
 
 function showPrompt() {
@@ -317,6 +317,7 @@ function setupPromptLoop() {
 
     if (text === "/quit" || text === "/exit") {
       console.log(`${DIM}Bye.${RESET}`);
+      rl.close();
       client.dispose();
       process.exit(0);
     }
