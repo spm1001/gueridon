@@ -20,6 +20,7 @@ import {
   isStreamDelta,
   extractDeltaInfo,
   buildMergedDelta,
+  isUserTextEcho,
   CONFLATION_INTERVAL_MS,
   MESSAGE_BUFFER_CAP,
   BACKPRESSURE_THRESHOLD,
@@ -1237,5 +1238,50 @@ describe("conflation constants", () => {
 
   it("BACKPRESSURE_THRESHOLD is 64KB", () => {
     expect(BACKPRESSURE_THRESHOLD).toBe(64 * 1024);
+  });
+});
+
+// --- isUserTextEcho ---
+
+describe("isUserTextEcho", () => {
+  it("returns true for user text message (CC echo from --replay-user-messages)", () => {
+    const event = {
+      type: "user",
+      message: { role: "user", content: "Say hello" },
+      session_id: "abc",
+      parent_tool_use_id: null,
+    };
+    expect(isUserTextEcho(event)).toBe(true);
+  });
+
+  it("returns false for user tool_result message (array content)", () => {
+    const event = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ tool_use_id: "toolu_01", type: "tool_result", content: "output", is_error: false }],
+      },
+    };
+    expect(isUserTextEcho(event)).toBe(false);
+  });
+
+  it("returns false for assistant events", () => {
+    expect(isUserTextEcho({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })).toBe(false);
+  });
+
+  it("returns false for result events", () => {
+    expect(isUserTextEcho({ type: "result" })).toBe(false);
+  });
+
+  it("returns false for system events", () => {
+    expect(isUserTextEcho({ type: "system", subtype: "init" })).toBe(false);
+  });
+
+  it("returns false for stream events", () => {
+    expect(isUserTextEcho({ type: "stream_event", event: { type: "message_start" } })).toBe(false);
+  });
+
+  it("returns false for user event with missing message", () => {
+    expect(isUserTextEcho({ type: "user" })).toBe(false);
   });
 });

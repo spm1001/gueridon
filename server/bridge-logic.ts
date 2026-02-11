@@ -452,6 +452,18 @@ export interface DeltaInfo {
 }
 
 /**
+ * Check if a CC event is a user text echo from --replay-user-messages.
+ * These are CC's echo of what the user sent — the bridge already buffers
+ * user messages when receiving prompts, so echoes are redundant in the
+ * replay buffer. Tool results (array content) are NOT echoes.
+ */
+export function isUserTextEcho(event: Record<string, unknown>): boolean {
+  if (event.type !== "user") return false;
+  const message = event.message as Record<string, unknown> | undefined;
+  return typeof message?.content === "string";
+}
+
+/**
  * Check if a CC event is a content_block_delta (the high-frequency token stream).
  * These are the only events worth conflating — everything else is structural.
  */

@@ -26,6 +26,7 @@ import {
   isStreamDelta,
   extractDeltaInfo,
   buildMergedDelta,
+  isUserTextEcho,
   type IdleSessionState,
   type PendingDelta,
 } from "./bridge-logic.js";
@@ -374,7 +375,14 @@ function wireProcessToSession(session: Session): void {
         flushPendingDeltas(session);
         const serialized = JSON.stringify({ source: "cc", event });
         broadcastSerialized(session, serialized, false);
-        pushToBuffer(session, serialized);
+        // Skip CC user text echoes from buffer — bridge already injected user
+        // messages when receiving the prompt (handleSessionMessage). CC echoes
+        // (from --replay-user-messages) are redundant in the buffer and would
+        // cause duplicate user messages during replay. Tool results (array
+        // content) are NOT echoes — they're CC's own output and must be buffered.
+        if (!isUserTextEcho(event)) {
+          pushToBuffer(session, serialized);
+        }
       }
     } catch {
       // Non-JSON output from CC (startup banners, warnings)
@@ -583,6 +591,22 @@ async function handleSessionMessage(
       // Lazy spawn: start CC process on first prompt (or respawn if dead)
       const needsResume = session.process === null && session.resumable;
       if (!ensureProcess(session, needsResume)) return;
+
+      // Buffer the user message for replay BEFORE writing to stdin.
+      // This ensures user messages appear in the replay buffer at the correct
+      // position (before the assistant's response), regardless of when CC's
+      // --replay-user-messages echo arrives on stdout.
+      const userEvent = JSON.stringify({
+        source: "cc",
+        event: { type: "user", message: { role: "user", content: msg.text } },
+      });
+      pushToBuffer(session, userEvent);
+      // Broadcast to other tabs so they see the user message immediately
+      for (const client of session.clients) {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+          client.send(userEvent);
+        }
+      }
 
       // Write prompt to CC stdin
       const envelope = JSON.stringify({
