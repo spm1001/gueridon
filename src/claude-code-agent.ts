@@ -284,7 +284,8 @@ export class ClaudeCodeAgent {
     };
     this._state.messages = [...this._state.messages, userMessage];
 
-    // Mark streaming
+    // SAFETY: Also set in startStreamMessage() for replay. Keep this —
+    // guards against double-tap between send and first message_start.
     this._state.isStreaming = true;
     this._state.error = undefined;
     this.emit({ type: "agent_start" });
@@ -448,7 +449,9 @@ export class ClaudeCodeAgent {
       timestamp: Date.now(),
     } as AgentMessage;
 
-    // Track context usage
+    // Live context tracking — gives approximate mid-turn reading during multi-turn
+    // tool use (before handleResult fires with the authoritative end-of-turn count).
+    // Both places compute the same sum; handleResult also runs compaction/band logic.
     if (msg.usage) {
       this._lastInputTokens =
         (msg.usage.input_tokens || 0) +
@@ -490,16 +493,19 @@ export class ClaudeCodeAgent {
     // During normal operation, prompt() already added the user message — skip
     // the echo to avoid duplicates.
     // CC echoes content as a plain string, not an array of blocks.
-    if (this._replayMode && typeof msg.content === "string") {
-      const userMessage: AgentMessage = {
-        role: "user",
-        content: [{ type: "text" as const, text: msg.content }],
-        timestamp: Date.now(),
-      };
-      this._state.messages = [...this._state.messages, userMessage];
+    if (typeof msg.content === "string") {
+      if (this._replayMode) {
+        const userMessage: AgentMessage = {
+          role: "user",
+          content: [{ type: "text" as const, text: msg.content }],
+          timestamp: Date.now(),
+        };
+        this._state.messages = [...this._state.messages, userMessage];
+      }
+      return; // String content is a user echo — no tool_results to process
     }
 
-    // Tool results come as user messages with tool_result content
+    // Tool results come as user messages with tool_result content (always arrays)
     for (const block of msg.content) {
       if (block.type === "tool_result") {
         const toolCallId = block.tool_use_id;
@@ -556,6 +562,8 @@ export class ClaudeCodeAgent {
   }
 
   private handleResult(event: CCEvent): void {
+    // CC emits result data in two shapes: nested under .result (from JSONL replay)
+    // or directly on the event (from live stream). Accept both.
     const result = event.result || event;
 
     // Extract contextWindow from modelUsage (CC reports per-model limits)

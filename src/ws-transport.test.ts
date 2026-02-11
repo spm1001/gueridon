@@ -227,7 +227,7 @@ describe("message dispatch", () => {
 // --- Send ---
 
 describe("send", () => {
-  it("sends prompt message as JSON", () => {
+  it("sends text prompt as JSON with text field", () => {
     const { transport } = createLobbyTransport();
     const ws = connectAndOpen(transport);
 
@@ -235,6 +235,23 @@ describe("send", () => {
 
     expect(ws.sent).toHaveLength(1);
     expect(JSON.parse(ws.sent[0])).toEqual({ type: "prompt", text: "Hello Claude" });
+  });
+
+  it("sends content array prompt with content field", () => {
+    const { transport } = createLobbyTransport();
+    const ws = connectAndOpen(transport);
+
+    const blocks = [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "abc123" } },
+      { type: "text", text: "What is this?" },
+    ];
+    transport.send(blocks as any);
+
+    expect(ws.sent).toHaveLength(1);
+    const parsed = JSON.parse(ws.sent[0]);
+    expect(parsed.type).toBe("prompt");
+    expect(parsed.content).toEqual(blocks);
+    expect(parsed.text).toBeUndefined();
   });
 
   it("fires onBridgeError when not connected", () => {
@@ -492,6 +509,26 @@ describe("processExit", () => {
     expect(received[0].subtype).toBe("error");
     expect(received[0].error).toContain("code=1");
     expect(received[0].error).toContain("signal=SIGKILL");
+  });
+
+  it("fires onProcessExit callback with code and signal", () => {
+    const onProcessExit = vi.fn();
+    const { transport } = createLobbyTransport({ onProcessExit });
+    const ws = connectAndOpen(transport);
+
+    ws.simulateMessage({ source: "bridge", type: "processExit", code: 1, signal: "SIGKILL" });
+
+    expect(onProcessExit).toHaveBeenCalledWith(1, "SIGKILL");
+  });
+
+  it("passes null for missing code/signal", () => {
+    const onProcessExit = vi.fn();
+    const { transport } = createLobbyTransport({ onProcessExit });
+    const ws = connectAndOpen(transport);
+
+    ws.simulateMessage({ source: "bridge", type: "processExit" });
+
+    expect(onProcessExit).toHaveBeenCalledWith(null, null);
   });
 
   it("clears prompt timer on processExit", () => {
