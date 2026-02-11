@@ -66,7 +66,9 @@ export class GueridonInterface extends LitElement {
   // --- Auto-scroll state ---
 
   private resizeObs?: ResizeObserver;
+  private inputBarObs?: ResizeObserver;
   @state() private userScrolled = false;
+  private _scrollLockUntil = 0;
 
   // --- Lit lifecycle ---
 
@@ -79,6 +81,8 @@ export class GueridonInterface extends LitElement {
   }
 
   private _onScroll = () => {
+    // Ignore scroll events caused by our own scrollTo or iOS keyboard animation
+    if (Date.now() < this._scrollLockUntil) return;
     this.userScrolled =
       document.documentElement.scrollHeight -
         window.scrollY -
@@ -86,24 +90,47 @@ export class GueridonInterface extends LitElement {
       50;
   };
 
+  /** Scroll to bottom, suppressing the scroll listener briefly to avoid
+   *  iOS keyboard scroll events re-setting userScrolled mid-animation. */
+  private scrollToBottom(smooth = false) {
+    this.userScrolled = false;
+    this._scrollLockUntil = Date.now() + 800;
+    window.scrollTo({
+      top: document.documentElement.scrollHeight,
+      behavior: smooth ? "smooth" : "instant",
+    });
+  }
+
   firstUpdated() {
     window.addEventListener("scroll", this._onScroll, { passive: true });
 
-    const inner = this.querySelector(".gdn-scroll-inner");
+    const inner = this.querySelector(".gdn-scroll-inner") as HTMLElement;
     if (inner) {
       this.resizeObs = new ResizeObserver(() => {
         if (!this.userScrolled) {
-          window.scrollTo(0, document.documentElement.scrollHeight);
+          this.scrollToBottom();
         }
       });
       this.resizeObs.observe(inner);
     }
+
+    // Match content padding-bottom to input bar height so the last message
+    // sits exactly above the fixed bar, not behind it.
+    const bar = this.querySelector(".gdn-input-bar") as HTMLElement;
+    if (bar && inner) {
+      this.inputBarObs = new ResizeObserver(() => {
+        inner.style.paddingBottom = `${bar.offsetHeight}px`;
+      });
+      this.inputBarObs.observe(bar);
+    }
+
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     window.removeEventListener("scroll", this._onScroll);
     this.resizeObs?.disconnect();
+    this.inputBarObs?.disconnect();
     this.unsubscribe?.();
   }
 
@@ -206,10 +233,7 @@ export class GueridonInterface extends LitElement {
           this.syncState();
           // After replay, pin to bottom — the ResizeObserver handles streaming,
           // but replay lands all messages in one batch before the observer fires.
-          this.userScrolled = false;
-          requestAnimationFrame(() => {
-            window.scrollTo(0, document.documentElement.scrollHeight);
-          });
+          requestAnimationFrame(() => this.scrollToBottom(true));
           break;
 
         case "message_end":
@@ -295,10 +319,14 @@ export class GueridonInterface extends LitElement {
     // Auto-resize: collapse to content height, cap at 8rem
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 128) + "px";
-    // Typing implies intent to see the latest — jump to bottom
+  }
+
+  private handleTapInput() {
+    // Tapping the input implies intent to reply — jump to latest.
+    // Can't use focus: iOS keeps textarea focused during touch scroll,
+    // so re-tapping it doesn't fire a new focus event.
     if (this.userScrolled) {
-      this.userScrolled = false;
-      window.scrollTo(0, document.documentElement.scrollHeight);
+      this.scrollToBottom(true);
     }
   }
 
@@ -338,8 +366,8 @@ export class GueridonInterface extends LitElement {
           </div>
         </div>
 
-        <!-- Input area — sticky to viewport bottom -->
-        <div class="sticky bottom-0 bg-background">
+        <!-- Input area — fixed to viewport bottom -->
+        <div class="gdn-input-bar fixed bottom-0 left-0 right-0 bg-background">
           <div
             class="max-w-3xl mx-auto px-2"
             style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0.5rem))"
@@ -353,6 +381,7 @@ export class GueridonInterface extends LitElement {
                 placeholder="Message Claude…"
                 .value=${this._inputText}
                 @input=${this.handleInput}
+                @click=${this.handleTapInput}
                 @keydown=${this.handleKeydown}
               ></textarea>
 
