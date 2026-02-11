@@ -17,13 +17,80 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { Model, Usage } from "@mariozechner/pi-ai";
 
+// --- Pure helpers (exported for direct testing) ---
+
+export function mapContentBlocks(blocks: any[]): any[] {
+  return blocks.map((block) => {
+    if (block.type === "text") {
+      return { type: "text", text: block.text };
+    }
+    if (block.type === "tool_use") {
+      return {
+        type: "toolCall",
+        id: block.id,
+        name: block.name,
+        arguments: block.input || {},
+      };
+    }
+    if (block.type === "thinking") {
+      return {
+        type: "thinking",
+        thinking: block.thinking,
+        thinkingSignature: block.signature,
+      };
+    }
+    return block;
+  });
+}
+
+export function mapUsage(usage: any): Usage {
+  if (!usage) return emptyUsage();
+  return {
+    input: usage.input_tokens || 0,
+    output: usage.output_tokens || 0,
+    cacheRead: usage.cache_read_input_tokens || 0,
+    cacheWrite: usage.cache_creation_input_tokens || 0,
+    totalTokens:
+      (usage.input_tokens || 0) +
+      (usage.output_tokens || 0) +
+      (usage.cache_read_input_tokens || 0) +
+      (usage.cache_creation_input_tokens || 0),
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+export function mapStopReason(
+  reason: string | null,
+): "stop" | "toolUse" | "error" | "aborted" {
+  if (reason === "tool_use") return "toolUse";
+  if (reason === "end_turn") return "stop";
+  if (reason === "max_tokens") return "stop";
+  return "stop";
+}
+
+export function emptyUsage(): Usage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
 // --- Transport interface (WebSocket later) ---
 
 export interface CCTransport {
-  send(message: string): void;
+  send(message: string | ContentBlock[]): void;
   onEvent(handler: (event: CCEvent) => void): void;
   close(): void;
 }
+
+/** Content block for multi-modal input (text + images) */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
 
 // --- Claude Code stream-json event types ---
 
@@ -78,7 +145,7 @@ export class ClaudeCodeAgent {
 
   // Context tracking (for fuel gauge)
   private _lastInputTokens = 0;
-  private _contextWindow = 200_000; // default, updated from init event
+  private _contextWindow = 200_000; // default, updated from result.modelUsage
   private _cwd = "";
   private _lastRemainingBand: "normal" | "amber" | "red" = "normal";
 
@@ -154,11 +221,10 @@ export class ClaudeCodeAgent {
   /** End replay — re-enables notifications and triggers a sync so UI renders all at once */
   endReplay(): void {
     this._replayMode = false;
-    // If CC was mid-turn when we reconnected, the adapter has a partial
-    // streamMessage but isStreaming may be false (it's set by prompt(), not
-    // stream events). Mark streaming and emit the partial so the UI picks up.
+    // If CC was mid-turn when we reconnected, the adapter has accumulated a
+    // partial streamMessage (isStreaming is already true — set by startStreamMessage
+    // during replay). Push the partial to the UI since emits were suppressed.
     if (this._state.streamMessage) {
-      this._state.isStreaming = true;
       this.emit({ type: "message_update", message: this._state.streamMessage } as any);
     }
     this.emit({ type: "agent_start" }); // triggers syncState in GueridonInterface
@@ -173,7 +239,7 @@ export class ClaudeCodeAgent {
     return () => this.listeners.delete(fn);
   }
 
-  async prompt(input: string | AgentMessage): Promise<void> {
+  async prompt(input: string | AgentMessage | ContentBlock[]): Promise<void> {
     if (!this.transport) {
       this._state.error = "Not connected";
       this.emit({ type: "agent_end", messages: this._state.messages });
@@ -186,30 +252,49 @@ export class ClaudeCodeAgent {
       console.warn("Already streaming, message will be queued by bridge");
     }
 
-    let text = typeof input === "string" ? input : this.extractText(input);
-    if (!text) return;
+    // Resolve input to either a text string or content array
+    let sendPayload: string | ContentBlock[];
+    let displayContent: any[];
 
-    // Inject one-shot context note on threshold crossings
-    if (this._contextNote) {
-      text = `${this._contextNote}\n\n${text}`;
-      this._contextNote = null;
+    if (Array.isArray(input)) {
+      // Content array (text + images) — send as-is, display text parts.
+      // Inject context note by prepending a text block if threshold crossed.
+      if (this._contextNote) {
+        sendPayload = [{ type: "text" as const, text: this._contextNote }, ...input];
+        this._contextNote = null;
+      } else {
+        sendPayload = input;
+      }
+      displayContent = input.filter((b) => b.type === "text");
+    } else {
+      let text = typeof input === "string" ? input : this.extractText(input);
+      if (!text) return;
+
+      // Inject one-shot context note on threshold crossings
+      if (this._contextNote) {
+        text = `${this._contextNote}\n\n${text}`;
+        this._contextNote = null;
+      }
+      sendPayload = text;
+      displayContent = [{ type: "text", text }];
     }
 
-    // Add user message to local state
+    // Add user message to local state (text parts only for display)
     const userMessage: AgentMessage = {
       role: "user",
-      content: [{ type: "text", text }],
+      content: displayContent,
       timestamp: Date.now(),
     };
     this._state.messages = [...this._state.messages, userMessage];
 
-    // Mark streaming
+    // SAFETY: Also set in startStreamMessage() for replay. Keep this —
+    // guards against double-tap between send and first message_start.
     this._state.isStreaming = true;
     this._state.error = undefined;
     this.emit({ type: "agent_start" });
     this.emit({ type: "turn_start" });
 
-    this.transport.send(text);
+    this.transport.send(sendPayload);
   }
 
   abort(): void {
@@ -358,22 +443,48 @@ export class ClaudeCodeAgent {
     // Build final pi AssistantMessage from CC's complete message
     const piMessage: AgentMessage = {
       role: "assistant",
-      content: this.mapContentBlocks(filteredContent),
+      content: mapContentBlocks(filteredContent),
       api: "anthropic",
       provider: "anthropic",
       model: msg.model || "claude-opus-4-6",
-      usage: this.mapUsage(msg.usage),
-      stopReason: this.mapStopReason(msg.stop_reason),
+      usage: mapUsage(msg.usage),
+      stopReason: mapStopReason(msg.stop_reason),
       timestamp: Date.now(),
     } as AgentMessage;
 
-    // Track context usage
+    // Context tracking — per-message usage is the true context size (last API call).
+    // result.usage is cumulative across all API calls in a turn, so a 3-tool turn
+    // would show ~3x the real context. We track here and skip result.usage entirely.
+    // output_tokens excluded: they'll appear as input_tokens on the next turn.
     if (msg.usage) {
+      const prevTokens = this._lastInputTokens;
       this._lastInputTokens =
         (msg.usage.input_tokens || 0) +
-        (msg.usage.output_tokens || 0) +
         (msg.usage.cache_read_input_tokens || 0) +
         (msg.usage.cache_creation_input_tokens || 0);
+
+      // Detect compaction: significant drop (>15%) in token count between turns.
+      // Minimum 20k drop avoids false positives on small sessions where token
+      // accounting jitter (e.g. after /context) easily crosses the 15% threshold.
+      const tokenDrop = prevTokens - this._lastInputTokens;
+      if (prevTokens > 0 && tokenDrop > 20_000 && this._lastInputTokens < prevTokens * 0.85) {
+        if (!this._replayMode) this.onCompaction?.(prevTokens, this._lastInputTokens);
+      }
+
+      // Track threshold crossings — inject context note for CC on band change
+      const remaining = 100 - this.contextPercent;
+      const newBand: "normal" | "amber" | "red" =
+        remaining <= 10 ? "red" : remaining <= 20 ? "amber" : "normal";
+      if (newBand !== this._lastRemainingBand) {
+        this._lastRemainingBand = newBand;
+        if (newBand === "amber") {
+          this._contextNote =
+            "[Context: ~20% remaining. Be concise. Consider suggesting a session close soon.]";
+        } else if (newBand === "red") {
+          this._contextNote =
+            "[Context: ~10% remaining. Be very concise. Suggest wrapping up and writing a handoff.]";
+        }
+      }
     }
 
     // Clear stream state, append final message
@@ -409,16 +520,19 @@ export class ClaudeCodeAgent {
     // During normal operation, prompt() already added the user message — skip
     // the echo to avoid duplicates.
     // CC echoes content as a plain string, not an array of blocks.
-    if (this._replayMode && typeof msg.content === "string") {
-      const userMessage: AgentMessage = {
-        role: "user",
-        content: [{ type: "text" as const, text: msg.content }],
-        timestamp: Date.now(),
-      };
-      this._state.messages = [...this._state.messages, userMessage];
+    if (typeof msg.content === "string") {
+      if (this._replayMode) {
+        const userMessage: AgentMessage = {
+          role: "user",
+          content: [{ type: "text" as const, text: msg.content }],
+          timestamp: Date.now(),
+        };
+        this._state.messages = [...this._state.messages, userMessage];
+      }
+      return; // String content is a user echo — no tool_results to process
     }
 
-    // Tool results come as user messages with tool_result content
+    // Tool results come as user messages with tool_result content (always arrays)
     for (const block of msg.content) {
       if (block.type === "tool_result") {
         const toolCallId = block.tool_use_id;
@@ -475,40 +589,20 @@ export class ClaudeCodeAgent {
   }
 
   private handleResult(event: CCEvent): void {
+    // CC emits result data in two shapes: nested under .result (from JSONL replay)
+    // or directly on the event (from live stream). Accept both.
     const result = event.result || event;
 
-    // Update context tracking from result usage
-    if (result.usage) {
-      const prevTokens = this._lastInputTokens;
-      this._lastInputTokens =
-        (result.usage.input_tokens || 0) +
-        (result.usage.output_tokens || 0) +
-        (result.usage.cache_read_input_tokens || 0) +
-        (result.usage.cache_creation_input_tokens || 0);
-
-      // Detect compaction: significant drop (>15%) in token count between turns.
-      // Minimum 20k drop avoids false positives on small sessions where token
-      // accounting jitter (e.g. after /context) easily crosses the 15% threshold.
-      const tokenDrop = prevTokens - this._lastInputTokens;
-      if (prevTokens > 0 && tokenDrop > 20_000 && this._lastInputTokens < prevTokens * 0.85) {
-        if (!this._replayMode) this.onCompaction?.(prevTokens, this._lastInputTokens);
-      }
-
-      // Track threshold crossings — inject context note for CC on band change
-      const remaining = 100 - this.contextPercent;
-      const newBand: "normal" | "amber" | "red" =
-        remaining <= 10 ? "red" : remaining <= 20 ? "amber" : "normal";
-      if (newBand !== this._lastRemainingBand) {
-        this._lastRemainingBand = newBand;
-        if (newBand === "amber") {
-          this._contextNote =
-            "[Context: ~20% remaining. Be concise. Consider suggesting a session close soon.]";
-        } else if (newBand === "red") {
-          this._contextNote =
-            "[Context: ~10% remaining. Be very concise. Suggest wrapping up and writing a handoff.]";
-        }
+    // Extract contextWindow from modelUsage (CC reports per-model limits)
+    if (result.modelUsage) {
+      const firstModel = Object.values(result.modelUsage)[0] as any;
+      if (firstModel?.contextWindow) {
+        this._contextWindow = firstModel.contextWindow;
       }
     }
+
+    // Context tracking is handled in handleAssistantComplete (per-message usage).
+    // result.usage is cumulative across all API calls in a turn — not used for gauge.
 
     // End streaming
     this._state.isStreaming = false;
@@ -541,11 +635,12 @@ export class ClaudeCodeAgent {
       api: "anthropic",
       provider: "anthropic",
       model: msg?.model || "claude-opus-4-6",
-      usage: this.emptyUsage(),
+      usage: emptyUsage(),
       stopReason: "stop",
       timestamp: Date.now(),
     } as AgentMessage;
 
+    this._state.isStreaming = true;
     this._state.streamMessage = streamMessage;
     this.emit({ type: "message_start", message: streamMessage });
   }
@@ -682,63 +777,4 @@ export class ClaudeCodeAgent {
     return textBlocks.map((c: any) => c.text || "").join("\n");
   }
 
-  private mapContentBlocks(blocks: any[]): any[] {
-    return blocks.map((block) => {
-      if (block.type === "text") {
-        return { type: "text", text: block.text };
-      }
-      if (block.type === "tool_use") {
-        return {
-          type: "toolCall",
-          id: block.id,
-          name: block.name,
-          arguments: block.input || {},
-        };
-      }
-      if (block.type === "thinking") {
-        return {
-          type: "thinking",
-          thinking: block.thinking,
-          thinkingSignature: block.signature,
-        };
-      }
-      return block;
-    });
-  }
-
-  private mapUsage(usage: any): Usage {
-    if (!usage) return this.emptyUsage();
-    return {
-      input: usage.input_tokens || 0,
-      output: usage.output_tokens || 0,
-      cacheRead: usage.cache_read_input_tokens || 0,
-      cacheWrite: usage.cache_creation_input_tokens || 0,
-      totalTokens:
-        (usage.input_tokens || 0) +
-        (usage.output_tokens || 0) +
-        (usage.cache_read_input_tokens || 0) +
-        (usage.cache_creation_input_tokens || 0),
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    };
-  }
-
-  private mapStopReason(
-    reason: string | null,
-  ): "stop" | "toolUse" | "error" | "aborted" {
-    if (reason === "tool_use") return "toolUse";
-    if (reason === "end_turn") return "stop";
-    if (reason === "max_tokens") return "stop";
-    return "stop";
-  }
-
-  private emptyUsage(): Usage {
-    return {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    };
-  }
 }

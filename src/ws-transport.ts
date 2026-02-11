@@ -6,7 +6,7 @@
  * remote end got the message).
  */
 
-import type { CCTransport, CCEvent } from "./claude-code-agent.js";
+import type { CCTransport, CCEvent, ContentBlock } from "./claude-code-agent.js";
 
 // --- Connection state ---
 
@@ -104,12 +104,17 @@ export class WSTransport implements CCTransport {
 
   // --- CCTransport interface ---
 
-  send(message: string): void {
+  send(message: string | ContentBlock[]): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.options.onBridgeError?.("Not connected to bridge");
       return;
     }
-    this.ws.send(JSON.stringify({ type: "prompt", text: message }));
+    // Content arrays (text + images) use the content field; plain text uses text field.
+    // Bridge passes content arrays directly to CC stdin as-is.
+    const payload = Array.isArray(message)
+      ? { type: "prompt", content: message }
+      : { type: "prompt", text: message };
+    this.ws.send(JSON.stringify(payload));
     this.startPromptTimer();
   }
 

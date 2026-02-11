@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ClaudeCodeAgent, type CCTransport, type AskUserQuestionData } from "./claude-code-agent.js";
+import { ClaudeCodeAgent, type CCTransport, type AskUserQuestionData, mapContentBlocks, mapUsage, mapStopReason } from "./claude-code-agent.js";
 
 let agent: ClaudeCodeAgent;
 let events: any[];
@@ -14,18 +14,18 @@ beforeEach(() => {
   agent.subscribe((e) => events.push({ ...e }));
 });
 
-// --- Pure helper methods (tested via as any) ---
+// --- Pure helper functions (exported, tested directly) ---
 
 describe("mapContentBlocks", () => {
   it("maps text blocks unchanged", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "text", text: "hello" },
     ]);
     expect(result).toEqual([{ type: "text", text: "hello" }]);
   });
 
   it("maps tool_use to toolCall", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } },
     ]);
     expect(result).toEqual([
@@ -34,14 +34,14 @@ describe("mapContentBlocks", () => {
   });
 
   it("maps tool_use with missing input to empty object", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "tool_use", id: "toolu_1", name: "Read" },
     ]);
     expect(result[0].arguments).toEqual({});
   });
 
   it("maps thinking blocks", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "thinking", thinking: "Let me think...", signature: "sig_abc" },
     ]);
     expect(result).toEqual([
@@ -50,14 +50,14 @@ describe("mapContentBlocks", () => {
   });
 
   it("passes unknown block types through", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "image", data: "..." },
     ]);
     expect(result).toEqual([{ type: "image", data: "..." }]);
   });
 
   it("handles mixed content blocks", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "thinking", thinking: "hmm", signature: "s" },
       { type: "text", text: "Hello" },
       { type: "tool_use", id: "t1", name: "Bash", input: { command: "echo" } },
@@ -71,7 +71,7 @@ describe("mapContentBlocks", () => {
 
 describe("mapUsage", () => {
   it("maps full usage object", () => {
-    const result = (agent as any).mapUsage({
+    const result = mapUsage({
       input_tokens: 100,
       output_tokens: 50,
       cache_read_input_tokens: 200,
@@ -85,12 +85,12 @@ describe("mapUsage", () => {
   });
 
   it("returns empty usage for null", () => {
-    const result = (agent as any).mapUsage(null);
+    const result = mapUsage(null);
     expect(result.totalTokens).toBe(0);
   });
 
   it("handles partial usage (missing fields default to 0)", () => {
-    const result = (agent as any).mapUsage({ input_tokens: 50 });
+    const result = mapUsage({ input_tokens: 50 });
     expect(result.input).toBe(50);
     expect(result.output).toBe(0);
     expect(result.totalTokens).toBe(50);
@@ -99,23 +99,23 @@ describe("mapUsage", () => {
 
 describe("mapStopReason", () => {
   it("maps tool_use to toolUse", () => {
-    expect((agent as any).mapStopReason("tool_use")).toBe("toolUse");
+    expect(mapStopReason("tool_use")).toBe("toolUse");
   });
 
   it("maps end_turn to stop", () => {
-    expect((agent as any).mapStopReason("end_turn")).toBe("stop");
+    expect(mapStopReason("end_turn")).toBe("stop");
   });
 
   it("maps max_tokens to stop", () => {
-    expect((agent as any).mapStopReason("max_tokens")).toBe("stop");
+    expect(mapStopReason("max_tokens")).toBe("stop");
   });
 
   it("maps null to stop", () => {
-    expect((agent as any).mapStopReason(null)).toBe("stop");
+    expect(mapStopReason(null)).toBe("stop");
   });
 
   it("maps unknown reason to stop", () => {
-    expect((agent as any).mapStopReason("something_else")).toBe("stop");
+    expect(mapStopReason("something_else")).toBe("stop");
   });
 });
 
@@ -634,36 +634,75 @@ describe("tool use streaming", () => {
 });
 
 describe("context tracking", () => {
-  it("updates contextPercent from result usage", () => {
+  it("updates contextPercent from assistant message usage (not cumulative result)", () => {
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "OK" }],
+        usage: { input_tokens: 100000, output_tokens: 10000, cache_read_input_tokens: 50000, cache_creation_input_tokens: 0 },
+      },
+    });
+
+    // Total = input + cache_read (no output_tokens, no cache_creation here)
+    // = 100000 + 50000 = 150000
+    // contextPercent = 150000 / 200000 * 100 = 75%
+    expect(agent.lastInputTokens).toBe(150000);
+    expect(agent.contextPercent).toBe(75);
+  });
+
+  it("extracts contextWindow from result.modelUsage", () => {
+    expect(agent.contextWindow).toBe(200_000); // default
+
     agent.handleCCEvent({
       type: "result",
       subtype: "success",
-      usage: { input_tokens: 100000, output_tokens: 10000, cache_read_input_tokens: 50000, cache_creation_input_tokens: 0 },
+      usage: { input_tokens: 50000, output_tokens: 5000 },
+      modelUsage: {
+        "claude-opus-4-6": {
+          contextWindow: 200000,
+          maxOutputTokens: 32000,
+          inputTokens: 50000,
+          outputTokens: 5000,
+        },
+      },
     });
 
-    // Total tokens = 100000 + 10000 + 50000 = 160000
-    // contextPercent = 160000 / 200000 * 100 = 80%
-    expect(agent.lastInputTokens).toBe(160000);
-    expect(agent.contextPercent).toBe(80);
+    expect(agent.contextWindow).toBe(200000);
+    // contextPercent is tracked from assistant messages, not result — remains 0 here
+  });
+
+  it("updates contextWindow when model reports different value", () => {
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 50000, output_tokens: 0 },
+      modelUsage: {
+        "claude-sonnet-4-5": {
+          contextWindow: 180000,
+          maxOutputTokens: 16000,
+        },
+      },
+    });
+
+    expect(agent.contextWindow).toBe(180000);
   });
 
   it("detects compaction on >15% token drop", () => {
     let compactionArgs: [number, number] | null = null;
     agent.onCompaction = (from, to) => { compactionArgs = [from, to]; };
 
-    // First result: 100k tokens
+    // First assistant message: 100k input tokens
     agent.handleCCEvent({
-      type: "result",
-      subtype: "success",
-      usage: { input_tokens: 100000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "a" }], usage: { input_tokens: 100000, output_tokens: 0 } },
     });
     expect(compactionArgs).toBeNull();
 
-    // Second result: 50k tokens (50% drop)
+    // Second assistant message: 50k input tokens (50% drop)
     agent.handleCCEvent({
-      type: "result",
-      subtype: "success",
-      usage: { input_tokens: 50000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "b" }], usage: { input_tokens: 50000, output_tokens: 0 } },
     });
     expect(compactionArgs).toEqual([100000, 50000]);
   });
@@ -673,14 +712,14 @@ describe("context tracking", () => {
     agent.onCompaction = () => { fired = true; };
 
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 100000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "a" }], usage: { input_tokens: 100000, output_tokens: 0 } },
     });
 
     // 10% drop — should NOT trigger
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 90000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "b" }], usage: { input_tokens: 90000, output_tokens: 0 } },
     });
 
     expect(fired).toBe(false);
@@ -689,8 +728,8 @@ describe("context tracking", () => {
   it("sets context note on amber band crossing (80%)", () => {
     // Push to 82% usage: 164000 / 200000
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 164000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 164000, output_tokens: 0 } },
     });
 
     // Context note is private — test via prompt injection
@@ -706,11 +745,37 @@ describe("context tracking", () => {
     expect(sent[0]).toContain("20% remaining");
   });
 
+  it("injects context note into content array prompts", () => {
+    // Push to 82% usage to trigger amber note
+    agent.handleCCEvent({
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 164000, output_tokens: 0 } },
+    });
+
+    const sent: any[] = [];
+    agent.connectTransport({
+      send: (msg: any) => sent.push(msg),
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    // Send content array — note should be prepended as text block
+    agent.prompt([
+      { type: "image" as const, source: { type: "base64" as const, media_type: "image/png", data: "abc" } },
+      { type: "text" as const, text: "describe" },
+    ]);
+
+    expect(Array.isArray(sent[0])).toBe(true);
+    expect(sent[0]).toHaveLength(3); // note + image + text
+    expect(sent[0][0].type).toBe("text");
+    expect(sent[0][0].text).toContain("[Context:");
+  });
+
   it("sets context note on red band crossing (90%)", () => {
     // Push to 92% usage: 184000 / 200000
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 184000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 184000, output_tokens: 0 } },
     });
 
     const sent: string[] = [];
@@ -861,6 +926,57 @@ describe("prompt guards", () => {
   });
 });
 
+describe("prompt with content arrays", () => {
+  it("sends content array via transport", () => {
+    let sent: any = null;
+    agent.connectTransport({
+      send: (msg: any) => { sent = msg; },
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    const blocks = [
+      { type: "image" as const, source: { type: "base64" as const, media_type: "image/png", data: "abc123" } },
+      { type: "text" as const, text: "What is this?" },
+    ];
+    agent.prompt(blocks);
+
+    expect(Array.isArray(sent)).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(sent[0].type).toBe("image");
+    expect(sent[1].type).toBe("text");
+  });
+
+  it("adds only text parts to message history for display", () => {
+    agent.connectTransport({
+      send: () => {},
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    agent.prompt([
+      { type: "image" as const, source: { type: "base64" as const, media_type: "image/png", data: "abc" } },
+      { type: "text" as const, text: "Describe this" },
+    ]);
+
+    const userMsg = agent.state.messages[0];
+    expect(userMsg.role).toBe("user");
+    expect(userMsg.content).toHaveLength(1);
+    expect(userMsg.content[0].text).toBe("Describe this");
+  });
+
+  it("sets isStreaming on content array prompt", () => {
+    agent.connectTransport({
+      send: () => {},
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    agent.prompt([{ type: "text" as const, text: "hello" }]);
+    expect(agent.state.isStreaming).toBe(true);
+  });
+});
+
 describe("reset", () => {
   it("clears messages", () => {
     agent.handleCCEvent({
@@ -911,9 +1027,8 @@ describe("reset", () => {
 
   it("clears context tracking", () => {
     agent.handleCCEvent({
-      type: "result",
-      subtype: "success",
-      usage: { input_tokens: 150000, output_tokens: 10000 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 150000, output_tokens: 10000 } },
     });
     expect(agent.contextPercent).toBeGreaterThan(0);
 
@@ -991,16 +1106,16 @@ describe("reset", () => {
   it("resets context band so notes fire again", () => {
     // Push to amber
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 164000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 164000, output_tokens: 0 } },
     });
 
     agent.reset();
 
     // Push to amber again — should set note again since band was reset
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 164000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 164000, output_tokens: 0 } },
     });
 
     const sent: string[] = [];
@@ -1198,15 +1313,13 @@ describe("replay mode", () => {
 
   it("context gauge is available after replay ends", () => {
     agent.startReplay();
+    // Context is tracked from assistant messages, not result events
     agent.handleCCEvent({
-      type: "result",
-      result: {
-        usage: {
-          input_tokens: 50000,
-          output_tokens: 5000,
-          cache_read_input_tokens: 10000,
-          cache_creation_input_tokens: 0,
-        },
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "replayed" }],
+        usage: { input_tokens: 50000, output_tokens: 5000, cache_read_input_tokens: 10000, cache_creation_input_tokens: 0 },
       },
     });
     agent.endReplay();

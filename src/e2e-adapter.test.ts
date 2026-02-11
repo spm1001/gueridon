@@ -98,7 +98,7 @@ describe("end-to-end: text-only turn", () => {
 
     // Phase 2: stream starts
     agent.handleCCEvent(messageStart());
-    expect(agent.state.isStreaming).toBe(false); // isStreaming set by prompt(), not stream
+    expect(agent.state.isStreaming).toBe(true); // isStreaming set by stream events (and prompt() as guard)
     expect(agent.state.streamMessage).not.toBeNull();
     expect(agent.state.streamMessage?.role).toBe("assistant");
 
@@ -368,25 +368,31 @@ describe("end-to-end: multi-turn conversation", () => {
     expect(agent.state.messages).toHaveLength(6);
     expect(agent.state.isStreaming).toBe(false);
 
-    // Context tracking updated
-    expect(agent.lastInputTokens).toBe(3100); // 3000 + 100
-    expect(agent.contextPercent).toBeCloseTo(1.55, 1);
+    // Context tracking from assistant message (excludes output_tokens)
+    expect(agent.lastInputTokens).toBe(3000);
+    expect(agent.contextPercent).toBeCloseTo(1.5, 1);
   });
 });
 
 describe("end-to-end: context tracking across turns", () => {
-  it("detects compaction when tokens drop significantly between results", () => {
+  it("detects compaction when tokens drop significantly between turns", () => {
     let compacted: [number, number] | null = null;
     agent.onCompaction = (from, to) => { compacted = [from, to]; };
 
-    // Turn 1 result: 150k tokens
-    agent.handleCCEvent(result({ input_tokens: 140000, output_tokens: 10000 }));
+    // Turn 1: 140k input tokens
+    agent.handleCCEvent(assistantComplete(
+      [{ type: "text", text: "long response" }], "end_turn",
+      { input_tokens: 140000, output_tokens: 10000 },
+    ));
     expect(compacted).toBeNull();
-    expect(agent.contextPercent).toBe(75); // 150k / 200k
+    expect(agent.contextPercent).toBe(70); // 140k / 200k (no output_tokens)
 
-    // Turn 2 result: 80k tokens (compacted)
-    agent.handleCCEvent(result({ input_tokens: 70000, output_tokens: 10000 }));
-    expect(compacted).toEqual([150000, 80000]);
-    expect(agent.contextPercent).toBe(40);
+    // Turn 2: 70k input tokens (compacted)
+    agent.handleCCEvent(assistantComplete(
+      [{ type: "text", text: "after compaction" }], "end_turn",
+      { input_tokens: 70000, output_tokens: 10000 },
+    ));
+    expect(compacted).toEqual([140000, 70000]);
+    expect(agent.contextPercent).toBe(35);
   });
 });
