@@ -18,14 +18,14 @@ The bridge spawns `claude -p` with `cwd` set to the chosen directory.
 
 ## Permissions
 
-**Use `--dangerously-skip-permissions`.** No interactive permission gate in stream-json mode.
+**Migrate to `--allowed-tools` whitelist** (gdn-tedaje). Previously used `--dangerously-skip-permissions` — this worked but bypasses all permission gates indiscriminately.
 
-The mobile UI surfaces all tool executions (tool name, arguments, result) so the user can see what's happening. If something looks wrong, user can:
-- Soft abort (stop rendering, let backend finish)
-- Hard abort (kill process, resume later)
-- Send a corrective message
+The `--allowed-tools` pattern (proven in persistent-assistant) gives us:
+- **Whitelisted tools run without prompts** — same UX as `--dangerously-skip-permissions` for safe tools
+- **Non-whitelisted tools trigger `permission_denials`** — surfaces to mobile UI for user approval
+- **No `--dangerously-skip-permissions` flag needed** — cleaner security posture
 
-Per-session tool restriction via `--allowedTools` is available if needed for specific contexts.
+The mobile UI continues to surface all tool executions in real-time. For whitelisted tools, user observes and can abort. For non-whitelisted tools (e.g., Bash), user explicitly approves before execution.
 
 ## Model Selection
 
@@ -63,13 +63,14 @@ claude -p \
   --include-partial-messages \
   --replay-user-messages \
   --session-id <browser-session-uuid> \
-  --dangerously-skip-permissions \
-  --allow-dangerously-skip-permissions
+  --allowed-tools "Read,Edit,Write,Glob,Grep,Task,TaskOutput,WebFetch,WebSearch,NotebookEdit,Skill,EnterPlanMode,ExitPlanMode,AskUserQuestion,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop" \
+  --permission-mode default
 ```
+
+Note: `--dangerously-skip-permissions` replaced by `--allowed-tools` whitelist (gdn-tedaje). Bash intentionally excluded — requires user approval via mobile UI.
 
 Optional per-session:
 - `--append-system-prompt "User is on mobile device"` — mobile context
-- `--allowedTools "..."` — tool restriction
 - `--mcp-config "..."` — additional MCP servers
 
 ## UI Elements
@@ -113,15 +114,23 @@ Coach the model via `--append-system-prompt`: "AskUserQuestion will error in thi
 
 This is strictly better than David's Telegram approach (where AskUserQuestion is just text) because we render structured options as tap targets. Zero typing on phone keyboard.
 
-## Permission Model (revised)
+## Permission Model (revised 2026-02-11)
 
-Informed by persistent-assistant's approach:
+Informed by persistent-assistant's approach and empirical testing of `--allowed-tools`.
 
-**Option A (simple, like David's):** Use `--allowedTools` to restrict dangerous tools. When `permission_denials` appears in the result, show the user what was blocked. User approves → re-run with the tool added. Conversation-level permissions.
+**Previous decision:** Option B (observe and intervene with `--dangerously-skip-permissions`).
 
-**Option B (our approach, better UX):** Use `--dangerously-skip-permissions` + show all tool executions in real-time. User watches and intervenes if needed. No denial/re-run cycle.
+**Revised decision:** Hybrid — `--allowed-tools` whitelist + observe-and-intervene for whitelisted tools + approval gate for non-whitelisted.
 
-**Decision:** Start with Option B (observe and intervene). Consider adding Option A for specific contexts where you want explicit gates (e.g., production server access).
+The key insight: `--allowed-tools` is **additive, not restrictive**. All standard tools remain visible to the model; the flag controls which are auto-approved. Non-whitelisted tools trigger `permission_denials` in the result event with full tool input — the bridge can surface these for user approval without re-running.
+
+| Tool category | Behavior | Mobile UX |
+|--------------|----------|-----------|
+| Whitelisted (Read, Edit, Write, Glob, Grep, Task, etc.) | Auto-approved, runs immediately | User observes in real-time, can abort |
+| Non-whitelisted (Bash, potentially others) | Denied, appears in `permission_denials` | User sees what was attempted, taps to approve |
+| AskUserQuestion | In whitelist but **still denied by -p mode** | Bridge intercepts `tool_use` from stream, renders native UI |
+
+This gives us DB's security model with our real-time streaming UX. Best of both.
 
 ## Reference: persistent-assistant
 

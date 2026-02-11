@@ -228,13 +228,47 @@ This is the graceful shutdown path — lets the response complete, then clean ex
 
 **`permission_denials`** appears in the `result` event (always an array, usually empty). If a tool was attempted but blocked, it shows up here post-hoc.
 
-**Deny-and-notify pattern (tested, doesn't work):** Attempted to use `permission_denials` in the result event to surface blocked actions. However:
+**Deny-and-notify pattern (tested, doesn't work with `--disallowedTools`):** Attempted to use `permission_denials` in the result event to surface blocked actions. However:
 - Deny lists remove tools from the model's view entirely — it never attempts them
 - `permission_denials` is always empty because the model never calls denied tools
 - The model routes around restrictions: Bash denied → uses Task subagent → Bash subagent runs it. Task denied → uses Skill. Everything denied → fakes the output as text.
 - Pattern-based restrictions (e.g., `Bash(git:*)`) were not enforced in testing
 
-**Decision for the bridge:** Use `--dangerously-skip-permissions`. Stream all tool executions to the mobile UI so the user can see what's happening in real time. User can abort if needed. This is the "observe and intervene" pattern — better UX than permission gates on mobile, and it's the only model that actually works given how resourceful the model is at routing around restrictions.
+### Verified: --allowed-tools Semantics (2026-02-11)
+
+`--allowed-tools` is **additive, not restrictive**. It auto-approves listed tools; unlisted tools remain available but require permission (and in `-p` mode, permission = denial).
+
+Test: `--allowed-tools AskUserQuestion` (only AskUserQuestion listed). Init event showed all 22 standard tools, not just AskUserQuestion. The flag adds to the default set.
+
+This is how persistent-assistant's permission routing works:
+1. `--allowed-tools Read,Edit,Write,Glob,Grep,...` (whitelist, excluding Bash)
+2. CC tries Bash → not in allowed list → **denied** → appears in `permission_denials`
+3. Bridge surfaces denial to user (Telegram approval prompt)
+4. User approves → bridge retries with Bash added to `--allowed-tools`
+
+**`--allowed-tools` + `permission_denials` = working deny-and-notify.** Unlike `--disallowedTools` (which hides tools entirely), `--allowed-tools` leaves all tools visible but gates execution. The model attempts the tool, gets denied, and the denial appears in the result event with full tool input.
+
+### Verified: AskUserQuestion Two-Gate Behavior (2026-02-11)
+
+AskUserQuestion has **two permission gates**, and `--allowed-tools` only bypasses the first:
+
+| Gate | What it controls | `--allowed-tools` bypasses? |
+|------|-----------------|---------------------------|
+| **Tool availability** (API level) | Whether CC presents the tool to the model | Yes — AskUserQuestion appears in tool list |
+| **Tool execution** (`-p` mode) | Whether CC executes the tool_use | **No** — always denied in `-p` mode |
+
+Tested with `--allowed-tools AskUserQuestion --permission-mode default`:
+- CC generated a proper AskUserQuestion tool_use (3 structured questions, options, multiSelect)
+- Tool execution returned `is_error: true`, content: `"Answer questions?"`
+- The `"Answer questions?"` string is the TUI permission prompt leaking as error content
+- AskUserQuestion appears in `permission_denials` in the result event
+- CC gracefully degraded: took a second turn reformulating the question as text
+
+**stdin cannot inject tool_results.** Stream-json input accepts only `type: "user"` and `type: "control"` messages. Tool execution is internal to CC — there is no mechanism to externally answer an AskUserQuestion via stdin.
+
+**The deny-intercept-render pattern is confirmed necessary** regardless of flags. The valuable part: CC generates excellent structured question data (questions, options, multiSelect) that the bridge intercepts from the stream for native UI rendering.
+
+**Decision for the bridge:** Migrate from `--dangerously-skip-permissions` to `--allowed-tools` whitelist (gdn-tedaje). Retains observe-and-intervene UX for whitelisted tools, adds permission routing for non-whitelisted tools, and the AskUserQuestion intercept pattern is unchanged.
 
 ## Verified: MCP Tool Use
 
