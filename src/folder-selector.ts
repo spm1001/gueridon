@@ -9,16 +9,18 @@ import { html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
 import { DialogHeader, DialogContent } from "@mariozechner/mini-lit/dist/Dialog.js";
-import type { FolderInfo, FolderState } from "./ws-transport.js";
+import type { FolderInfo, FolderState, FolderActivity } from "./ws-transport.js";
 
 @customElement("folder-selector")
 export class FolderSelector extends DialogBase {
   @state() folders: FolderInfo[] = [];
   @state() private filter = "";
   @state() private connectingPath: string | null = null;
+  @state() private creatingFolder = false;
 
   private onSelectCallback?: (folder: FolderInfo) => void;
   private onCloseCallback?: () => void;
+  private onNewFolderCallback?: () => void;
 
   // Dialog dimensions — nearly full screen on mobile
   protected override modalWidth = "min(480px, 92vw)";
@@ -29,11 +31,13 @@ export class FolderSelector extends DialogBase {
     folders: FolderInfo[],
     onSelect: (folder: FolderInfo) => void,
     onClose?: () => void,
+    onNewFolder?: () => void,
   ): FolderSelector {
     const dialog = new FolderSelector();
     dialog.folders = folders;
     dialog.onSelectCallback = onSelect;
     dialog.onCloseCallback = onClose;
+    dialog.onNewFolderCallback = onNewFolder;
     dialog.open();
     return dialog;
   }
@@ -43,14 +47,26 @@ export class FolderSelector extends DialogBase {
     this.folders = folders;
   }
 
+  /** Transition from "Creating…" to "connecting…" after folder is created. */
+  folderCreated(path: string) {
+    this.creatingFolder = false;
+    this.connectingPath = path;
+  }
+
   private handleSelect(folder: FolderInfo) {
     this.connectingPath = folder.path;
     this.onSelectCallback?.(folder);
     // Don't close yet — main.ts closes on successful session connect
   }
 
+  /** Reset creating state on error so user can retry. */
+  resetCreating() {
+    this.creatingFolder = false;
+  }
+
   override close() {
     this.connectingPath = null;
+    this.creatingFolder = false;
     this.filter = "";
     super.close();
     this.onCloseCallback?.();
@@ -93,10 +109,10 @@ export class FolderSelector extends DialogBase {
     }
   }
 
-  private stateLabel(s: FolderState): string {
+  private stateLabel(s: FolderState, activity: FolderActivity): string {
     switch (s) {
       case "active":
-        return "Active";
+        return activity === "working" ? "Working…" : "Waiting for you";
       case "paused":
         return "Paused";
       case "closed":
@@ -134,6 +150,27 @@ export class FolderSelector extends DialogBase {
             />
           </div>
 
+          <!-- New folder -->
+          ${this.onNewFolderCallback
+            ? html`
+                <div class="px-4 pb-2 shrink-0">
+                  <button
+                    class="w-full px-3 py-2.5 rounded-lg text-sm font-medium
+                           bg-primary/10 text-primary
+                           active:bg-primary/20 transition-colors
+                           disabled:opacity-50"
+                    ?disabled=${this.creatingFolder || !!this.connectingPath}
+                    @click=${() => {
+                      this.creatingFolder = true;
+                      this.onNewFolderCallback?.();
+                    }}
+                  >
+                    ${this.creatingFolder ? "Creating…" : "+ New folder"}
+                  </button>
+                </div>
+              `
+            : nothing}
+
           <!-- Folder list -->
           <div
             class="flex-1 overflow-y-auto overscroll-contain"
@@ -164,7 +201,7 @@ export class FolderSelector extends DialogBase {
     const isConnecting = this.connectingPath === folder.path;
     const dot = this.stateColor(folder.state);
     const ago = folder.lastActive ? this.timeAgo(folder.lastActive) : null;
-    const label = this.stateLabel(folder.state);
+    const label = this.stateLabel(folder.state, folder.activity);
 
     return html`
       <button

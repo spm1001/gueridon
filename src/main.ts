@@ -85,6 +85,10 @@ function openFolderDialog(folders: FolderInfo[]) {
       folderDialog = null;
       connectingFromDialog = null;
     },
+    () => {
+      // New folder requested
+      transport.createFolder();
+    },
   );
 }
 
@@ -123,6 +127,15 @@ const transport = new WSTransport({
     }
   },
 
+  onFolderCreated: (folder) => {
+    // New folder created by bridge — connect to it automatically
+    connectingFromDialog = folder.path;
+    folderDialog?.folderCreated(folder.path);
+    agent.reset();
+    gi.setCwd(folder.name);
+    transport.connectToFolder(folder.path);
+  },
+
   onFolderConnected: (sessionId, path) => {
     const name = pathToName(path);
     storeFolder(path, name);
@@ -154,7 +167,8 @@ const transport = new WSTransport({
   onBridgeError: (err) => {
     console.error(`[guéridon] bridge error: ${err}`);
     // Connect-related errors handled by onFolderConnectFailed.
-    // Other errors (prompt timeout, etc.) logged only.
+    // Reset folder creation state so user can retry.
+    folderDialog?.resetCreating();
   },
 
   onHistoryStart: () => agent.startReplay(),

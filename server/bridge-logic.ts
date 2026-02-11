@@ -280,23 +280,33 @@ export function parseSessionJSONL(content: string): string[] {
 
 // --- Active process map ---
 
-/** Minimal session shape needed for getActiveProcesses. */
+/** Minimal session shape needed for getActiveSessions. */
 export interface SessionProcessInfo {
   folder: string;
   process: { exitCode: number | null } | null;
+  turnInProgress: boolean;
+}
+
+/** Runtime session info for folder scanner. */
+export interface ActiveSessionInfo {
+  sessionId: string;
+  activity: "working" | "waiting";
 }
 
 /**
- * Build a map of folder path → session ID for folders with running CC processes.
- * Used by scanFolders to mark active folders.
+ * Build a map of folder path → session info for folders with running CC processes.
+ * Used by scanFolders to mark active folders with activity state.
  */
-export function getActiveProcesses(
+export function getActiveSessions(
   sessions: Map<string, SessionProcessInfo>,
-): Map<string, string> {
-  const active = new Map<string, string>();
+): Map<string, ActiveSessionInfo> {
+  const active = new Map<string, ActiveSessionInfo>();
   for (const [id, session] of sessions) {
     if (session.process && session.process.exitCode === null) {
-      active.set(session.folder, id);
+      active.set(session.folder, {
+        sessionId: id,
+        activity: session.turnInProgress ? "working" : "waiting",
+      });
     }
   }
   return active;

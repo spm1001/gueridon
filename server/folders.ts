@@ -1,19 +1,25 @@
 import { readdir, stat, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
+import type { ActiveSessionInfo } from "./bridge-logic.js";
 
 // --- Types ---
 
 export type FolderState = "active" | "paused" | "closed" | "fresh";
 
+/** What the CC process is doing right now (only meaningful when state is "active"). */
+export type FolderActivity = "working" | "waiting" | null;
+
 export interface FolderInfo {
   name: string; // "gueridon"
   path: string; // "/Users/modha/Repos/gueridon"
   state: FolderState;
+  activity: FolderActivity; // "working" = streaming, "waiting" = idle, null = no process
   sessionId: string | null; // most recent CC session UUID (for --resume)
   lastActive: string | null; // ISO timestamp from session file mtime
   handoffPurpose: string | null; // from latest handoff .md
 }
+
 
 // --- Config ---
 
@@ -165,11 +171,11 @@ export async function getLatestHandoff(
 /**
  * Scan SCAN_ROOT for directories and enrich each with session state.
  *
- * @param activeProcesses - Map of folder path → sessionId for currently
+ * @param activeSessions - Map of folder path → session info for currently
  *   running CC processes (from the bridge's runtime state).
  */
 export async function scanFolders(
-  activeProcesses: Map<string, string>,
+  activeSessions: Map<string, ActiveSessionInfo>,
 ): Promise<FolderInfo[]> {
   let entries: string[];
   try {
@@ -196,14 +202,15 @@ export async function scanFolders(
     }
 
     // Check runtime state first (active processes)
-    const activeSessionId = activeProcesses.get(fullPath);
-    if (activeSessionId) {
+    const activeInfo = activeSessions.get(fullPath);
+    if (activeInfo) {
       const handoff = await getLatestHandoff(fullPath);
       folders.push({
         name,
         path: fullPath,
         state: "active",
-        sessionId: activeSessionId,
+        activity: activeInfo.activity,
+        sessionId: activeInfo.sessionId,
         lastActive: new Date().toISOString(),
         handoffPurpose: handoff?.purpose ?? null,
       });
@@ -226,6 +233,7 @@ export async function scanFolders(
         name,
         path: fullPath,
         state: "closed",
+        activity: null,
         sessionId: session?.id ?? null,
         lastActive: (session?.lastActive ?? handoff.mtime).toISOString(),
         handoffPurpose: handoff.purpose,
@@ -236,6 +244,7 @@ export async function scanFolders(
         name,
         path: fullPath,
         state: "paused",
+        activity: null,
         sessionId: session.id,
         lastActive: session.lastActive.toISOString(),
         handoffPurpose: null,
@@ -245,6 +254,7 @@ export async function scanFolders(
         name,
         path: fullPath,
         state: "fresh",
+        activity: null,
         sessionId: null,
         lastActive: null,
         handoffPurpose: null,

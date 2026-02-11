@@ -312,11 +312,12 @@ describe("scanFolders", () => {
     addDir(REPOS, ["alpha"]);
     addFolder("alpha");
 
-    const active = new Map([[join(REPOS, "alpha"), "active-sess-id"]]);
+    const active = new Map([[join(REPOS, "alpha"), { sessionId: "active-sess-id", activity: "waiting" as const }]]);
     const result = await scanFolders(active);
 
     expect(result[0].state).toBe("active");
     expect(result[0].sessionId).toBe("active-sess-id");
+    expect(result[0].activity).toBe("waiting");
   });
 
   it("active folder shows handoff purpose if one exists", async () => {
@@ -329,10 +330,11 @@ describe("scanFolders", () => {
       },
     });
 
-    const active = new Map([[join(REPOS, "alpha"), "new-sess"]]);
+    const active = new Map([[join(REPOS, "alpha"), { sessionId: "new-sess", activity: "working" as const }]]);
     const result = await scanFolders(active);
 
     expect(result[0].state).toBe("active");
+    expect(result[0].activity).toBe("working");
     expect(result[0].handoffPurpose).toBe("Previous work");
   });
 
@@ -411,7 +413,7 @@ describe("scanFolders", () => {
     });
     addFolder("active-proj");
 
-    const active = new Map([[join(REPOS, "active-proj"), "a-sess"]]);
+    const active = new Map([[join(REPOS, "active-proj"), { sessionId: "a-sess", activity: "waiting" as const }]]);
     const result = await scanFolders(active);
 
     expect(result.map((f) => f.state)).toEqual([

@@ -15,11 +15,13 @@ export type ConnectionState = "connecting" | "lobby" | "connected" | "disconnect
 // --- Folder types (mirrors server/folders.ts for typed API) ---
 
 export type FolderState = "active" | "paused" | "closed" | "fresh";
+export type FolderActivity = "working" | "waiting" | null;
 
 export interface FolderInfo {
   name: string;
   path: string;
   state: FolderState;
+  activity: FolderActivity;
   sessionId: string | null;
   lastActive: string | null;
   handoffPurpose: string | null;
@@ -54,6 +56,8 @@ export interface WSTransportOptions {
   onFolderConnected?: (sessionId: string, path: string) => void;
   /** Called when connectToFolder fails after retries/timeout */
   onFolderConnectFailed?: (reason: string, path: string) => void;
+  /** Called when bridge creates a new folder */
+  onFolderCreated?: (folder: FolderInfo) => void;
 }
 
 // --- Reconnect backoff ---
@@ -145,6 +149,11 @@ export class WSTransport implements CCTransport {
   listFolders(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "listFolders" }));
+  }
+
+  createFolder(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "createFolder" }));
   }
 
   /**
@@ -256,6 +265,9 @@ export class WSTransport implements CCTransport {
 
         case "folderList":
           this.options.onFolderList?.(msg.folders);
+          break;
+        case "folderCreated":
+          this.options.onFolderCreated?.(msg.folder);
           break;
 
         case "connected":
