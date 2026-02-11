@@ -135,6 +135,7 @@ const sessions = new Map<string, Session>();
 interface PingPongState {
   pingTimer: ReturnType<typeof setInterval> | null;
   pongTimer: ReturnType<typeof setTimeout> | null;
+  pongHandler: (() => void) | null;
 }
 
 interface Connection {
@@ -390,11 +391,11 @@ function ensureProcess(session: Session, resume: boolean): boolean {
 // --- Ping/pong ---
 
 function startPingPong(ws: WebSocket, ping: PingPongState): void {
-  stopPingPong(ping);
+  stopPingPong(ws, ping);
 
   ping.pingTimer = setInterval(() => {
     if (ws.readyState !== WebSocket.OPEN) {
-      stopPingPong(ping);
+      stopPingPong(ws, ping);
       return;
     }
     ws.ping();
@@ -410,15 +411,17 @@ function startPingPong(ws: WebSocket, ping: PingPongState): void {
     }, PONG_TIMEOUT_MS);
   }, PING_INTERVAL_MS);
 
-  ws.on("pong", () => {
+  const pongHandler = () => {
     if (ping.pongTimer) {
       clearTimeout(ping.pongTimer);
       ping.pongTimer = null;
     }
-  });
+  };
+  ping.pongHandler = pongHandler;
+  ws.on("pong", pongHandler);
 }
 
-function stopPingPong(ping: PingPongState): void {
+function stopPingPong(ws: WebSocket, ping: PingPongState): void {
   if (ping.pingTimer) {
     clearInterval(ping.pingTimer);
     ping.pingTimer = null;
@@ -426,6 +429,10 @@ function stopPingPong(ping: PingPongState): void {
   if (ping.pongTimer) {
     clearTimeout(ping.pongTimer);
     ping.pongTimer = null;
+  }
+  if (ping.pongHandler) {
+    ws.removeListener("pong", ping.pongHandler);
+    ping.pongHandler = null;
   }
 }
 
@@ -580,10 +587,10 @@ async function handleLobbyMessage(
       }
 
       // Find existing bridge session for this folder (multi-WS reconnect)
-      let existingBridgeSession: { id: string; resumable: boolean } | null = null;
+      let existingSession: Session | null = null;
       for (const s of sessions.values()) {
         if (s.folder === folderPath) {
-          existingBridgeSession = { id: s.id, resumable: s.resumable };
+          existingSession = s;
           break;
         }
       }
@@ -592,7 +599,7 @@ async function handleLobbyMessage(
       const latestSession = await getLatestSession(folderPath);
       const handoff = await getLatestHandoff(folderPath);
       const resolution = resolveSessionForFolder(
-        existingBridgeSession,
+        existingSession ? { id: existingSession.id, resumable: existingSession.resumable } : null,
         latestSession,
         !!handoff,
         randomUUID,
@@ -600,7 +607,7 @@ async function handleLobbyMessage(
 
       let session: Session;
       if (resolution.isReconnect) {
-        session = [...sessions.values()].find(s => s.folder === folderPath)!;
+        session = existingSession!;
         attachWsToSession(ws, session);
       } else {
         session = {
@@ -678,7 +685,7 @@ async function handleLobbyMessage(
 wss.on("connection", (ws: WebSocket) => {
   // Every connection gets its own ping/pong state and a single set of handlers.
   // All connections start in lobby mode — client sends connectFolder to join a session.
-  const ping: PingPongState = { pingTimer: null, pongTimer: null };
+  const ping: PingPongState = { pingTimer: null, pongTimer: null, pongHandler: null };
   const conn: Connection = { ping, state: { mode: "lobby" } };
   connections.set(ws, conn);
   startPingPong(ws, ping);
@@ -688,7 +695,8 @@ wss.on("connection", (ws: WebSocket) => {
 
   // Single message handler — dispatches based on current mode.
   // Lobby messages are async (scanFolders, getLatestSession) so we chain them
-  // to prevent interleaving. Session messages are sync — no queue needed.
+  // to prevent interleaving. Session messages are mostly sync (prompt writes to
+  // stdin, abort kills process) but listFolders is async — safe because read-only.
   let lobbyQueue = Promise.resolve();
 
   ws.on("message", (data) => {
@@ -709,14 +717,16 @@ wss.on("connection", (ws: WebSocket) => {
         console.error(`[bridge] session message error:`, err),
       );
     } else {
-      lobbyQueue = lobbyQueue.then(() => handleLobbyMessage(ws, conn, msg));
+      lobbyQueue = lobbyQueue
+        .then(() => handleLobbyMessage(ws, conn, msg))
+        .catch((err) => console.error(`[bridge] lobby message error:`, err));
     }
   });
 
   // Single close handler — cleans up based on current mode.
   ws.on("close", (code) => {
     connections.delete(ws);
-    stopPingPong(ping);
+    stopPingPong(ws, ping);
 
     if (conn.state.mode === "session") {
       const session = conn.state.session;
@@ -753,7 +763,7 @@ function shutdown() {
 
   // Close all WebSocket connections and stop their ping/pong
   for (const [ws, conn] of connections) {
-    stopPingPong(conn.ping);
+    stopPingPong(ws, conn.ping);
     ws.close(1000, "Server shutting down");
   }
   connections.clear();
