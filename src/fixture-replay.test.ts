@@ -94,8 +94,8 @@ describe("fixture: text-response", () => {
   it("updates context tracking from result usage", () => {
     replay(textResponse);
 
-    // Usage from result: input_tokens=31187, output_tokens=10
-    expect(agent.lastInputTokens).toBe(31197);
+    // Usage from assistant message: input_tokens=31187 (output_tokens excluded)
+    expect(agent.lastInputTokens).toBe(31187);
     expect(agent.contextPercent).toBeCloseTo(15.6, 0);
   });
 

@@ -449,15 +449,36 @@ export class ClaudeCodeAgent {
       timestamp: Date.now(),
     } as AgentMessage;
 
-    // Live context tracking — gives approximate mid-turn reading during multi-turn
-    // tool use (before handleResult fires with the authoritative end-of-turn count).
-    // Both places compute the same sum; handleResult also runs compaction/band logic.
+    // Context tracking — per-message usage is the true context size (last API call).
+    // result.usage is cumulative across all API calls in a turn, so a 3-tool turn
+    // would show ~3x the real context. We track here and skip result.usage entirely.
+    // output_tokens excluded: they'll appear as input_tokens on the next turn.
     if (msg.usage) {
+      const prevTokens = this._lastInputTokens;
       this._lastInputTokens =
         (msg.usage.input_tokens || 0) +
-        (msg.usage.output_tokens || 0) +
         (msg.usage.cache_read_input_tokens || 0) +
         (msg.usage.cache_creation_input_tokens || 0);
+
+      // Detect compaction: significant drop (>15%) in token count between turns
+      if (prevTokens > 0 && this._lastInputTokens < prevTokens * 0.85) {
+        if (!this._replayMode) this.onCompaction?.(prevTokens, this._lastInputTokens);
+      }
+
+      // Track threshold crossings — inject context note for CC on band change
+      const remaining = 100 - this.contextPercent;
+      const newBand: "normal" | "amber" | "red" =
+        remaining <= 10 ? "red" : remaining <= 20 ? "amber" : "normal";
+      if (newBand !== this._lastRemainingBand) {
+        this._lastRemainingBand = newBand;
+        if (newBand === "amber") {
+          this._contextNote =
+            "[Context: ~20% remaining. Be concise. Consider suggesting a session close soon.]";
+        } else if (newBand === "red") {
+          this._contextNote =
+            "[Context: ~10% remaining. Be very concise. Suggest wrapping up and writing a handoff.]";
+        }
+      }
     }
 
     // Clear stream state, append final message
@@ -574,37 +595,8 @@ export class ClaudeCodeAgent {
       }
     }
 
-    // Update context tracking from result usage.
-    // Includes output_tokens because they become input context on the next turn —
-    // slightly overstates current usage but predicts next-turn context accurately.
-    if (result.usage) {
-      const prevTokens = this._lastInputTokens;
-      this._lastInputTokens =
-        (result.usage.input_tokens || 0) +
-        (result.usage.output_tokens || 0) +
-        (result.usage.cache_read_input_tokens || 0) +
-        (result.usage.cache_creation_input_tokens || 0);
-
-      // Detect compaction: significant drop (>15%) in token count between turns
-      if (prevTokens > 0 && this._lastInputTokens < prevTokens * 0.85) {
-        if (!this._replayMode) this.onCompaction?.(prevTokens, this._lastInputTokens);
-      }
-
-      // Track threshold crossings — inject context note for CC on band change
-      const remaining = 100 - this.contextPercent;
-      const newBand: "normal" | "amber" | "red" =
-        remaining <= 10 ? "red" : remaining <= 20 ? "amber" : "normal";
-      if (newBand !== this._lastRemainingBand) {
-        this._lastRemainingBand = newBand;
-        if (newBand === "amber") {
-          this._contextNote =
-            "[Context: ~20% remaining. Be concise. Consider suggesting a session close soon.]";
-        } else if (newBand === "red") {
-          this._contextNote =
-            "[Context: ~10% remaining. Be very concise. Suggest wrapping up and writing a handoff.]";
-        }
-      }
-    }
+    // Context tracking is handled in handleAssistantComplete (per-message usage).
+    // result.usage is cumulative across all API calls in a turn — not used for gauge.
 
     // End streaming
     this._state.isStreaming = false;

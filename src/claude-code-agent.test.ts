@@ -634,17 +634,21 @@ describe("tool use streaming", () => {
 });
 
 describe("context tracking", () => {
-  it("updates contextPercent from result usage", () => {
+  it("updates contextPercent from assistant message usage (not cumulative result)", () => {
     agent.handleCCEvent({
-      type: "result",
-      subtype: "success",
-      usage: { input_tokens: 100000, output_tokens: 10000, cache_read_input_tokens: 50000, cache_creation_input_tokens: 0 },
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "OK" }],
+        usage: { input_tokens: 100000, output_tokens: 10000, cache_read_input_tokens: 50000, cache_creation_input_tokens: 0 },
+      },
     });
 
-    // Total tokens = 100000 + 10000 + 50000 = 160000
-    // contextPercent = 160000 / 200000 * 100 = 80%
-    expect(agent.lastInputTokens).toBe(160000);
-    expect(agent.contextPercent).toBe(80);
+    // Total = input + cache_read (no output_tokens, no cache_creation here)
+    // = 100000 + 50000 = 150000
+    // contextPercent = 150000 / 200000 * 100 = 75%
+    expect(agent.lastInputTokens).toBe(150000);
+    expect(agent.contextPercent).toBe(75);
   });
 
   it("extracts contextWindow from result.modelUsage", () => {
@@ -665,8 +669,7 @@ describe("context tracking", () => {
     });
 
     expect(agent.contextWindow).toBe(200000);
-    // contextPercent = 55000 / 200000 * 100 ≈ 27.5%
-    expect(agent.contextPercent).toBeCloseTo(27.5);
+    // contextPercent is tracked from assistant messages, not result — remains 0 here
   });
 
   it("updates contextWindow when model reports different value", () => {
@@ -689,19 +692,17 @@ describe("context tracking", () => {
     let compactionArgs: [number, number] | null = null;
     agent.onCompaction = (from, to) => { compactionArgs = [from, to]; };
 
-    // First result: 100k tokens
+    // First assistant message: 100k input tokens
     agent.handleCCEvent({
-      type: "result",
-      subtype: "success",
-      usage: { input_tokens: 100000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "a" }], usage: { input_tokens: 100000, output_tokens: 0 } },
     });
     expect(compactionArgs).toBeNull();
 
-    // Second result: 50k tokens (50% drop)
+    // Second assistant message: 50k input tokens (50% drop)
     agent.handleCCEvent({
-      type: "result",
-      subtype: "success",
-      usage: { input_tokens: 50000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "b" }], usage: { input_tokens: 50000, output_tokens: 0 } },
     });
     expect(compactionArgs).toEqual([100000, 50000]);
   });
@@ -711,14 +712,14 @@ describe("context tracking", () => {
     agent.onCompaction = () => { fired = true; };
 
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 100000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "a" }], usage: { input_tokens: 100000, output_tokens: 0 } },
     });
 
     // 10% drop — should NOT trigger
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 90000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "b" }], usage: { input_tokens: 90000, output_tokens: 0 } },
     });
 
     expect(fired).toBe(false);
@@ -727,8 +728,8 @@ describe("context tracking", () => {
   it("sets context note on amber band crossing (80%)", () => {
     // Push to 82% usage: 164000 / 200000
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 164000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 164000, output_tokens: 0 } },
     });
 
     // Context note is private — test via prompt injection
@@ -747,8 +748,8 @@ describe("context tracking", () => {
   it("injects context note into content array prompts", () => {
     // Push to 82% usage to trigger amber note
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 164000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 164000, output_tokens: 0 } },
     });
 
     const sent: any[] = [];
@@ -773,8 +774,8 @@ describe("context tracking", () => {
   it("sets context note on red band crossing (90%)", () => {
     // Push to 92% usage: 184000 / 200000
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 184000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 184000, output_tokens: 0 } },
     });
 
     const sent: string[] = [];
@@ -1026,9 +1027,8 @@ describe("reset", () => {
 
   it("clears context tracking", () => {
     agent.handleCCEvent({
-      type: "result",
-      subtype: "success",
-      usage: { input_tokens: 150000, output_tokens: 10000 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 150000, output_tokens: 10000 } },
     });
     expect(agent.contextPercent).toBeGreaterThan(0);
 
@@ -1084,16 +1084,16 @@ describe("reset", () => {
   it("resets context band so notes fire again", () => {
     // Push to amber
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 164000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 164000, output_tokens: 0 } },
     });
 
     agent.reset();
 
     // Push to amber again — should set note again since band was reset
     agent.handleCCEvent({
-      type: "result",
-      usage: { input_tokens: 164000, output_tokens: 0 },
+      type: "assistant",
+      message: { model: "claude-opus-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 164000, output_tokens: 0 } },
     });
 
     const sent: string[] = [];
@@ -1291,15 +1291,13 @@ describe("replay mode", () => {
 
   it("context gauge is available after replay ends", () => {
     agent.startReplay();
+    // Context is tracked from assistant messages, not result events
     agent.handleCCEvent({
-      type: "result",
-      result: {
-        usage: {
-          input_tokens: 50000,
-          output_tokens: 5000,
-          cache_read_input_tokens: 10000,
-          cache_creation_input_tokens: 0,
-        },
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "replayed" }],
+        usage: { input_tokens: 50000, output_tokens: 5000, cache_read_input_tokens: 10000, cache_creation_input_tokens: 0 },
       },
     });
     agent.endReplay();
