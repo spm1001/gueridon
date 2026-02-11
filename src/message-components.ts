@@ -5,36 +5,20 @@
  * Eliminates: renderTool, javascript-repl, extract-document, pdfjs-dist,
  * xlsx, docx-preview, jszip, and all their transitive dependencies.
  *
- * Three custom elements:
+ * Four custom elements:
  *   <user-message>      — user chat bubble with markdown
  *   <assistant-message>  — assistant reply: text, thinking, tool calls
  *   <tool-message>       — tool call card: name, args, result
+ *   <foldable-block>     — shared fold/expand (defined in foldable-block.ts)
  */
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { icon } from "@mariozechner/mini-lit";
 import { html, LitElement, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import { Check, AlertCircle, Loader, ChevronRight } from "lucide";
+import { Check, AlertCircle, Loader } from "lucide";
 import { i18n } from "./vendor/i18n.js";
-
-/** Create an SVG chevron-right element matching Lucide's icon(ChevronRight, "sm").
- *  Used in imperative DOM (code block fold headers) where Lit templates aren't available. */
-function createChevronSVG(): SVGSVGElement {
-	const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-	svg.setAttribute("width", "16");
-	svg.setAttribute("height", "16");
-	svg.setAttribute("viewBox", "0 0 24 24");
-	svg.setAttribute("fill", "none");
-	svg.setAttribute("stroke", "currentColor");
-	svg.setAttribute("stroke-width", "2");
-	svg.setAttribute("stroke-linecap", "round");
-	svg.setAttribute("stroke-linejoin", "round");
-	const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-	path.setAttribute("d", "m9 18 6-6-6-6");
-	svg.appendChild(path);
-	return svg;
-}
+import "./foldable-block.js";
 
 // --- <user-message> ---
 
@@ -74,8 +58,6 @@ export class ToolMessage extends LitElement {
 	@property({ type: Boolean }) aborted = false;
 	@property({ type: Boolean }) isStreaming = false;
 
-	@state() private _isExpanded = false;
-
 	createRenderRoot() { return this; }
 	connectedCallback() { super.connectedCallback(); this.style.display = "block"; }
 
@@ -87,15 +69,10 @@ export class ToolMessage extends LitElement {
 			.join("\n");
 	}
 
-	private toggleExpanded() {
-		this._isExpanded = !this._isExpanded;
-	}
-
 	/** One-line summary for collapsed state: bash command or tool name */
 	private getSummary(name: string, args: any): string {
 		const isBash = name === "Bash" || name === "bash";
 		if (isBash && args.command) {
-			// Show first line of command, truncated
 			const firstLine = args.command.split("\n")[0];
 			return firstLine.length > 60 ? firstLine.slice(0, 57) + "..." : firstLine;
 		}
@@ -111,8 +88,6 @@ export class ToolMessage extends LitElement {
 		const hasResult = !!this.result;
 		const isError = this.result?.isError || this.aborted;
 
-		const expanded = this._isExpanded;
-
 		// Status indicator
 		let statusIcon: TemplateResult;
 		if (isActive) {
@@ -126,28 +101,7 @@ export class ToolMessage extends LitElement {
 		const args = this.toolCall?.arguments || {};
 		const summary = this.getSummary(name, args);
 
-		// Collapsed: single tappable line — tool name, status, brief summary
-		// No nested scrollable containers, no scroll intercept
-		const header = html`
-			<div class="flex items-center gap-2 cursor-pointer select-none py-1.5 px-2.5"
-				@click=${this.toggleExpanded}>
-				<span class="transition-transform inline-block ${expanded ? "rotate-90" : ""}"
-					>${icon(ChevronRight, "sm")}</span>
-				${statusIcon}
-				<span class="text-xs font-medium text-muted-foreground">${name}</span>
-				${!expanded && summary ? html`<span class="text-xs text-muted-foreground/60 truncate font-mono">${summary}</span>` : ""}
-			</div>
-		`;
-
-		if (!expanded) {
-			return html`
-				<div class="border border-border rounded-md bg-card text-card-foreground">
-					${header}
-				</div>
-			`;
-		}
-
-		// Expanded: full body
+		// Build body template for foldable-block
 		const isBash = name === "Bash" || name === "bash";
 		const resultText = this.extractResultText();
 
@@ -178,10 +132,12 @@ export class ToolMessage extends LitElement {
 		}
 
 		return html`
-			<div class="border border-border rounded-md bg-card text-card-foreground">
-				${header}
-				${body}
-			</div>
+			<foldable-block
+				label=${name}
+				detail=${summary}
+				.statusIcon=${statusIcon}
+				.bodyTemplate=${body}>
+			</foldable-block>
 		`;
 	}
 }
@@ -212,45 +168,25 @@ export class AssistantMessage extends LitElement {
 	updated() {
 		// Don't fold code blocks during streaming — let content flow
 		if (this.isStreaming) return;
-		// Wrap markdown code blocks in fold headers (once per block).
-		// Double-rAF: first frame lets Lit render code-block children,
-		// second frame reads the <pre> element for accurate line counts.
+		// Wrap markdown code blocks in <foldable-block> (mode 2: siblingTarget).
+		// Double-rAF: lets code-block children render their <pre> for line counting.
 		requestAnimationFrame(() => requestAnimationFrame(() => {
 			this.querySelectorAll("markdown-block code-block:not([data-folded])").forEach((cb) => {
 				const el = cb as HTMLElement;
 				el.setAttribute("data-folded", "");
 
 				const lang = el.getAttribute("language") || "code";
-				// Read line count from rendered <pre> — .code may be base64
 				const pre = el.querySelector("pre");
 				const lineCount = pre ? pre.textContent!.trim().split("\n").length : 0;
 
 				el.style.display = "none";
 
-				const header = document.createElement("div");
-				header.className = "flex items-center gap-2 cursor-pointer select-none py-1.5 px-2.5 border border-border rounded-md bg-card text-card-foreground";
+				const fold = document.createElement("foldable-block") as any;
+				fold.label = lang;
+				fold.detail = lineCount === 1 ? "1 line" : `${lineCount} lines`;
+				fold.siblingTarget = el;
 
-				const chevron = document.createElement("span");
-				chevron.className = "transition-transform inline-block";
-				chevron.appendChild(createChevronSVG());
-
-				const labelEl = document.createElement("span");
-				labelEl.className = "text-xs font-medium text-muted-foreground";
-				labelEl.textContent = lang;
-
-				const countEl = document.createElement("span");
-				countEl.className = "text-xs text-muted-foreground/50";
-				countEl.textContent = lineCount === 1 ? "1 line" : `${lineCount} lines`;
-
-				header.append(chevron, labelEl, countEl);
-
-				header.addEventListener("click", () => {
-					const showing = el.style.display !== "none";
-					el.style.display = showing ? "none" : "block";
-					chevron.style.transform = showing ? "" : "rotate(90deg)";
-				});
-
-				el.parentElement!.insertBefore(header, el);
+				el.parentElement!.insertBefore(fold, el);
 			});
 		}));
 	}
