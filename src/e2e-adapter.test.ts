@@ -98,7 +98,7 @@ describe("end-to-end: text-only turn", () => {
 
     // Phase 2: stream starts
     agent.handleCCEvent(messageStart());
-    expect(agent.state.isStreaming).toBe(false); // isStreaming set by prompt(), not stream
+    expect(agent.state.isStreaming).toBe(true); // isStreaming set by stream events (and prompt() as guard)
     expect(agent.state.streamMessage).not.toBeNull();
     expect(agent.state.streamMessage?.role).toBe("assistant");
 

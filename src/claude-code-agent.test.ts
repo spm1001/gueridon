@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ClaudeCodeAgent, type CCTransport, type AskUserQuestionData } from "./claude-code-agent.js";
+import { ClaudeCodeAgent, type CCTransport, type AskUserQuestionData, mapContentBlocks, mapUsage, mapStopReason } from "./claude-code-agent.js";
 
 let agent: ClaudeCodeAgent;
 let events: any[];
@@ -14,18 +14,18 @@ beforeEach(() => {
   agent.subscribe((e) => events.push({ ...e }));
 });
 
-// --- Pure helper methods (tested via as any) ---
+// --- Pure helper functions (exported, tested directly) ---
 
 describe("mapContentBlocks", () => {
   it("maps text blocks unchanged", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "text", text: "hello" },
     ]);
     expect(result).toEqual([{ type: "text", text: "hello" }]);
   });
 
   it("maps tool_use to toolCall", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } },
     ]);
     expect(result).toEqual([
@@ -34,14 +34,14 @@ describe("mapContentBlocks", () => {
   });
 
   it("maps tool_use with missing input to empty object", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "tool_use", id: "toolu_1", name: "Read" },
     ]);
     expect(result[0].arguments).toEqual({});
   });
 
   it("maps thinking blocks", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "thinking", thinking: "Let me think...", signature: "sig_abc" },
     ]);
     expect(result).toEqual([
@@ -50,14 +50,14 @@ describe("mapContentBlocks", () => {
   });
 
   it("passes unknown block types through", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "image", data: "..." },
     ]);
     expect(result).toEqual([{ type: "image", data: "..." }]);
   });
 
   it("handles mixed content blocks", () => {
-    const result = (agent as any).mapContentBlocks([
+    const result = mapContentBlocks([
       { type: "thinking", thinking: "hmm", signature: "s" },
       { type: "text", text: "Hello" },
       { type: "tool_use", id: "t1", name: "Bash", input: { command: "echo" } },
@@ -71,7 +71,7 @@ describe("mapContentBlocks", () => {
 
 describe("mapUsage", () => {
   it("maps full usage object", () => {
-    const result = (agent as any).mapUsage({
+    const result = mapUsage({
       input_tokens: 100,
       output_tokens: 50,
       cache_read_input_tokens: 200,
@@ -85,12 +85,12 @@ describe("mapUsage", () => {
   });
 
   it("returns empty usage for null", () => {
-    const result = (agent as any).mapUsage(null);
+    const result = mapUsage(null);
     expect(result.totalTokens).toBe(0);
   });
 
   it("handles partial usage (missing fields default to 0)", () => {
-    const result = (agent as any).mapUsage({ input_tokens: 50 });
+    const result = mapUsage({ input_tokens: 50 });
     expect(result.input).toBe(50);
     expect(result.output).toBe(0);
     expect(result.totalTokens).toBe(50);
@@ -99,23 +99,23 @@ describe("mapUsage", () => {
 
 describe("mapStopReason", () => {
   it("maps tool_use to toolUse", () => {
-    expect((agent as any).mapStopReason("tool_use")).toBe("toolUse");
+    expect(mapStopReason("tool_use")).toBe("toolUse");
   });
 
   it("maps end_turn to stop", () => {
-    expect((agent as any).mapStopReason("end_turn")).toBe("stop");
+    expect(mapStopReason("end_turn")).toBe("stop");
   });
 
   it("maps max_tokens to stop", () => {
-    expect((agent as any).mapStopReason("max_tokens")).toBe("stop");
+    expect(mapStopReason("max_tokens")).toBe("stop");
   });
 
   it("maps null to stop", () => {
-    expect((agent as any).mapStopReason(null)).toBe("stop");
+    expect(mapStopReason(null)).toBe("stop");
   });
 
   it("maps unknown reason to stop", () => {
-    expect((agent as any).mapStopReason("something_else")).toBe("stop");
+    expect(mapStopReason("something_else")).toBe("stop");
   });
 });
 
