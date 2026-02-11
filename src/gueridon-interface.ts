@@ -65,9 +65,8 @@ export class GueridonInterface extends LitElement {
 
   // --- Auto-scroll state ---
 
-  private scrollEl?: HTMLElement;
   private resizeObs?: ResizeObserver;
-  private userScrolled = false;
+  @state() private userScrolled = false;
 
   // --- Lit lifecycle ---
 
@@ -77,26 +76,24 @@ export class GueridonInterface extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    // Host element must fill its flex parent — without this, h-full on
-    // the inner div resolves to auto and the input bar floats to the top.
-    this.classList.add("flex-1", "min-h-0");
   }
 
+  private _onScroll = () => {
+    this.userScrolled =
+      document.documentElement.scrollHeight -
+        window.scrollY -
+        window.innerHeight >
+      50;
+  };
+
   firstUpdated() {
-    this.scrollEl = this.querySelector(".gdn-scroll") as HTMLElement;
-    if (!this.scrollEl) return;
+    window.addEventListener("scroll", this._onScroll, { passive: true });
 
-    this.scrollEl.addEventListener("scroll", () => {
-      const el = this.scrollEl!;
-      this.userScrolled =
-        el.scrollHeight - el.scrollTop - el.clientHeight > 50;
-    });
-
-    const inner = this.scrollEl.querySelector(".gdn-scroll-inner");
+    const inner = this.querySelector(".gdn-scroll-inner");
     if (inner) {
       this.resizeObs = new ResizeObserver(() => {
         if (!this.userScrolled) {
-          this.scrollEl!.scrollTop = this.scrollEl!.scrollHeight;
+          window.scrollTo(0, document.documentElement.scrollHeight);
         }
       });
       this.resizeObs.observe(inner);
@@ -105,6 +102,7 @@ export class GueridonInterface extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    window.removeEventListener("scroll", this._onScroll);
     this.resizeObs?.disconnect();
     this.unsubscribe?.();
   }
@@ -307,9 +305,9 @@ export class GueridonInterface extends LitElement {
 
   render() {
     return html`
-      <div class="flex flex-col h-full bg-background text-foreground">
+      <div class="flex flex-col min-h-[100dvh] bg-background text-foreground">
         <!-- Messages -->
-        <div class="flex-1 overflow-y-auto overscroll-contain gdn-scroll">
+        <div class="flex-1">
           <div class="max-w-3xl mx-auto p-4 pb-0 gdn-scroll-inner">
             <message-list
               .messages=${this._messages}
@@ -326,8 +324,8 @@ export class GueridonInterface extends LitElement {
           </div>
         </div>
 
-        <!-- Input area -->
-        <div class="shrink-0">
+        <!-- Input area — sticky to viewport bottom -->
+        <div class="sticky bottom-0 bg-background">
           <div
             class="max-w-3xl mx-auto px-2"
             style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0.5rem))"
