@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:mobile": "scripts/test-mobile.sh",
-    "test:mobile:stop": "scripts/test-mobile.sh --stop"
+    "test:mobile:stop": "scripts/test-mobile.sh --stop",
+    "gdn": "tsx cli/gdn.ts"
   },
   "dependencies": {
     "@mariozechner/mini-lit": "^0.2.1",
