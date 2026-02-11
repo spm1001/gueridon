@@ -36,7 +36,6 @@ You open the app. Your phone connects to the bridge. The bridge scans your
 
 **What's missing:**
 - No error message if bridge is unreachable (just infinite "connecting...")
-- No timeout/give-up — transport retries forever
 - No offline indicator beyond the connection status dot
 
 ### 2. Ordering (picking a folder)
@@ -48,19 +47,17 @@ resume a previous conversation. Then it tells your phone "you're connected."
 - Folder was deleted since the list was built → bridge tries to spawn CC in a nonexistent directory
 - Resume fails (corrupted session file) → CC crashes on launch
 - CC won't start (wrong version, bad flags) → early exit within 2s, bridge sends error
-- Phone drops during this step → state machine is stuck in "connecting"
+- Phone drops during this step → transport reconnects and retries
 
 **What's handled today:**
 - Early exit detection (CC dies within 2s → stderr surfaced)
 - Resume vs fresh decision (handoff-aware, won't resume intentionally-closed sessions)
-- State machine retries connect on WS reconnect during connecting phase
+- `connectToFolder()` on transport: retry (3 attempts), timeout (30s), failure callback
+- Mid-session folder switch tears down old WS, reconnects fresh, retries connect
+- Flash bug prevention via structural callback split (`onFolderConnected` vs `onSessionId`)
 
 **What's missing:**
-- No retry limit on the reconnect→retry loop (infinite)
-- Bridge errors (`processExit`, `error` messages) don't reach the state machine — it stays stuck in "connecting"
-- No timeout on the connecting phase itself
 - No fallback from failed resume to fresh session
-- "Switching" phase (mid-session folder change) has the same stuck-forever problem
 
 ### 3. Being served (the conversation)
 
@@ -78,10 +75,7 @@ You're chatting with Claude. You type, Claude responds. This is the happy path.
 - Ping/pong (30s/10s) catches silently-dead connections
 
 **What's missing:**
-- No message buffering — events during a WiFi gap are permanently lost
-- Idle timer doesn't check if Claude is actively working (kills mid-stream after 5min)
 - No application-level heartbeat from Claude (can't detect hangs)
-- Reconnecting after idle-kill loses folder metadata (session has `folder: null`)
 
 ### 4. Coming back (the butler feature)
 
@@ -100,9 +94,7 @@ Claude may have finished working, or may still be going.
 - Multi-tab: other tabs keep the session alive even if one closes
 
 **What's missing:**
-- No message replay — whatever Claude said while you were away is lost to the UI
 - No notification ("Claude finished" / "Claude needs your input")
-- No `visibilitychange` listener — tab resume waits for ping/pong timeout (up to 30s) instead of reconnecting immediately
 - Can't distinguish "Claude is done, waiting for you" from "Claude is still working"
 
 ---
@@ -145,55 +137,49 @@ Every combination of phone-state and Claude-state is a scenario:
 | **Phone gone** | Nothing happens | Claude keeps working, output lost | Idle timer ticking | Session file on disk |
 | **Phone back** | Re-enter lobby | Reconnect, but missed output | Continue normally | Resume on next prompt |
 
-The cells in **bold** are where the gaps live:
+Cells that used to be gaps:
 
-- **Phone gone + Claude working**: Output is lost. Should be buffered.
-- **Phone back + Claude working (was gone)**: Missed output. Should be replayed.
-- **Phone gone + Claude idle**: Timer might kill a session you want to keep. Timer should be smarter.
+- ~~**Phone gone + Claude working**: Output lost~~ — bridge buffers, replays on reconnect.
+- ~~**Phone back + Claude working (was gone)**: Missed output~~ — `historyStart`/`historyEnd` replay.
+- ~~**Phone gone + Claude idle**: Timer kills prematurely~~ — idle guards check active-turn state.
 
 ---
 
-## What the State Machine Knows vs Doesn't Know
+## What Each Component Knows
 
-The current folder-lifecycle state machine tracks **the folder selection process only**.
-It goes idle → browsing → connecting → idle. Once you're connected, it's done.
-It has no awareness of:
+The three client components each own one concern:
 
-- Whether Claude is running, idle, or dead
-- Whether the phone connection is healthy
-- Whether output was missed during a disconnect
-- How long you've been in "connecting" with no response
+**WSTransport** owns **connection + folder selection**. Lobby/session modes,
+`connectToFolder()` with retry (3) and timeout (30s), auto-reconnect with
+backoff, `visibilitychange` instant reconnect. Fires `onFolderConnected` and
+`onFolderConnectFailed` callbacks so the UI can react without tracking state.
 
-This is why errors during connecting are invisible to it — it has no event for
-"something went wrong" and no timeout for "nothing is happening."
+**ClaudeCodeAgent** owns **Claude's conversation** — messages, streaming state,
+tool calls, context gauge. Pure event translation from CC stream-json to
+pi-agent-core AgentEvents. No DOM, no WS.
 
-The transport (WSTransport) tracks **connection health** — connecting, lobby,
-connected, disconnected. But it doesn't know about the folder lifecycle or
-Claude's work state.
+**main.ts** is the **wiring layer** — 3 variables (`folderDialog`,
+`cachedFolders`, `connectingFromDialog`) and direct callbacks. No dispatch queue,
+no effect executor, no state machine. The `connectingFromDialog` guard prevents
+flash bugs where a stale `connected` event could close a picker the user is
+actively browsing.
 
-The adapter (ClaudeCodeAgent) tracks **Claude's conversation** — messages,
-streaming state, tool calls. But it doesn't know about connection health or
-folder selection.
-
-Three components, each knowing one piece. Nobody has the full picture.
+No single component has the full picture, but the separation is intentional —
+each concern is testable in isolation.
 
 ---
 
 ## The Path Forward
 
-Each item is one distinct thing. No duplicates.
+### Done
 
-### Minimum (unblock the stuck states)
+1. ~~**Connecting can fail gracefully**~~ — `connectToFolder()` with retry (3) + timeout (30s), failure callback returns to folder picker.
+2. ~~**Instant reconnect on tab resume**~~ — `visibilitychange` listener triggers immediate WS reconnect.
+3. ~~**Bridge buffers output while you're away**~~ — message buffer per session, replayed on reconnect within `historyStart`/`historyEnd` envelope.
+4. ~~**Don't kill Claude mid-work**~~ — idle guard system checks active-turn state before killing. 10min stuck-process safety net.
 
-1. **Connecting can fail gracefully** — retry limit (3 attempts) + timeout (30s), then back to the folder picker with an explanation. Covers both "connecting" and "switching" phases. Bridge errors and processExit during connecting count as failures.
-2. **Instant reconnect on tab resume** — `visibilitychange` listener triggers immediate WS reconnect instead of waiting up to 30s for ping/pong timeout to notice.
+### Remaining
 
-### Medium (the butler — Claude works while you're away)
-
-3. **Bridge buffers output while you're away** — ring buffer per session. When your phone reconnects, bridge replays what you missed. One feature: save on the bridge side, replay on reconnect.
-4. **Don't kill Claude mid-work** — idle timer checks whether CC is actively streaming before killing. Only starts the countdown when Claude is idle AND no clients are connected.
-5. **Folder list is a dashboard** — shows what each Claude is doing: "working", "finished, waiting for you", "idle". The bridge already tracks whether CC is running; surfacing it in the folder list turns the picker into a status screen you open to check on things, not just to switch. Pairs naturally with buffering — once the bridge is paying attention to Claude's state, this is almost free.
-
-### Ambitious (you can forget about it)
-
-6. **You know when Claude is done without looking** — page title update ("Claude finished"), or push notification via service worker. You don't have to watch the screen or open the folder list.
+5. **Folder list is a dashboard** (gdn-hikosa) — show what each Claude is doing: working, finished, idle. Bridge tracks CC state; surfacing it in folder list turns picker into a status screen.
+6. **You know when Claude is done without looking** — page title update or push notification via service worker.
+7. **Definitive session close** (gdn-hilapa) — bridge intercepts `/exit` as protocol command, writes marker. Folder scanner distinguishes "deliberately closed" from "abandoned."

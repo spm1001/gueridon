@@ -2,10 +2,12 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { scanFolders, getLatestSession, getLatestHandoff, getSessionJSONLPath, hasExitMarker, writeExitMarker, FolderInfo, SCAN_ROOT } from "./folders.js";
+import { generateFolderName } from "./fun-names.js";
 import {
   IDLE_TIMEOUT_MS,
   PING_INTERVAL_MS,
@@ -13,7 +15,7 @@ import {
   KILL_ESCALATION_MS,
   EARLY_EXIT_MS,
   buildCCArgs,
-  getActiveProcesses as getActiveProcessesFromSessions,
+  getActiveSessions as getActiveSessionsFromSessions,
   resolveSessionForFolder,
   validateFolderPath,
   parseSessionJSONL,
@@ -54,11 +56,15 @@ interface ClientConnectFolder {
   type: "connectFolder";
   path: string;
 }
+interface ClientCreateFolder {
+  type: "createFolder";
+}
 type ClientMessage =
   | ClientPrompt
   | ClientAbort
   | ClientListFolders
-  | ClientConnectFolder;
+  | ClientConnectFolder
+  | ClientCreateFolder;
 
 // Bridge → Browser
 interface BridgeConnected {
@@ -99,6 +105,11 @@ interface BridgeHistoryEnd {
   source: "bridge";
   type: "historyEnd";
 }
+interface BridgeFolderCreated {
+  source: "bridge";
+  type: "folderCreated";
+  folder: FolderInfo;
+}
 interface BridgeCCEvent {
   source: "cc";
   event: Record<string, unknown>;
@@ -115,6 +126,7 @@ type ServerMessage =
   | BridgeProcessExit
   | BridgeLobbyConnected
   | BridgeFolderList
+  | BridgeFolderCreated
   | BridgeHistoryStart
   | BridgeHistoryEnd
   | BridgeCCEvent
@@ -167,8 +179,8 @@ interface Connection {
 const connections = new Map<WebSocket, Connection>();
 
 /** Build activeProcesses map from sessions for scanFolders. */
-function getActiveProcesses(): Map<string, string> {
-  return getActiveProcessesFromSessions(sessions);
+function getActiveSessions(): Map<string, import("./bridge-logic.js").ActiveSessionInfo> {
+  return getActiveSessionsFromSessions(sessions);
 }
 
 // --- CC process management ---
@@ -214,6 +226,13 @@ function killWithEscalation(proc: ChildProcess, sessionId: string): void {
  * different contexts: sessionClosed for /exit, nothing for idle kill).
  */
 function destroySession(session: Session): void {
+  // Transition all connected clients back to lobby mode.
+  // Prevents zombie: conn.state referencing a dead session would let
+  // a late-arriving message spawn a new CC process for a /exit'd session.
+  for (const client of session.clients) {
+    const c = connections.get(client);
+    if (c) c.state = { mode: "lobby" };
+  }
   cancelIdleCheck(session);
   if (session.flushTimer) {
     clearTimeout(session.flushTimer);
@@ -597,6 +616,38 @@ function attachWsToSession(ws: WebSocket, session: Session): void {
   session.clients.add(ws);
 }
 
+/** Create a new folder with a fun name, git init it, return FolderInfo. */
+async function handleCreateFolder(ws: WebSocket): Promise<void> {
+  try {
+    const name = await generateFolderName(SCAN_ROOT);
+    const folderPath = join(SCAN_ROOT, name);
+    await mkdir(folderPath, { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      execFile("git", ["init"], { cwd: folderPath }, (err) =>
+        err ? reject(err) : resolve(),
+      );
+    });
+    console.log(`[bridge] created folder: ${folderPath}`);
+    const folder: FolderInfo = {
+      name,
+      path: folderPath,
+      state: "fresh",
+      activity: null,
+      sessionId: null,
+      lastActive: null,
+      handoffPurpose: null,
+    };
+    sendToClient(ws, { source: "bridge", type: "folderCreated", folder });
+  } catch (err) {
+    console.error(`[bridge] createFolder failed:`, err);
+    sendToClient(ws, {
+      source: "bridge",
+      type: "error",
+      error: `Failed to create folder: ${err}`,
+    });
+  }
+}
+
 /** Handle messages on a session-mode connection. */
 async function handleSessionMessage(
   ws: WebSocket,
@@ -664,8 +715,13 @@ async function handleSessionMessage(
     case "listFolders": {
       // Allow folder listing even in session mode — read-only, needed for
       // the folder picker to show accurate state (active dots, timestamps)
-      const folders = await scanFolders(getActiveProcesses());
+      const folders = await scanFolders(getActiveSessions());
       sendToClient(ws, { source: "bridge", type: "folderList", folders });
+      break;
+    }
+
+    case "createFolder": {
+      await handleCreateFolder(ws);
       break;
     }
 
@@ -694,8 +750,13 @@ async function handleLobbyMessage(
 ): Promise<void> {
   switch (msg.type) {
     case "listFolders": {
-      const folders = await scanFolders(getActiveProcesses());
+      const folders = await scanFolders(getActiveSessions());
       sendToClient(ws, { source: "bridge", type: "folderList", folders });
+      break;
+    }
+
+    case "createFolder": {
+      await handleCreateFolder(ws);
       break;
     }
 
@@ -907,17 +968,12 @@ function shutdown() {
   }
   connections.clear();
 
-  // Kill all CC processes and clear timers
-  for (const [id, session] of sessions) {
-    cancelIdleCheck(session);
-    if (session.flushTimer) {
-      clearTimeout(session.flushTimer);
-      session.flushTimer = null;
-    }
-    session.pendingDeltas.clear();
-    if (session.process) killWithEscalation(session.process, id);
+  // Kill all CC processes and clear timers.
+  // Snapshot first — destroySession mutates the map.
+  const allSessions = [...sessions.values()];
+  for (const session of allSessions) {
+    destroySession(session);
   }
-  sessions.clear();
 
   wss.close();
   httpServer.close(() => {

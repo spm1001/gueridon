@@ -34,7 +34,7 @@ Two processes. Browser talks to bridge via WebSocket. Bridge talks to Claude Cod
 
 | File | Does |
 |------|------|
-| `src/main.ts` | Entry point. Creates agent + transport + UI, wires callbacks, renders into `#app`. |
+| `src/main.ts` | Entry point. Creates agent + transport + UI, wires callbacks (3 variables, no state machine), renders into `#app`. |
 | `src/gueridon-interface.ts` | `<gueridon-interface>` — the shell. Input bar, message display, auto-scroll, gauge, toast. Light DOM. |
 | `src/claude-code-agent.ts` | Adapter. Translates CC stream-json → pi-agent-core AgentEvents. No DOM, no WS — pure event translation. |
 | `src/ws-transport.ts` | Browser WebSocket. Lobby/session modes, reconnect with backoff, prompt timeout. Implements `CCTransport`. |
@@ -121,9 +121,9 @@ The `litClassFieldFix` plugin is critical — without it, `@state()` properties 
 | 9 | `CCEvent` type too loose (`[key: string]: any`) — no exhaustive switch checking | Metis |
 | 10 | Toast element leaks on disconnect — appended to `document.body`, never removed | Epimetheus, Metis |
 | 11 | `console.trace` left in FolderSelector — debug instrumentation in production | Metis |
-| 12 | No `visibilitychange` listener — mobile tab resume waits up to 30s for reconnect | Prometheus |
-| 13 | `toolCallNames` + `askUserToolCallIds` grow unbounded across sessions | Epimetheus |
-| 14 | Lobby queue has no `.catch()` — one error breaks all subsequent lobby messages | Epimetheus |
+| 12 | ~~No `visibilitychange` listener — mobile tab resume waits up to 30s for reconnect~~ **FIXED** — instant reconnect on visibility change | Prometheus |
+| 13 | ~~`toolCallNames` + `askUserToolCallIds` grow unbounded across sessions~~ **FIXED (gdn-walaco)** — `reset()` clears on folder switch | Epimetheus |
+| 14 | ~~Lobby queue has no `.catch()`~~ **FIXED (gdn-jijina)** — error handling added | Epimetheus |
 | 15 | Handoff parsing assumes exact line positions — format change = silent failure | Epimetheus |
 | 16 | Tab indentation inconsistency in message-components.ts (tabs vs spaces) | Metis |
 
