@@ -27,14 +27,14 @@ Two processes. Browser talks to bridge via WebSocket. Bridge talks to Claude Cod
 | File | Does |
 |------|------|
 | `server/bridge.ts` | WebSocket server, spawns CC processes, routes messages. Module-level side effect (WSS starts on import). |
-| `server/bridge-logic.ts` | Pure functions: session resolution, path validation, CC CLI args. Testable. |
+| `server/bridge-logic.ts` | Pure functions: session resolution, path validation, CC CLI args, conflation helpers, idle guards. Testable. |
 | `server/folders.ts` | Scans `~/Repos`, enriches with CC session/handoff state from filesystem. |
 
 **Client application (browser, port 5173)**
 
 | File | Does |
 |------|------|
-| `src/main.ts` | Entry point. Creates agent + transport + UI, wires callbacks, renders into `#app`. |
+| `src/main.ts` | Entry point. Creates agent + transport + UI, wires callbacks (3 variables, no state machine), renders into `#app`. |
 | `src/gueridon-interface.ts` | `<gueridon-interface>` — the shell. Input bar, message display, auto-scroll, gauge, toast. Light DOM. |
 | `src/claude-code-agent.ts` | Adapter. Translates CC stream-json → pi-agent-core AgentEvents. No DOM, no WS — pure event translation. |
 | `src/ws-transport.ts` | Browser WebSocket. Lobby/session modes, reconnect with backoff, prompt timeout. Implements `CCTransport`. |
@@ -121,9 +121,9 @@ The `litClassFieldFix` plugin is critical — without it, `@state()` properties 
 | 9 | `CCEvent` type too loose (`[key: string]: any`) — no exhaustive switch checking | Metis |
 | 10 | Toast element leaks on disconnect — appended to `document.body`, never removed | Epimetheus, Metis |
 | 11 | `console.trace` left in FolderSelector — debug instrumentation in production | Metis |
-| 12 | No `visibilitychange` listener — mobile tab resume waits up to 30s for reconnect | Prometheus |
-| 13 | `toolCallNames` + `askUserToolCallIds` grow unbounded across sessions | Epimetheus |
-| 14 | Lobby queue has no `.catch()` — one error breaks all subsequent lobby messages | Epimetheus |
+| 12 | ~~No `visibilitychange` listener — mobile tab resume waits up to 30s for reconnect~~ **FIXED** — instant reconnect on visibility change | Prometheus |
+| 13 | ~~`toolCallNames` + `askUserToolCallIds` grow unbounded across sessions~~ **FIXED (gdn-walaco)** — `reset()` clears on folder switch | Epimetheus |
+| 14 | ~~Lobby queue has no `.catch()`~~ **FIXED (gdn-jijina)** — error handling added | Epimetheus |
 | 15 | Handoff parsing assumes exact line positions — format change = silent failure | Epimetheus |
 | 16 | Tab indentation inconsistency in message-components.ts (tabs vs spaces) | Metis |
 
@@ -148,3 +148,18 @@ All three noted the code is **well-structured for its age and scope**. Specific 
 - Correct Lit idioms (light DOM, connectedCallback classes, @query guards)
 - `bridge-logic.ts` extraction was the right call
 - State derivation in `folders.ts` encodes hard-won knowledge well
+
+## Message Replay: Two Paths
+
+There are two distinct replay mechanisms, both producing the same wire format for the adapter:
+
+| Path | When | Source | User messages from |
+|------|------|--------|--------------------|
+| **Live buffer replay** | Page refresh during active session | `session.messageBuffer` (CC stdout events) | Bridge injects at prompt time |
+| **JSONL replay** | Resuming a paused session | `parseSessionJSONL()` reads CC's `~/.claude/projects/` file | CC's own session JSONL |
+
+Both produce `{source: "cc", event: {type: "user", message: {role: "user", content: "..."}}}`.
+
+**Why two paths:** The live buffer captures events as they happen (including conflated deltas). The JSONL file is CC's own record, which has different structure (grouped by message ID, no stream_events). `parseSessionJSONL` translates the JSONL format into the same wire events the adapter expects.
+
+**Conflation note (2026-02-11):** Live buffer now stores *merged* content_block_delta events (one per 250ms tick) rather than raw token-rate deltas. JSONL replay produces no deltas at all (only complete assistant messages). Both paths work because the adapter handles either format — stream events build up `streamMessage`, complete `assistant` events replace it.

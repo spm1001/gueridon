@@ -1,19 +1,25 @@
-import { readdir, stat, readFile } from "node:fs/promises";
+import { readdir, stat, readFile, writeFile, access } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
+import type { ActiveSessionInfo } from "./bridge-logic.js";
 
 // --- Types ---
 
 export type FolderState = "active" | "paused" | "closed" | "fresh";
 
+/** What the CC process is doing right now (only meaningful when state is "active"). */
+export type FolderActivity = "working" | "waiting" | null;
+
 export interface FolderInfo {
   name: string; // "gueridon"
   path: string; // "/Users/modha/Repos/gueridon"
   state: FolderState;
+  activity: FolderActivity; // "working" = streaming, "waiting" = idle, null = no process
   sessionId: string | null; // most recent CC session UUID (for --resume)
   lastActive: string | null; // ISO timestamp from session file mtime
   handoffPurpose: string | null; // from latest handoff .md
 }
+
 
 // --- Config ---
 
@@ -32,6 +38,48 @@ export function encodePath(absolutePath: string): string {
 /** Get the absolute path to a CC session JSONL file for a given folder and session ID. */
 export function getSessionJSONLPath(folderPath: string, sessionId: string): string {
   return join(CC_PROJECTS_DIR, encodePath(folderPath), `${sessionId}.jsonl`);
+}
+
+// --- Exit marker ---
+
+/**
+ * Write a .exit marker file for a deliberately closed session.
+ * Path: CC_PROJECTS_DIR/encodedPath/sessionId.exit
+ */
+export async function writeExitMarker(
+  folderPath: string,
+  sessionId: string,
+): Promise<void> {
+  const markerPath = join(
+    CC_PROJECTS_DIR,
+    encodePath(folderPath),
+    `${sessionId}.exit`,
+  );
+  await writeFile(
+    markerPath,
+    JSON.stringify({ sessionId, timestamp: new Date().toISOString(), source: "bridge" }),
+    "utf-8",
+  );
+}
+
+/**
+ * Check if a .exit marker exists for a session.
+ */
+export async function hasExitMarker(
+  folderPath: string,
+  sessionId: string,
+): Promise<boolean> {
+  const markerPath = join(
+    CC_PROJECTS_DIR,
+    encodePath(folderPath),
+    `${sessionId}.exit`,
+  );
+  try {
+    await access(markerPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // --- Session file lookup ---
@@ -165,11 +213,11 @@ export async function getLatestHandoff(
 /**
  * Scan SCAN_ROOT for directories and enrich each with session state.
  *
- * @param activeProcesses - Map of folder path → sessionId for currently
+ * @param activeSessions - Map of folder path → session info for currently
  *   running CC processes (from the bridge's runtime state).
  */
 export async function scanFolders(
-  activeProcesses: Map<string, string>,
+  activeSessions: Map<string, ActiveSessionInfo>,
 ): Promise<FolderInfo[]> {
   let entries: string[];
   try {
@@ -196,28 +244,41 @@ export async function scanFolders(
     }
 
     // Check runtime state first (active processes)
-    const activeSessionId = activeProcesses.get(fullPath);
-    if (activeSessionId) {
+    const activeInfo = activeSessions.get(fullPath);
+    if (activeInfo) {
       const handoff = await getLatestHandoff(fullPath);
       folders.push({
         name,
         path: fullPath,
         state: "active",
-        sessionId: activeSessionId,
+        activity: activeInfo.activity,
+        sessionId: activeInfo.sessionId,
         lastActive: new Date().toISOString(),
         handoffPurpose: handoff?.purpose ?? null,
       });
       continue;
     }
 
-    // Check handoff and session files.
-    // Handoff = intentional close (closed wins over paused).
-    // Session files without handoff = abandoned mid-work (paused).
+    // Check .exit marker, handoff, and session files.
+    // .exit = deliberate close via /exit command (definitive).
+    // Handoff = intentional close via /close (existing signal).
+    // Session files without either = abandoned mid-work (paused).
     // Session .jsonl files persist forever — they're not cleaned up by /close.
     const session = await getLatestSession(fullPath);
+    const exited = session ? await hasExitMarker(fullPath, session.id) : false;
     const handoff = await getLatestHandoff(fullPath);
 
-    if (handoff) {
+    if (exited) {
+      // Deliberately closed via /exit — definitive closed state
+      folders.push({
+        name,
+        path: fullPath,
+        state: "closed",
+        sessionId: session!.id,
+        lastActive: session!.lastActive.toISOString(),
+        handoffPurpose: handoff?.purpose ?? null,
+      });
+    } else if (handoff) {
       // Intentionally closed — handoff exists regardless of leftover session files.
       // Still provide sessionId for --resume if user wants to reopen.
       // lastActive: prefer session mtime, fall back to handoff mtime (covers
@@ -226,6 +287,7 @@ export async function scanFolders(
         name,
         path: fullPath,
         state: "closed",
+        activity: null,
         sessionId: session?.id ?? null,
         lastActive: (session?.lastActive ?? handoff.mtime).toISOString(),
         handoffPurpose: handoff.purpose,
@@ -236,6 +298,7 @@ export async function scanFolders(
         name,
         path: fullPath,
         state: "paused",
+        activity: null,
         sessionId: session.id,
         lastActive: session.lastActive.toISOString(),
         handoffPurpose: null,
@@ -245,6 +308,7 @@ export async function scanFolders(
         name,
         path: fullPath,
         state: "fresh",
+        activity: null,
         sessionId: null,
         lastActive: null,
         handoffPurpose: null,

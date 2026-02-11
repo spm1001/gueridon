@@ -8,9 +8,11 @@ vi.mock("node:fs/promises", () => ({
   readdir: vi.fn(),
   stat: vi.fn(),
   readFile: vi.fn(),
+  access: vi.fn(),
+  writeFile: vi.fn(),
 }));
 
-import { readdir, stat, readFile } from "node:fs/promises";
+import { readdir, stat, readFile, access } from "node:fs/promises";
 import {
   encodePath,
   getLatestSession,
@@ -65,6 +67,9 @@ function wireVfs() {
     const entry = vfs.get(p);
     if (!entry || entry.type !== "file") throw enoent();
     return entry.content;
+  });
+  (access as unknown as Mock).mockImplementation(async (p: string) => {
+    if (!vfs.has(p)) throw enoent();
   });
 }
 
@@ -312,11 +317,12 @@ describe("scanFolders", () => {
     addDir(REPOS, ["alpha"]);
     addFolder("alpha");
 
-    const active = new Map([[join(REPOS, "alpha"), "active-sess-id"]]);
+    const active = new Map([[join(REPOS, "alpha"), { sessionId: "active-sess-id", activity: "waiting" as const }]]);
     const result = await scanFolders(active);
 
     expect(result[0].state).toBe("active");
     expect(result[0].sessionId).toBe("active-sess-id");
+    expect(result[0].activity).toBe("waiting");
   });
 
   it("active folder shows handoff purpose if one exists", async () => {
@@ -329,10 +335,11 @@ describe("scanFolders", () => {
       },
     });
 
-    const active = new Map([[join(REPOS, "alpha"), "new-sess"]]);
+    const active = new Map([[join(REPOS, "alpha"), { sessionId: "new-sess", activity: "working" as const }]]);
     const result = await scanFolders(active);
 
     expect(result[0].state).toBe("active");
+    expect(result[0].activity).toBe("working");
     expect(result[0].handoffPurpose).toBe("Previous work");
   });
 
@@ -366,6 +373,42 @@ describe("scanFolders", () => {
     expect(result[0].state).toBe("paused");
     expect(result[0].sessionId).toBe("paused-sess");
     expect(result[0].handoffPurpose).toBeNull();
+  });
+
+  it("closed when .exit marker exists (no handoff)", async () => {
+    addDir(REPOS, ["alpha"]);
+    addFolder("alpha", {
+      session: { id: "exited-sess", mtime: new Date("2026-01-10") },
+    });
+    // Add .exit marker file alongside the .jsonl
+    const encoded = encodePath(join(REPOS, "alpha"));
+    const exitDir = join(PROJECTS, encoded);
+    // The dir already exists from addFolder — just add the .exit file to it
+    vfsDirs.get(exitDir)!.push("exited-sess.exit");
+    addFile(join(exitDir, "exited-sess.exit"), {
+      mtime: new Date("2026-01-10"),
+      content: JSON.stringify({ sessionId: "exited-sess", timestamp: "2026-01-10T00:00:00Z", source: "bridge" }),
+    });
+
+    const result = await scanFolders(new Map());
+    expect(result[0].state).toBe("closed");
+    expect(result[0].sessionId).toBe("exited-sess");
+  });
+
+  it("closed from .exit takes priority over paused (session without handoff)", async () => {
+    // Without .exit, this would be "paused". With .exit, it should be "closed".
+    addDir(REPOS, ["alpha"]);
+    addFolder("alpha", {
+      session: { id: "exited-sess-2", mtime: new Date("2026-01-10") },
+    });
+    const encoded = encodePath(join(REPOS, "alpha"));
+    const exitDir = join(PROJECTS, encoded);
+    vfsDirs.get(exitDir)!.push("exited-sess-2.exit");
+    addFile(join(exitDir, "exited-sess-2.exit"));
+
+    const result = await scanFolders(new Map());
+    expect(result[0].state).toBe("closed");
+    expect(result[0].handoffPurpose).toBeNull(); // no handoff, just .exit
   });
 
   it("fresh when neither session nor handoff exists", async () => {
@@ -411,7 +454,7 @@ describe("scanFolders", () => {
     });
     addFolder("active-proj");
 
-    const active = new Map([[join(REPOS, "active-proj"), "a-sess"]]);
+    const active = new Map([[join(REPOS, "active-proj"), { sessionId: "a-sess", activity: "waiting" as const }]]);
     const result = await scanFolders(active);
 
     expect(result.map((f) => f.state)).toEqual([

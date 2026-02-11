@@ -509,6 +509,211 @@ async function testReplay(): Promise<void> {
   });
 }
 
+// --- Test 10: HTTP smoke — static serving works ---
+
+async function testHttpSmoke(): Promise<void> {
+  console.log("\n=== Test 10: HTTP smoke — static serving ===");
+
+  const BRIDGE_HTTP = "http://localhost:3001";
+
+  // GET / should return HTML (SPA index)
+  const rootRes = await fetch(BRIDGE_HTTP);
+  if (!rootRes.ok) throw new Error(`GET / returned ${rootRes.status}`);
+  const html = await rootRes.text();
+  if (!html.includes("<!DOCTYPE html") && !html.includes("<!doctype html")) {
+    throw new Error("GET / did not return HTML");
+  }
+  console.log(`[t10] GET / → ${rootRes.status}, HTML (${html.length} bytes)`);
+
+  // GET /assets/nonexistent.js should return 404
+  const notFoundRes = await fetch(`${BRIDGE_HTTP}/assets/nonexistent.js`);
+  if (notFoundRes.status !== 404) {
+    throw new Error(`GET /assets/nonexistent.js returned ${notFoundRes.status}, expected 404`);
+  }
+  console.log(`[t10] GET /assets/nonexistent.js → 404`);
+
+  // SPA fallback: extensionless path returns index.html
+  const spaRes = await fetch(`${BRIDGE_HTTP}/some/deep/route`);
+  if (!spaRes.ok) throw new Error(`GET /some/deep/route returned ${spaRes.status}`);
+  const spaHtml = await spaRes.text();
+  if (!spaHtml.includes("<!DOCTYPE html") && !spaHtml.includes("<!doctype html")) {
+    throw new Error("SPA fallback did not return HTML");
+  }
+  console.log(`[t10] GET /some/deep/route → ${spaRes.status} (SPA fallback)`);
+
+  // Hashed asset gets cache headers (check any .js file in dist/assets/)
+  const rootHtml = html;
+  const assetMatch = rootHtml.match(/\/assets\/[^"']+\.(js|css)/);
+  if (assetMatch) {
+    const assetRes = await fetch(`${BRIDGE_HTTP}${assetMatch[0]}`);
+    const cacheHeader = assetRes.headers.get("cache-control") ?? "";
+    console.log(`[t10] GET ${assetMatch[0]} → ${assetRes.status}, cache-control: ${cacheHeader}`);
+    if (!cacheHeader.includes("max-age")) {
+      throw new Error("Hashed asset missing cache-control max-age");
+    }
+  } else {
+    console.log("[t10] (no hashed asset found in HTML to verify cache headers)");
+  }
+
+  console.log("[t10] PASS");
+}
+
+// --- Test 11: LobbyQueue error recovery — bad message doesn't kill queue ---
+
+async function testLobbyQueueRecovery(): Promise<void> {
+  console.log("\n=== Test 11: LobbyQueue error recovery ===");
+
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(BRIDGE_URL);
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+
+      if (msg.type === "lobbyConnected") {
+        // Send a message with a valid type but that will cause an async error
+        // (connectFolder with empty path triggers an error response, not a throw)
+        ws.send(JSON.stringify({ type: "connectFolder", path: "" }));
+
+        // Then immediately send a valid listFolders — should still work
+        ws.send(JSON.stringify({ type: "listFolders" }));
+      }
+
+      if (msg.type === "folderList") {
+        console.log(`[t11] listFolders succeeded after error — ${msg.folders.length} folders`);
+        console.log("[t11] PASS");
+        ws.close();
+      }
+    });
+
+    ws.on("close", () => resolve());
+    ws.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("t11 timeout")), 10_000);
+  });
+}
+
+// --- Test 12: Session caching — second connectFolder reuses session ---
+
+async function testSessionCaching(): Promise<void> {
+  console.log("\n=== Test 12: Session caching — connectFolder reuses existing session ===");
+
+  const folderPath = `${process.env.HOME}/Repos/gueridon`;
+
+  // First connection establishes a session
+  const firstSessionId = await new Promise<string>((resolve, reject) => {
+    const ws = new WebSocket(BRIDGE_URL);
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "lobbyConnected") {
+        ws.send(JSON.stringify({ type: "connectFolder", path: folderPath }));
+      }
+      if (msg.type === "connected") {
+        resolve(msg.sessionId);
+        // Don't close — keep session alive
+        ws.close();
+      }
+    });
+
+    ws.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("t12 phase1 timeout")), 10_000);
+  });
+
+  // Brief pause
+  await new Promise((r) => setTimeout(r, 200));
+
+  // Second connection to same folder should get same session (from sessions Map, no rescan)
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(BRIDGE_URL);
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "lobbyConnected") {
+        ws.send(JSON.stringify({ type: "connectFolder", path: folderPath }));
+      }
+      if (msg.type === "connected") {
+        if (msg.sessionId !== firstSessionId) {
+          reject(new Error(`Session mismatch: first=${firstSessionId} second=${msg.sessionId}`));
+          return;
+        }
+        console.log(`[t12] second connectFolder reused session=${msg.sessionId.slice(0, 8)}`);
+        console.log("[t12] PASS");
+        ws.close();
+      }
+    });
+
+    ws.on("close", () => resolve());
+    ws.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("t12 phase2 timeout")), 10_000);
+  });
+}
+
+// --- Test 13: /exit command intercepts and closes session ---
+
+async function testExitCommand(): Promise<void> {
+  console.log("\n=== Test 13: /exit command closes session ===");
+
+  const folderPath = `${process.env.HOME}/Repos/gueridon`;
+
+  // Phase 1: Connect, send a prompt to spawn CC, wait for result
+  const sid = await new Promise<string>((resolve, reject) => {
+    const ws = new WebSocket(BRIDGE_URL);
+
+    connectViaLobby(ws, folderPath, (sessionId) => {
+      console.log(`[t13] connected session=${sessionId.slice(0, 8)}`);
+      ws.send(JSON.stringify({ type: "prompt", text: "Say exactly: before exit" }));
+    });
+
+    let resolvedSid: string | null = null;
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "connected") resolvedSid = msg.sessionId;
+      if (msg.source === "cc" && msg.event?.type === "result") {
+        console.log("[t13] got result, sending /exit");
+        ws.send(JSON.stringify({ type: "prompt", text: "/exit" }));
+      }
+      if (msg.type === "sessionClosed") {
+        console.log(`[t13] sessionClosed received, deliberate=${msg.deliberate}`);
+        ws.close();
+      }
+    });
+
+    ws.on("close", () => {
+      if (!resolvedSid) reject(new Error("t13: never got sessionId"));
+      else resolve(resolvedSid);
+    });
+    ws.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("t13 timeout")), 60_000);
+  });
+
+  // Brief pause for .exit marker to be written
+  await new Promise((r) => setTimeout(r, 500));
+
+  // Phase 2: Reconnect to same folder — should get a FRESH session (not resume the exited one)
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(BRIDGE_URL);
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === "lobbyConnected") {
+        ws.send(JSON.stringify({ type: "connectFolder", path: folderPath }));
+      }
+      if (msg.type === "connected") {
+        if (msg.sessionId === sid) {
+          reject(new Error(`t13: got same session ${sid} — should have been fresh after /exit`));
+          return;
+        }
+        console.log(`[t13] new session=${msg.sessionId.slice(0, 8)} (different from ${sid.slice(0, 8)})`);
+        console.log("[t13] PASS");
+        ws.close();
+      }
+    });
+
+    ws.on("close", () => resolve());
+    ws.on("error", (err) => reject(err));
+    setTimeout(() => reject(new Error("t13 phase2 timeout")), 10_000);
+  });
+}
+
 // --- Run all tests ---
 
 async function main() {
@@ -527,6 +732,12 @@ async function main() {
     await testLobbyConnectFolder();
     await testMultiWS();
     await testReplay();
+    await testHttpSmoke();
+    await testLobbyQueueRecovery();
+    await testSessionCaching();
+    if (!lobbyOnly) {
+      await testExitCommand();
+    }
     console.log("\n=== ALL TESTS PASSED ===");
     process.exit(0);
   } catch (err) {

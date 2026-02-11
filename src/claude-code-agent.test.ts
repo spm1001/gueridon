@@ -930,6 +930,28 @@ describe("reset", () => {
     expect(agent.cwd).toBe("");
   });
 
+  it("emits agent_end with empty messages", () => {
+    // Build some state first
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "hi" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+
+    const resetEvents: any[] = [];
+    agent.subscribe((e) => resetEvents.push(e));
+
+    agent.reset();
+
+    const agentEnd = resetEvents.find((e) => e.type === "agent_end");
+    expect(agentEnd).toBeDefined();
+    expect(agentEnd.messages).toEqual([]);
+  });
+
   it("preserves subscribers", () => {
     const postResetEvents: any[] = [];
     agent.subscribe((e) => postResetEvents.push(e));
@@ -1281,5 +1303,90 @@ describe("replay mode", () => {
     });
 
     expect(askSpy).not.toHaveBeenCalled();
+  });
+
+  it("multi-turn replay produces correctly interleaved user + assistant messages", () => {
+    agent.startReplay();
+
+    // Turn 1: bridge-injected user message, then assistant response
+    agent.handleCCEvent({
+      type: "user",
+      message: { role: "user", content: "What is 2+2?" },
+    });
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        id: "msg_turn1",
+        content: [{ type: "text", text: "The answer is 4." }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 100, output_tokens: 10 },
+      },
+    });
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      result: { usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    });
+
+    // Turn 2: another user message, then assistant with tool use
+    agent.handleCCEvent({
+      type: "user",
+      message: { role: "user", content: "List files in current dir" },
+    });
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        id: "msg_turn2a",
+        content: [{ type: "tool_use", id: "toolu_abc", name: "Bash", input: { command: "ls" } }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 200, output_tokens: 20 },
+      },
+    });
+    // Tool result
+    agent.handleCCEvent({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ tool_use_id: "toolu_abc", type: "tool_result", content: "file1.ts\nfile2.ts", is_error: false }],
+      },
+    });
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        id: "msg_turn2b",
+        content: [{ type: "text", text: "Found 2 files." }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 300, output_tokens: 15 },
+      },
+    });
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      result: { usage: { input_tokens: 300, output_tokens: 15, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+    });
+
+    agent.endReplay();
+
+    // Verify: 6 messages in correct order
+    const messages = agent.state.messages;
+    expect(messages).toHaveLength(6);
+    expect(messages[0].role).toBe("user");
+    expect((messages[0].content[0] as any).text).toBe("What is 2+2?");
+    expect(messages[1].role).toBe("assistant");
+    expect((messages[1].content[0] as any).text).toBe("The answer is 4.");
+    expect(messages[2].role).toBe("user");
+    expect((messages[2].content[0] as any).text).toBe("List files in current dir");
+    expect(messages[3].role).toBe("assistant");
+    expect((messages[3].content[0] as any).name).toBe("Bash");
+    expect(messages[4].role).toBe("toolResult");
+    expect(messages[5].role).toBe("assistant");
+    expect((messages[5].content[0] as any).text).toBe("Found 2 files.");
+
+    // Verify no events emitted during replay, agent_start emitted after
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("agent_start");
   });
 });

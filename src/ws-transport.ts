@@ -15,11 +15,13 @@ export type ConnectionState = "connecting" | "lobby" | "connected" | "disconnect
 // --- Folder types (mirrors server/folders.ts for typed API) ---
 
 export type FolderState = "active" | "paused" | "closed" | "fresh";
+export type FolderActivity = "working" | "waiting" | null;
 
 export interface FolderInfo {
   name: string;
   path: string;
   state: FolderState;
+  activity: FolderActivity;
   sessionId: string | null;
   lastActive: string | null;
   handoffPurpose: string | null;
@@ -30,13 +32,17 @@ export interface WSTransportOptions {
   url: string;
   /** Timeout (ms) waiting for promptReceived ack before treating as dead. Default 10000. */
   promptTimeout?: number;
+  /** Timeout (ms) for the entire connectToFolder operation. Default 30000. */
+  connectTimeout?: number;
+  /** Max retries for connectToFolder on bridge errors. Default 3. */
+  maxConnectRetries?: number;
   /** Called when connection state changes */
   onStateChange?: (state: ConnectionState, detail?: string) => void;
-  /** Called when session ID is assigned by bridge */
+  /** Called when session ID is assigned by bridge (transparent reconnect) */
   onSessionId?: (id: string) => void;
   /** Called on bridge-level error */
   onBridgeError?: (error: string) => void;
-  /** Called when lobby mode is entered (WS open, no session yet) */
+  /** Called when lobby mode is entered (WS open, no pending connect operation) */
   onLobbyConnected?: () => void;
   /** Called with folder list from bridge */
   onFolderList?: (folders: FolderInfo[]) => void;
@@ -46,6 +52,14 @@ export interface WSTransportOptions {
   onHistoryStart?: () => void;
   /** Called when bridge finishes replaying history buffer */
   onHistoryEnd?: () => void;
+  /** Called when connectToFolder succeeds — session established for the requested folder */
+  onFolderConnected?: (sessionId: string, path: string) => void;
+  /** Called when connectToFolder fails after retries/timeout */
+  onFolderConnectFailed?: (reason: string, path: string) => void;
+  /** Called when bridge creates a new folder */
+  onFolderCreated?: (folder: FolderInfo) => void;
+  /** Called when bridge deliberately closes the session (/exit, /quit) */
+  onSessionClosed?: (deliberate: boolean) => void;
 }
 
 // --- Reconnect backoff ---
@@ -58,7 +72,7 @@ export class WSTransport implements CCTransport {
   private ws: WebSocket | null = null;
   private eventHandler: ((event: CCEvent) => void) | null = null;
   private options: Required<
-    Pick<WSTransportOptions, "url" | "promptTimeout">
+    Pick<WSTransportOptions, "url" | "promptTimeout" | "connectTimeout" | "maxConnectRetries">
   > & WSTransportOptions;
 
   private sessionId: string | null = null;
@@ -70,9 +84,20 @@ export class WSTransport implements CCTransport {
   private _state: ConnectionState = "disconnected";
   private boundVisibilityHandler: (() => void) | null = null;
 
+  // Active connectToFolder operation — null when no explicit connect is in flight.
+  // Separate from folderPath (transparent reconnect) because connectToFolder has
+  // retries, timeout, and distinct success/failure callbacks.
+  private connectOp: {
+    path: string;
+    retries: number;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+
   constructor(options: WSTransportOptions) {
     this.options = {
       promptTimeout: 10_000,
+      connectTimeout: 30_000,
+      maxConnectRetries: 3,
       ...options,
     };
   }
@@ -94,6 +119,7 @@ export class WSTransport implements CCTransport {
 
   close(): void {
     this.closed = true;
+    this.cancelConnectOp();
     this.unlistenVisibility();
     this.clearTimers();
     if (this.ws) {
@@ -127,29 +153,62 @@ export class WSTransport implements CCTransport {
     this.ws.send(JSON.stringify({ type: "listFolders" }));
   }
 
-  /** Connect to a folder — transitions from lobby to session mode */
-  connectFolder(path: string): void {
-    this.folderPath = path;
+  createFolder(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "connectFolder", path }));
+    this.ws.send(JSON.stringify({ type: "createFolder" }));
+  }
+
+  /**
+   * High-level folder connect — handles lobby-teardown (if in session),
+   * retry on bridge errors (up to maxConnectRetries), and overall timeout.
+   *
+   * Fires onFolderConnected on success, onFolderConnectFailed on failure.
+   * The caller doesn't see intermediate states (lobby-teardown, retries).
+   */
+  connectToFolder(path: string): void {
+    this.cancelConnectOp();
+
+    this.connectOp = {
+      path,
+      retries: 0,
+      timer: setTimeout(() => this.handleConnectOpTimeout(), this.options.connectTimeout),
+    };
+
+    if (this.folderPath) {
+      // Currently in a session — tear down old connection, reconnect fresh.
+      // When lobbyConnected arrives, connectOp handler sends connectFolder.
+      this.sessionId = null;
+      this.folderPath = null;
+      this.clearPromptTimer();
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.detachAndCloseWs("Switching folders");
+      this.doConnect();
+    } else if (this.ws?.readyState === WebSocket.OPEN) {
+      // Already in lobby with open WS — send connectFolder directly
+      this.ws.send(JSON.stringify({ type: "connectFolder", path }));
+    } else {
+      // Disconnected or connecting — cancel any pending backoff, start fresh.
+      // When lobbyConnected arrives, connectOp handler sends connectFolder.
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.reconnectAttempts = 0;
+      this.detachAndCloseWs("Connecting to folder");
+      this.doConnect();
+    }
   }
 
   /** Disconnect from current session and reconnect in lobby mode */
   returnToLobby(): void {
+    this.cancelConnectOp();
     this.sessionId = null;
     this.folderPath = null;
     this.clearTimers();
-    // Close old WS — detach handlers first to prevent onclose race
-    // (onclose would set this.ws = null and trigger scheduleReconnect,
-    // clobbering the new WS we're about to create)
-    const oldWs = this.ws;
-    this.ws = null;
-    if (oldWs) {
-      oldWs.onclose = null;
-      oldWs.onmessage = null;
-      oldWs.onerror = null;
-      oldWs.close(1000, "Returning to lobby");
-    }
+    this.detachAndCloseWs("Returning to lobby");
     this.doConnect(); // folderPath cleared above → arrives in lobby mode
   }
 
@@ -194,10 +253,11 @@ export class WSTransport implements CCTransport {
     if (msg.source === "bridge") {
       switch (msg.type) {
         case "lobbyConnected":
-          if (this.folderPath) {
-            // Reconnecting to an existing session — re-send connectFolder
-            // immediately so the bridge finds (or recreates) the session
-            // with the correct folder path. No lobby UI flash needed.
+          if (this.connectOp) {
+            // Active connectToFolder operation — send connectFolder for target
+            this.ws!.send(JSON.stringify({ type: "connectFolder", path: this.connectOp.path }));
+          } else if (this.folderPath) {
+            // Transparent reconnect — re-send connectFolder for current folder
             this.ws!.send(JSON.stringify({ type: "connectFolder", path: this.folderPath }));
           } else {
             this.setState("lobby");
@@ -208,10 +268,23 @@ export class WSTransport implements CCTransport {
         case "folderList":
           this.options.onFolderList?.(msg.folders);
           break;
+        case "folderCreated":
+          this.options.onFolderCreated?.(msg.folder);
+          break;
 
         case "connected":
           this.sessionId = msg.sessionId;
-          this.options.onSessionId?.(msg.sessionId);
+          if (this.connectOp) {
+            // connectToFolder succeeded — clear operation, fire dedicated callback
+            this.folderPath = this.connectOp.path;
+            const path = this.connectOp.path;
+            clearTimeout(this.connectOp.timer);
+            this.connectOp = null;
+            this.options.onFolderConnected?.(msg.sessionId, path);
+          } else {
+            // Transparent reconnect — fire legacy callback
+            this.options.onSessionId?.(msg.sessionId);
+          }
           this.setState("connected");
           break;
 
@@ -221,9 +294,16 @@ export class WSTransport implements CCTransport {
 
         case "error":
           this.options.onBridgeError?.(msg.error);
-          // If we're still in "connecting" state (auto-connectFolder failed),
-          // fall back to lobby so the user can pick a different folder.
-          if (this._state === "connecting") {
+          if (this.connectOp) {
+            // Error during connectToFolder — retry or fail
+            this.connectOp.retries++;
+            if (this.connectOp.retries >= this.options.maxConnectRetries) {
+              this.failConnectOp(msg.error);
+            } else if (this.ws?.readyState === WebSocket.OPEN) {
+              this.ws.send(JSON.stringify({ type: "connectFolder", path: this.connectOp.path }));
+            }
+          } else if (this._state === "connecting") {
+            // Auto-connectFolder on reconnect failed — fall back to lobby
             this.folderPath = null;
             this.setState("lobby");
             this.options.onLobbyConnected?.();
@@ -239,18 +319,31 @@ export class WSTransport implements CCTransport {
           break;
 
         case "processExit":
-          // CC process died. Normal exits (result/success) are handled by
-          // the adapter via CC events. But abnormal exits (crash, abort,
-          // SIGKILL) never send a result event — the adapter's isStreaming
-          // stays true and the UI shows an infinite pulsing cursor.
-          // Synthesize a result event so the adapter resets cleanly.
+          // CC process died. Synthesize a result event so the adapter resets cleanly.
           this.clearPromptTimer();
           this.eventHandler?.({
             type: "result",
             subtype: "error",
             error: `CC process exited (code=${msg.code}, signal=${msg.signal})`,
           });
+          if (this.connectOp) {
+            // CC died during connect — immediate failure (retrying a crash is pointless)
+            const detail = msg.signal ? `signal ${msg.signal}` : `code ${msg.code}`;
+            this.failConnectOp(`CC process exited (${detail})`);
+          }
           this.options.onProcessExit?.(msg.code ?? null, msg.signal ?? null);
+          break;
+
+        case "sessionClosed":
+          // Session deliberately closed via /exit or /quit.
+          // Synthesize a clean result so the adapter clears isStreaming.
+          this.clearPromptTimer();
+          this.eventHandler?.({
+            type: "result",
+            subtype: "success",
+            result: "",
+          });
+          this.options.onSessionClosed?.(msg.deliberate ?? false);
           break;
       }
     } else if (msg.source === "cc") {
@@ -336,6 +429,51 @@ export class WSTransport implements CCTransport {
     }
     this.reconnectAttempts = 0;
     this.doConnect();
+  }
+
+  // --- Connect operation helpers ---
+
+  private cancelConnectOp(): void {
+    if (this.connectOp) {
+      clearTimeout(this.connectOp.timer);
+      this.connectOp = null;
+    }
+  }
+
+  /** Connect operation timed out — fire failure callback, fall to lobby. */
+  private handleConnectOpTimeout(): void {
+    if (!this.connectOp) return;
+    const path = this.connectOp.path;
+    this.connectOp = null;
+    this.folderPath = null;
+    this.setState("lobby");
+    // Fire failure only — NOT onLobbyConnected. The caller handles fallback
+    // (e.g. showing folder picker) from onFolderConnectFailed. Firing both
+    // would cause duplicate listFolders requests.
+    this.options.onFolderConnectFailed?.("Connection timed out", path);
+  }
+
+  /** Connect operation failed (max retries or fatal error) — clean up and notify. */
+  private failConnectOp(reason: string): void {
+    if (!this.connectOp) return;
+    const path = this.connectOp.path;
+    clearTimeout(this.connectOp.timer);
+    this.connectOp = null;
+    this.folderPath = null;
+    this.setState("lobby");
+    this.options.onFolderConnectFailed?.(reason, path);
+  }
+
+  /** Detach handlers from current WS and close it. Prevents onclose races. */
+  private detachAndCloseWs(reason: string): void {
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) {
+      ws.onclose = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.close(1000, reason);
+    }
   }
 
   // --- Cleanup ---

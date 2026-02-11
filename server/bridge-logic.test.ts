@@ -5,7 +5,7 @@ import {
   resolveSessionForFolder,
   validateFolderPath,
   buildCCArgs,
-  getActiveProcesses,
+  getActiveSessions,
   parseSessionJSONL,
   CC_FLAGS,
   resolveStaticFile,
@@ -17,9 +17,18 @@ import {
   MAX_IDLE_MS,
   STALE_OUTPUT_MS,
   IDLE_RECHECK_MS,
+  isStreamDelta,
+  extractDeltaInfo,
+  buildMergedDelta,
+  isUserTextEcho,
+  isExitCommand,
+  CONFLATION_INTERVAL_MS,
+  MESSAGE_BUFFER_CAP,
+  BACKPRESSURE_THRESHOLD,
   type SessionProcessInfo,
   type IdleGuard,
   type IdleSessionState,
+  type PendingDelta,
 } from "./bridge-logic.js";
 
 // --- resolveStaticFile ---
@@ -140,6 +149,7 @@ describe("resolveSessionForFolder", () => {
         { id: "bridge-session-1", resumable: true },
         null,
         false,
+        false,
         fixedId,
       );
       expect(result).toEqual({
@@ -154,6 +164,7 @@ describe("resolveSessionForFolder", () => {
         { id: "bridge-session-2", resumable: false },
         null,
         false,
+        false,
         fixedId,
       );
       expect(result.resumable).toBe(false);
@@ -165,6 +176,7 @@ describe("resolveSessionForFolder", () => {
         { id: "bridge-session-3", resumable: true },
         { id: "old-session-file" },
         true, // handoff exists — but bridge session takes priority
+        false,
         fixedId,
       );
       expect(result.sessionId).toBe("bridge-session-3");
@@ -178,6 +190,7 @@ describe("resolveSessionForFolder", () => {
         null,
         { id: "paused-session-abc" },
         false, // no handoff
+        false, // no .exit
         fixedId,
       );
       expect(result).toEqual({
@@ -194,6 +207,7 @@ describe("resolveSessionForFolder", () => {
         null,
         { id: "old-closed-session" },
         true, // handoff exists = was closed
+        false,
         fixedId,
       );
       expect(result).toEqual({
@@ -210,6 +224,7 @@ describe("resolveSessionForFolder", () => {
         null,
         { id: "should-not-reuse-this" },
         true, // handoff exists
+        false,
         fixedId,
       );
       expect(result.sessionId).not.toBe("should-not-reuse-this");
@@ -223,6 +238,7 @@ describe("resolveSessionForFolder", () => {
       const result = resolveSessionForFolder(
         null,
         null,
+        false,
         false,
         fixedId,
       );
@@ -242,6 +258,7 @@ describe("resolveSessionForFolder", () => {
         null,
         null,
         true,
+        false,
         fixedId,
       );
       expect(result).toEqual({
@@ -256,12 +273,56 @@ describe("resolveSessionForFolder", () => {
     let counter = 0;
     const gen = () => `gen-${++counter}`;
 
-    const r1 = resolveSessionForFolder(null, null, false, gen);
+    const r1 = resolveSessionForFolder(null, null, false, false, gen);
     expect(r1.sessionId).toBe("gen-1");
 
-    const r2 = resolveSessionForFolder(null, null, true, gen);
+    const r2 = resolveSessionForFolder(null, null, true, false, gen);
     expect(r2.sessionId).toBe("gen-2");
   });
+
+  describe("exited folder (.exit marker exists)", () => {
+    it("creates fresh session when .exit marker exists (no handoff)", () => {
+      const result = resolveSessionForFolder(
+        null,
+        { id: "exited-session" },
+        false, // no handoff
+        true,  // has .exit marker
+        fixedId,
+      );
+      expect(result).toEqual({
+        sessionId: "fresh-uuid-123",
+        resumable: false,
+        isReconnect: false,
+      });
+    });
+
+    it("creates fresh session when both .exit and handoff exist", () => {
+      const result = resolveSessionForFolder(
+        null,
+        { id: "exited-session" },
+        true,  // handoff exists
+        true,  // has .exit marker
+        fixedId,
+      );
+      expect(result).toEqual({
+        sessionId: "fresh-uuid-123",
+        resumable: false,
+        isReconnect: false,
+      });
+    });
+  });
+});
+
+// --- isExitCommand ---
+
+describe("isExitCommand", () => {
+  it("recognizes /exit", () => expect(isExitCommand("/exit")).toBe(true));
+  it("recognizes /quit", () => expect(isExitCommand("/quit")).toBe(true));
+  it("is case-insensitive", () => expect(isExitCommand("/EXIT")).toBe(true));
+  it("trims whitespace", () => expect(isExitCommand("  /quit  ")).toBe(true));
+  it("rejects normal prompts", () => expect(isExitCommand("hello")).toBe(false));
+  it("rejects partial match", () => expect(isExitCommand("/exit now")).toBe(false));
+  it("rejects embedded /exit", () => expect(isExitCommand("run /exit")).toBe(false));
 });
 
 // --- validateFolderPath ---
@@ -346,47 +407,57 @@ describe("buildCCArgs", () => {
   });
 });
 
-// --- getActiveProcesses ---
+// --- getActiveSessions ---
 
-describe("getActiveProcesses", () => {
+describe("getActiveSessions", () => {
   it("returns empty map for no sessions", () => {
     const sessions = new Map<string, SessionProcessInfo>();
-    expect(getActiveProcesses(sessions).size).toBe(0);
+    expect(getActiveSessions(sessions).size).toBe(0);
   });
 
-  it("includes session with running process", () => {
+  it("includes session with running process and activity state", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null } }],
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: false }],
     ]);
-    const active = getActiveProcesses(sessions);
-    expect(active.get("/repos/myproject")).toBe("sid-1");
+    const active = getActiveSessions(sessions);
+    const info = active.get("/repos/myproject");
+    expect(info?.sessionId).toBe("sid-1");
+    expect(info?.activity).toBe("waiting");
+  });
+
+  it("marks working when turnInProgress is true", () => {
+    const sessions = new Map<string, SessionProcessInfo>([
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: true }],
+    ]);
+    const info = getActiveSessions(sessions).get("/repos/myproject");
+    expect(info?.activity).toBe("working");
   });
 
   it("excludes session with exited process", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: { exitCode: 0 } }],
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: 0 }, turnInProgress: false }],
     ]);
-    expect(getActiveProcesses(sessions).size).toBe(0);
+    expect(getActiveSessions(sessions).size).toBe(0);
   });
 
   it("excludes session with null process (not yet spawned)", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: null }],
+      ["sid-1", { folder: "/repos/myproject", process: null, turnInProgress: false }],
     ]);
-    expect(getActiveProcesses(sessions).size).toBe(0);
+    expect(getActiveSessions(sessions).size).toBe(0);
   });
 
   it("handles mixed sessions correctly", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["active-1", { folder: "/repos/a", process: { exitCode: null } }],
-      ["exited-2", { folder: "/repos/b", process: { exitCode: 1 } }],
-      ["unspawned-3", { folder: "/repos/c", process: null }],
-      ["active-4", { folder: "/repos/d", process: { exitCode: null } }],
+      ["active-1", { folder: "/repos/a", process: { exitCode: null }, turnInProgress: true }],
+      ["exited-2", { folder: "/repos/b", process: { exitCode: 1 }, turnInProgress: false }],
+      ["unspawned-3", { folder: "/repos/c", process: null, turnInProgress: false }],
+      ["active-4", { folder: "/repos/d", process: { exitCode: null }, turnInProgress: false }],
     ]);
-    const active = getActiveProcesses(sessions);
+    const active = getActiveSessions(sessions);
     expect(active.size).toBe(2);
-    expect(active.get("/repos/a")).toBe("active-1");
-    expect(active.get("/repos/d")).toBe("active-4");
+    expect(active.get("/repos/a")?.activity).toBe("working");
+    expect(active.get("/repos/d")?.activity).toBe("waiting");
   });
 });
 
@@ -1039,5 +1110,255 @@ describe("idle guard scenario: CC working while client away", () => {
     );
     expect(result.action).toBe("kill");
     expect(result.reason).toBe("safety cap exceeded");
+  });
+});
+
+// --- Conflation helpers ---
+
+describe("isStreamDelta", () => {
+  it("returns true for content_block_delta", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hi" } },
+    };
+    expect(isStreamDelta(event)).toBe(true);
+  });
+
+  it("returns false for content_block_start", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    };
+    expect(isStreamDelta(event)).toBe(false);
+  });
+
+  it("returns false for message_start", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "message_start", message: {} },
+    };
+    expect(isStreamDelta(event)).toBe(false);
+  });
+
+  it("returns false for non-stream events", () => {
+    expect(isStreamDelta({ type: "result" })).toBe(false);
+    expect(isStreamDelta({ type: "assistant" })).toBe(false);
+    expect(isStreamDelta({ type: "system" })).toBe(false);
+    expect(isStreamDelta({ type: "user" })).toBe(false);
+  });
+});
+
+describe("extractDeltaInfo", () => {
+  it("extracts text_delta info", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+    };
+    const info = extractDeltaInfo(event);
+    expect(info).toEqual({
+      key: "0:text_delta",
+      index: 0,
+      deltaType: "text_delta",
+      field: "text",
+      payload: "hello",
+    });
+  });
+
+  it("extracts input_json_delta info", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"cmd' } },
+    };
+    const info = extractDeltaInfo(event);
+    expect(info).toEqual({
+      key: "1:input_json_delta",
+      index: 1,
+      deltaType: "input_json_delta",
+      field: "partial_json",
+      payload: '{"cmd',
+    });
+  });
+
+  it("extracts thinking delta info", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "thinking", thinking: "Let me" } },
+    };
+    const info = extractDeltaInfo(event);
+    expect(info).toEqual({
+      key: "0:thinking",
+      index: 0,
+      deltaType: "thinking",
+      field: "thinking",
+      payload: "Let me",
+    });
+  });
+
+  it("returns null for unknown delta subtype", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "future_type", data: "x" } },
+    };
+    expect(extractDeltaInfo(event)).toBeNull();
+  });
+
+  it("returns null for non-delta stream events", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "message_start", message: {} },
+    };
+    expect(extractDeltaInfo(event)).toBeNull();
+  });
+
+  it("returns null for non-stream events", () => {
+    expect(extractDeltaInfo({ type: "result" })).toBeNull();
+  });
+
+  it("handles empty text payload", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "" } },
+    };
+    const info = extractDeltaInfo(event);
+    expect(info?.payload).toBe("");
+  });
+
+  it("uses different keys for different indices", () => {
+    const event0 = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "a" } },
+    };
+    const event1 = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "b" } },
+    };
+    expect(extractDeltaInfo(event0)?.key).toBe("0:text_delta");
+    expect(extractDeltaInfo(event1)?.key).toBe("1:text_delta");
+  });
+});
+
+describe("buildMergedDelta", () => {
+  it("builds a text_delta event from accumulated text", () => {
+    const pending: PendingDelta = {
+      index: 0,
+      deltaType: "text_delta",
+      field: "text",
+      accumulated: "Hello world",
+    };
+    expect(buildMergedDelta(pending)).toEqual({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Hello world" },
+      },
+    });
+  });
+
+  it("builds an input_json_delta event", () => {
+    const pending: PendingDelta = {
+      index: 1,
+      deltaType: "input_json_delta",
+      field: "partial_json",
+      accumulated: '{"command":"ls"}',
+    };
+    expect(buildMergedDelta(pending)).toEqual({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"command":"ls"}' },
+      },
+    });
+  });
+
+  it("builds a thinking delta event", () => {
+    const pending: PendingDelta = {
+      index: 0,
+      deltaType: "thinking",
+      field: "thinking",
+      accumulated: "Let me think about this carefully",
+    };
+    expect(buildMergedDelta(pending)).toEqual({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking", thinking: "Let me think about this carefully" },
+      },
+    });
+  });
+});
+
+describe("conflation constants", () => {
+  it("CONFLATION_INTERVAL_MS is 250ms", () => {
+    expect(CONFLATION_INTERVAL_MS).toBe(250);
+  });
+
+  it("MESSAGE_BUFFER_CAP is 10000", () => {
+    expect(MESSAGE_BUFFER_CAP).toBe(10_000);
+  });
+
+  it("BACKPRESSURE_THRESHOLD is 64KB", () => {
+    expect(BACKPRESSURE_THRESHOLD).toBe(64 * 1024);
+  });
+});
+
+// --- isUserTextEcho ---
+
+describe("isUserTextEcho", () => {
+  it("returns true for user text message (CC echo from --replay-user-messages)", () => {
+    const event = {
+      type: "user",
+      message: { role: "user", content: "Say hello" },
+      session_id: "abc",
+      parent_tool_use_id: null,
+    };
+    expect(isUserTextEcho(event)).toBe(true);
+  });
+
+  it("returns false for user tool_result message (array content)", () => {
+    const event = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ tool_use_id: "toolu_01", type: "tool_result", content: "output", is_error: false }],
+      },
+    };
+    expect(isUserTextEcho(event)).toBe(false);
+  });
+
+  it("returns false for assistant events", () => {
+    expect(isUserTextEcho({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } })).toBe(false);
+  });
+
+  it("returns false for result events", () => {
+    expect(isUserTextEcho({ type: "result" })).toBe(false);
+  });
+
+  it("returns false for system events", () => {
+    expect(isUserTextEcho({ type: "system", subtype: "init" })).toBe(false);
+  });
+
+  it("returns false for stream events", () => {
+    expect(isUserTextEcho({ type: "stream_event", event: { type: "message_start" } })).toBe(false);
+  });
+
+  it("returns false for user event with missing message", () => {
+    expect(isUserTextEcho({ type: "user" })).toBe(false);
+  });
+
+  it("returns false for user event with content array (image prompt via bridge)", () => {
+    const event = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBOR..." } },
+          { type: "text", text: "What's in this image?" },
+        ],
+      },
+    };
+    expect(isUserTextEcho(event)).toBe(false);
   });
 });

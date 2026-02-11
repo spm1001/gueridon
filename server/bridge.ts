@@ -2,10 +2,12 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { scanFolders, getLatestSession, getLatestHandoff, getSessionJSONLPath, FolderInfo, SCAN_ROOT } from "./folders.js";
+import { scanFolders, getLatestSession, getLatestHandoff, getSessionJSONLPath, hasExitMarker, writeExitMarker, FolderInfo, SCAN_ROOT } from "./folders.js";
+import { generateFolderName } from "./fun-names.js";
 import {
   IDLE_TIMEOUT_MS,
   PING_INTERVAL_MS,
@@ -13,14 +15,23 @@ import {
   KILL_ESCALATION_MS,
   EARLY_EXIT_MS,
   buildCCArgs,
-  getActiveProcesses as getActiveProcessesFromSessions,
+  getActiveSessions as getActiveSessionsFromSessions,
   resolveSessionForFolder,
   validateFolderPath,
   parseSessionJSONL,
   resolveStaticFile,
   checkIdle,
   DEFAULT_IDLE_GUARDS,
+  CONFLATION_INTERVAL_MS,
+  MESSAGE_BUFFER_CAP,
+  BACKPRESSURE_THRESHOLD,
+  isStreamDelta,
+  extractDeltaInfo,
+  buildMergedDelta,
+  isUserTextEcho,
+  isExitCommand,
   type IdleSessionState,
+  type PendingDelta,
 } from "./bridge-logic.js";
 
 // --- Configuration ---
@@ -33,6 +44,7 @@ const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
 interface ClientPrompt {
   type: "prompt";
   text: string;
+  content?: Array<{ type: string; [key: string]: unknown }>;
 }
 interface ClientAbort {
   type: "abort";
@@ -44,11 +56,15 @@ interface ClientConnectFolder {
   type: "connectFolder";
   path: string;
 }
+interface ClientCreateFolder {
+  type: "createFolder";
+}
 type ClientMessage =
   | ClientPrompt
   | ClientAbort
   | ClientListFolders
-  | ClientConnectFolder;
+  | ClientConnectFolder
+  | ClientCreateFolder;
 
 // Bridge → Browser
 interface BridgeConnected {
@@ -89,9 +105,19 @@ interface BridgeHistoryEnd {
   source: "bridge";
   type: "historyEnd";
 }
+interface BridgeFolderCreated {
+  source: "bridge";
+  type: "folderCreated";
+  folder: FolderInfo;
+}
 interface BridgeCCEvent {
   source: "cc";
   event: Record<string, unknown>;
+}
+interface BridgeSessionClosed {
+  source: "bridge";
+  type: "sessionClosed";
+  deliberate: boolean;
 }
 type ServerMessage =
   | BridgeConnected
@@ -100,9 +126,11 @@ type ServerMessage =
   | BridgeProcessExit
   | BridgeLobbyConnected
   | BridgeFolderList
+  | BridgeFolderCreated
   | BridgeHistoryStart
   | BridgeHistoryEnd
-  | BridgeCCEvent;
+  | BridgeCCEvent
+  | BridgeSessionClosed;
 
 // --- Session state ---
 
@@ -125,6 +153,9 @@ interface Session {
   idleStart: number | null; // When last client disconnected (null = clients connected)
   idleCheckTimer: ReturnType<typeof setTimeout> | null; // Replaces old idleTimer
   guardWasDeferred: boolean; // For grace period detection
+  // Conflation: batch content_block_delta events for fewer ws.send() calls
+  pendingDeltas: Map<string, PendingDelta>; // Keyed by `${index}:${deltaType}`
+  flushTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const sessions = new Map<string, Session>();
@@ -148,8 +179,8 @@ interface Connection {
 const connections = new Map<WebSocket, Connection>();
 
 /** Build activeProcesses map from sessions for scanFolders. */
-function getActiveProcesses(): Map<string, string> {
-  return getActiveProcessesFromSessions(sessions);
+function getActiveSessions(): Map<string, import("./bridge-logic.js").ActiveSessionInfo> {
+  return getActiveSessionsFromSessions(sessions);
 }
 
 // --- CC process management ---
@@ -189,6 +220,31 @@ function killWithEscalation(proc: ChildProcess, sessionId: string): void {
   escalation.unref();
 }
 
+/**
+ * Destroy a session: flush deltas, cancel idle, kill process, remove from map.
+ * Does NOT notify clients — caller handles that (different messages for
+ * different contexts: sessionClosed for /exit, nothing for idle kill).
+ */
+function destroySession(session: Session): void {
+  // Transition all connected clients back to lobby mode.
+  // Prevents zombie: conn.state referencing a dead session would let
+  // a late-arriving message spawn a new CC process for a /exit'd session.
+  for (const client of session.clients) {
+    const c = connections.get(client);
+    if (c) c.state = { mode: "lobby" };
+  }
+  cancelIdleCheck(session);
+  if (session.flushTimer) {
+    clearTimeout(session.flushTimer);
+    session.flushTimer = null;
+  }
+  session.pendingDeltas.clear();
+  if (session.process) {
+    killWithEscalation(session.process, session.id);
+  }
+  sessions.delete(session.id);
+}
+
 function sendToClient(ws: WebSocket | null, msg: ServerMessage): void {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(msg));
@@ -197,11 +253,48 @@ function sendToClient(ws: WebSocket | null, msg: ServerMessage): void {
 
 /** Send a message to all connected clients for a session. */
 function broadcast(session: Session, msg: ServerMessage): void {
-  const data = JSON.stringify(msg);
+  broadcastSerialized(session, JSON.stringify(msg), false);
+}
+
+/**
+ * Send pre-serialized data to all connected clients.
+ * When respectBackpressure is true, skips clients whose write buffer is saturated —
+ * safe for delta events (client gets the next batch), unsafe for structural events.
+ */
+function broadcastSerialized(session: Session, data: string, respectBackpressure: boolean): void {
   for (const client of session.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(data);
-    }
+    if (client.readyState !== WebSocket.OPEN) continue;
+    if (respectBackpressure && client.bufferedAmount >= BACKPRESSURE_THRESHOLD) continue;
+    client.send(data);
+  }
+}
+
+/**
+ * Flush all pending content_block_delta events as merged deltas.
+ * Called on timer tick (250ms) and before any non-delta event (to preserve ordering).
+ */
+function flushPendingDeltas(session: Session): void {
+  if (session.flushTimer) {
+    clearTimeout(session.flushTimer);
+    session.flushTimer = null;
+  }
+
+  for (const pending of session.pendingDeltas.values()) {
+    const merged = buildMergedDelta(pending);
+    const serialized = JSON.stringify({ source: "cc", event: merged });
+    broadcastSerialized(session, serialized, true);
+    pushToBuffer(session, serialized);
+  }
+  session.pendingDeltas.clear();
+}
+
+/** Push to messageBuffer with cap to prevent unbounded memory on long sessions. */
+function pushToBuffer(session: Session, serialized: string): void {
+  session.messageBuffer.push(serialized);
+  if (session.messageBuffer.length > MESSAGE_BUFFER_CAP) {
+    // Drop oldest 10% to avoid doing this every push
+    const dropCount = Math.floor(MESSAGE_BUFFER_CAP * 0.1);
+    session.messageBuffer.splice(0, dropCount);
   }
 }
 
@@ -243,10 +336,7 @@ function scheduleIdleCheck(session: Session, delayMs: number): void {
       console.log(
         `[bridge] idle check: killing CC session=${session.id} (${action.reason})`,
       );
-      if (session.process) {
-        killWithEscalation(session.process, session.id);
-      }
-      sessions.delete(session.id);
+      destroySession(session);
     } else {
       console.log(`[bridge] idle check: session=${session.id} — ${action.reason}`);
       session.guardWasDeferred = action.guardDeferred;
@@ -297,12 +387,39 @@ function wireProcessToSession(session: Session): void {
       if (event.type === "result") {
         session.turnInProgress = false;
       }
-      // Inline broadcast + buffer: serialize once, send to clients, push to buffer
-      const serialized = JSON.stringify({ source: "cc", event });
-      for (const client of session.clients) {
-        if (client.readyState === WebSocket.OPEN) client.send(serialized);
+
+      // Conflation: content_block_delta events are merged and flushed on a timer.
+      // Everything else flushes pending deltas first (ordering) then sends immediately.
+      const deltaInfo = extractDeltaInfo(event);
+      if (deltaInfo) {
+        const existing = session.pendingDeltas.get(deltaInfo.key);
+        if (existing) {
+          existing.accumulated += deltaInfo.payload;
+        } else {
+          session.pendingDeltas.set(deltaInfo.key, {
+            index: deltaInfo.index,
+            deltaType: deltaInfo.deltaType,
+            field: deltaInfo.field,
+            accumulated: deltaInfo.payload,
+          });
+        }
+        if (!session.flushTimer) {
+          session.flushTimer = setTimeout(() => flushPendingDeltas(session), CONFLATION_INTERVAL_MS);
+        }
+      } else {
+        // Non-delta: flush pending deltas first to preserve event ordering
+        flushPendingDeltas(session);
+        const serialized = JSON.stringify({ source: "cc", event });
+        broadcastSerialized(session, serialized, false);
+        // Skip CC user text echoes from buffer — bridge already injected user
+        // messages when receiving the prompt (handleSessionMessage). CC echoes
+        // (from --replay-user-messages) are redundant in the buffer and would
+        // cause duplicate user messages during replay. Tool results (array
+        // content) are NOT echoes — they're CC's own output and must be buffered.
+        if (!isUserTextEcho(event)) {
+          pushToBuffer(session, serialized);
+        }
       }
-      session.messageBuffer.push(serialized);
     } catch {
       // Non-JSON output from CC (startup banners, warnings)
       console.log(`[bridge] non-json stdout: ${trimmed.slice(0, 200)}`);
@@ -326,6 +443,9 @@ function wireProcessToSession(session: Session): void {
     console.log(
       `[bridge] CC exited session=${session.id} code=${code} signal=${signal} uptime=${uptime}ms`
     );
+
+    // Flush any buffered deltas before exit events — clients see the last chunk
+    flushPendingDeltas(session);
 
     // Early exit with non-zero code = likely flag/version problem
     if (
@@ -496,6 +616,38 @@ function attachWsToSession(ws: WebSocket, session: Session): void {
   session.clients.add(ws);
 }
 
+/** Create a new folder with a fun name, git init it, return FolderInfo. */
+async function handleCreateFolder(ws: WebSocket): Promise<void> {
+  try {
+    const name = await generateFolderName(SCAN_ROOT);
+    const folderPath = join(SCAN_ROOT, name);
+    await mkdir(folderPath, { recursive: true });
+    await new Promise<void>((resolve, reject) => {
+      execFile("git", ["init"], { cwd: folderPath }, (err) =>
+        err ? reject(err) : resolve(),
+      );
+    });
+    console.log(`[bridge] created folder: ${folderPath}`);
+    const folder: FolderInfo = {
+      name,
+      path: folderPath,
+      state: "fresh",
+      activity: null,
+      sessionId: null,
+      lastActive: null,
+      handoffPurpose: null,
+    };
+    sendToClient(ws, { source: "bridge", type: "folderCreated", folder });
+  } catch (err) {
+    console.error(`[bridge] createFolder failed:`, err);
+    sendToClient(ws, {
+      source: "bridge",
+      type: "error",
+      error: `Failed to create folder: ${err}`,
+    });
+  }
+}
+
 /** Handle messages on a session-mode connection. */
 async function handleSessionMessage(
   ws: WebSocket,
@@ -504,14 +656,46 @@ async function handleSessionMessage(
 ): Promise<void> {
   switch (msg.type) {
     case "prompt": {
+      // Intercept exit commands — CC doesn't handle these in -p mode
+      if (isExitCommand(msg.text)) {
+        console.log(`[bridge] exit command intercepted session=${session.id}`);
+        broadcast(session, {
+          source: "bridge",
+          type: "sessionClosed",
+          deliberate: true,
+        });
+        writeExitMarker(session.folder, session.id).catch((err) =>
+          console.error(`[bridge] failed to write .exit marker:`, err),
+        );
+        destroySession(session);
+        return;
+      }
+
       // Lazy spawn: start CC process on first prompt (or respawn if dead)
       const needsResume = session.process === null && session.resumable;
       if (!ensureProcess(session, needsResume)) return;
 
+      // Buffer the user message for replay BEFORE writing to stdin.
+      // This ensures user messages appear in the replay buffer at the correct
+      // position (before the assistant's response), regardless of when CC's
+      // --replay-user-messages echo arrives on stdout.
+      const ccContent = msg.content ?? msg.text;
+      const userEvent = JSON.stringify({
+        source: "cc",
+        event: { type: "user", message: { role: "user", content: ccContent } },
+      });
+      pushToBuffer(session, userEvent);
+      // Broadcast to other tabs so they see the user message immediately
+      for (const client of session.clients) {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+          client.send(userEvent);
+        }
+      }
+
       // Write prompt to CC stdin
       const envelope = JSON.stringify({
         type: "user",
-        message: { role: "user", content: msg.text },
+        message: { role: "user", content: ccContent },
       });
       if (writeToStdin(session, envelope + "\n")) {
         session.turnInProgress = true;
@@ -531,8 +715,13 @@ async function handleSessionMessage(
     case "listFolders": {
       // Allow folder listing even in session mode — read-only, needed for
       // the folder picker to show accurate state (active dots, timestamps)
-      const folders = await scanFolders(getActiveProcesses());
+      const folders = await scanFolders(getActiveSessions());
       sendToClient(ws, { source: "bridge", type: "folderList", folders });
+      break;
+    }
+
+    case "createFolder": {
+      await handleCreateFolder(ws);
       break;
     }
 
@@ -561,8 +750,13 @@ async function handleLobbyMessage(
 ): Promise<void> {
   switch (msg.type) {
     case "listFolders": {
-      const folders = await scanFolders(getActiveProcesses());
+      const folders = await scanFolders(getActiveSessions());
       sendToClient(ws, { source: "bridge", type: "folderList", folders });
+      break;
+    }
+
+    case "createFolder": {
+      await handleCreateFolder(ws);
       break;
     }
 
@@ -598,10 +792,12 @@ async function handleLobbyMessage(
       // Resolve: reconnect, resume, or fresh?
       const latestSession = await getLatestSession(folderPath);
       const handoff = await getLatestHandoff(folderPath);
+      const exitMarker = latestSession ? await hasExitMarker(folderPath, latestSession.id) : false;
       const resolution = resolveSessionForFolder(
         existingSession ? { id: existingSession.id, resumable: existingSession.resumable } : null,
         latestSession,
         !!handoff,
+        exitMarker,
         randomUUID,
       );
 
@@ -624,6 +820,8 @@ async function handleLobbyMessage(
           idleStart: null,
           idleCheckTimer: null,
           guardWasDeferred: false,
+          pendingDeltas: new Map(),
+          flushTimer: null,
         };
 
         // Pre-populate message buffer from JSONL for paused sessions
@@ -694,10 +892,12 @@ wss.on("connection", (ws: WebSocket) => {
   console.log("[bridge] client connected (lobby mode)");
 
   // Single message handler — dispatches based on current mode.
-  // Lobby messages are async (scanFolders, getLatestSession) so we chain them
-  // to prevent interleaving. Session messages are mostly sync (prompt writes to
-  // stdin, abort kills process) but listFolders is async — safe because read-only.
+  // Both lobby and session messages use a queue chain to prevent interleaving.
+  // Lobby: connectFolder is async (getLatestSession, resolveSession) and mutates state.
+  // Session: listFolders is async (scanFolders). prompt/abort are sync but
+  // queuing them is harmless and keeps error handling consistent.
   let lobbyQueue = Promise.resolve();
+  let sessionQueue = Promise.resolve();
 
   ws.on("message", (data) => {
     let msg: ClientMessage;
@@ -713,9 +913,12 @@ wss.on("connection", (ws: WebSocket) => {
     }
 
     if (conn.state.mode === "session") {
-      handleSessionMessage(ws, conn.state.session, msg).catch((err) =>
-        console.error(`[bridge] session message error:`, err),
-      );
+      // Capture session ref now — conn.state can change (e.g. destroySession
+      // transitions to lobby) before the queued .then() callback fires.
+      const session = conn.state.session;
+      sessionQueue = sessionQueue
+        .then(() => handleSessionMessage(ws, session, msg))
+        .catch((err) => console.error(`[bridge] session message error:`, err));
     } else {
       lobbyQueue = lobbyQueue
         .then(() => handleLobbyMessage(ws, conn, msg))
@@ -768,12 +971,12 @@ function shutdown() {
   }
   connections.clear();
 
-  // Kill all CC processes and clear idle check timers
-  for (const [id, session] of sessions) {
-    cancelIdleCheck(session);
-    if (session.process) killWithEscalation(session.process, id);
+  // Kill all CC processes and clear timers.
+  // Snapshot first — destroySession mutates the map.
+  const allSessions = [...sessions.values()];
+  for (const session of allSessions) {
+    destroySession(session);
   }
-  sessions.clear();
 
   wss.close();
   httpServer.close(() => {
