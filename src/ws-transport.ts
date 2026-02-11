@@ -46,6 +46,8 @@ export interface WSTransportOptions {
   onHistoryStart?: () => void;
   /** Called when bridge finishes replaying history buffer */
   onHistoryEnd?: () => void;
+  /** Called when bridge deliberately closes the session (/exit, /quit) */
+  onSessionClosed?: (deliberate: boolean) => void;
 }
 
 // --- Reconnect backoff ---
@@ -251,6 +253,18 @@ export class WSTransport implements CCTransport {
             error: `CC process exited (code=${msg.code}, signal=${msg.signal})`,
           });
           this.options.onProcessExit?.(msg.code ?? null, msg.signal ?? null);
+          break;
+
+        case "sessionClosed":
+          // Session deliberately closed via /exit or /quit.
+          // Synthesize a clean result so the adapter clears isStreaming.
+          this.clearPromptTimer();
+          this.eventHandler?.({
+            type: "result",
+            subtype: "success",
+            result: "",
+          });
+          this.options.onSessionClosed?.(msg.deliberate ?? false);
           break;
       }
     } else if (msg.source === "cc") {

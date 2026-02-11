@@ -199,6 +199,9 @@ const transport = new WSTransport({
     const detail = signal ? `signal ${signal}` : `code ${code}`;
     dispatch({ type: "connection_failed", reason: `Claude process exited (${detail})` });
   },
+  onSessionClosed: () => {
+    dispatch({ type: "session_closed" });
+  },
 });
 
 agent.connectTransport(transport);

@@ -507,6 +507,40 @@ describe("processExit", () => {
   });
 });
 
+// --- sessionClosed ---
+
+describe("sessionClosed", () => {
+  it("synthesizes success result event and fires onSessionClosed callback", () => {
+    const onSessionClosed = vi.fn();
+    const { transport } = createLobbyTransport({ onSessionClosed });
+    const ws = connectAndOpen(transport);
+    const received: any[] = [];
+    transport.onEvent((e) => received.push(e));
+
+    ws.simulateMessage({
+      source: "bridge",
+      type: "sessionClosed",
+      deliberate: true,
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0].type).toBe("result");
+    expect(received[0].subtype).toBe("success");
+    expect(onSessionClosed).toHaveBeenCalledWith(true);
+  });
+
+  it("clears prompt timer on sessionClosed", () => {
+    const { transport, callbacks } = createLobbyTransport();
+    const ws = connectAndOpen(transport);
+
+    transport.send("test"); // starts prompt timer
+    ws.simulateMessage({ source: "bridge", type: "sessionClosed", deliberate: true });
+
+    vi.advanceTimersByTime(10_000);
+    expect(callbacks.onBridgeError).not.toHaveBeenCalled();
+  });
+});
+
 // --- returnToLobby ---
 
 describe("returnToLobby", () => {

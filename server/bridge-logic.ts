@@ -116,6 +116,7 @@ export function resolveSessionForFolder(
   existingBridgeSession: { id: string; resumable: boolean } | null,
   latestSessionFile: { id: string } | null,
   hasHandoff: boolean,
+  hasExit: boolean,
   generateId: () => string,
 ): SessionResolution {
   // Multi-WS reconnect: another tab already connected this folder
@@ -127,8 +128,8 @@ export function resolveSessionForFolder(
     };
   }
 
-  // Paused: CC session exists but wasn't closed → resume
-  if (latestSessionFile && !hasHandoff) {
+  // Paused: CC session exists but wasn't deliberately closed → resume
+  if (latestSessionFile && !hasHandoff && !hasExit) {
     return {
       sessionId: latestSessionFile.id,
       resumable: true,
@@ -136,7 +137,7 @@ export function resolveSessionForFolder(
     };
   }
 
-  // Closed (handoff exists) or fresh (no session files) → new session
+  // Closed (handoff or .exit marker) or fresh (no session files) → new session
   return {
     sessionId: generateId(),
     resumable: false,
@@ -456,6 +457,19 @@ export interface DeltaInfo {
   field: string;
   /** The actual text/json payload from this delta. */
   payload: string;
+}
+
+/** Exit commands that the bridge intercepts before forwarding to CC. */
+const EXIT_COMMANDS = new Set(["/exit", "/quit"]);
+
+/**
+ * Check if a prompt is an exit command (/exit or /quit).
+ * CC's /exit is REPL-only — in -p --stream-json mode it returns
+ * "Unknown skill: exit". The bridge intercepts these and handles
+ * session close at the protocol level.
+ */
+export function isExitCommand(text: string): boolean {
+  return EXIT_COMMANDS.has(text.trim().toLowerCase());
 }
 
 /**

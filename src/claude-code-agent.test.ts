@@ -930,6 +930,28 @@ describe("reset", () => {
     expect(agent.cwd).toBe("");
   });
 
+  it("emits agent_end with empty messages", () => {
+    // Build some state first
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "hi" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    });
+
+    const resetEvents: any[] = [];
+    agent.subscribe((e) => resetEvents.push(e));
+
+    agent.reset();
+
+    const agentEnd = resetEvents.find((e) => e.type === "agent_end");
+    expect(agentEnd).toBeDefined();
+    expect(agentEnd.messages).toEqual([]);
+  });
+
   it("preserves subscribers", () => {
     const postResetEvents: any[] = [];
     agent.subscribe((e) => postResetEvents.push(e));

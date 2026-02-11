@@ -138,8 +138,11 @@ export class ClaudeCodeAgent {
     this._cwd = "";
     this._lastRemainingBand = "normal";
     this._contextNote = null;
-    // Notify subscribers so UI clears stale messages
-    this.emit({ type: "agent_end" });
+    // Notify subscribers so UI clears stale messages.
+    // Semantically this is a reset, not a turn ending, but AgentEvent (from
+    // pi-agent-core) has no reset event. agent_end with empty messages is the
+    // closest match — subscribers clear streaming state and sync from agent.
+    this.emit({ type: "agent_end", messages: [] });
   }
 
   /** Begin replaying history — suppresses emit() and callbacks until endReplay() */

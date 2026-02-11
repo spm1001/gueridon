@@ -21,6 +21,7 @@ import {
   extractDeltaInfo,
   buildMergedDelta,
   isUserTextEcho,
+  isExitCommand,
   CONFLATION_INTERVAL_MS,
   MESSAGE_BUFFER_CAP,
   BACKPRESSURE_THRESHOLD,
@@ -148,6 +149,7 @@ describe("resolveSessionForFolder", () => {
         { id: "bridge-session-1", resumable: true },
         null,
         false,
+        false,
         fixedId,
       );
       expect(result).toEqual({
@@ -162,6 +164,7 @@ describe("resolveSessionForFolder", () => {
         { id: "bridge-session-2", resumable: false },
         null,
         false,
+        false,
         fixedId,
       );
       expect(result.resumable).toBe(false);
@@ -173,6 +176,7 @@ describe("resolveSessionForFolder", () => {
         { id: "bridge-session-3", resumable: true },
         { id: "old-session-file" },
         true, // handoff exists — but bridge session takes priority
+        false,
         fixedId,
       );
       expect(result.sessionId).toBe("bridge-session-3");
@@ -186,6 +190,7 @@ describe("resolveSessionForFolder", () => {
         null,
         { id: "paused-session-abc" },
         false, // no handoff
+        false, // no .exit
         fixedId,
       );
       expect(result).toEqual({
@@ -202,6 +207,7 @@ describe("resolveSessionForFolder", () => {
         null,
         { id: "old-closed-session" },
         true, // handoff exists = was closed
+        false,
         fixedId,
       );
       expect(result).toEqual({
@@ -218,6 +224,7 @@ describe("resolveSessionForFolder", () => {
         null,
         { id: "should-not-reuse-this" },
         true, // handoff exists
+        false,
         fixedId,
       );
       expect(result.sessionId).not.toBe("should-not-reuse-this");
@@ -231,6 +238,7 @@ describe("resolveSessionForFolder", () => {
       const result = resolveSessionForFolder(
         null,
         null,
+        false,
         false,
         fixedId,
       );
@@ -250,6 +258,7 @@ describe("resolveSessionForFolder", () => {
         null,
         null,
         true,
+        false,
         fixedId,
       );
       expect(result).toEqual({
@@ -264,12 +273,56 @@ describe("resolveSessionForFolder", () => {
     let counter = 0;
     const gen = () => `gen-${++counter}`;
 
-    const r1 = resolveSessionForFolder(null, null, false, gen);
+    const r1 = resolveSessionForFolder(null, null, false, false, gen);
     expect(r1.sessionId).toBe("gen-1");
 
-    const r2 = resolveSessionForFolder(null, null, true, gen);
+    const r2 = resolveSessionForFolder(null, null, true, false, gen);
     expect(r2.sessionId).toBe("gen-2");
   });
+
+  describe("exited folder (.exit marker exists)", () => {
+    it("creates fresh session when .exit marker exists (no handoff)", () => {
+      const result = resolveSessionForFolder(
+        null,
+        { id: "exited-session" },
+        false, // no handoff
+        true,  // has .exit marker
+        fixedId,
+      );
+      expect(result).toEqual({
+        sessionId: "fresh-uuid-123",
+        resumable: false,
+        isReconnect: false,
+      });
+    });
+
+    it("creates fresh session when both .exit and handoff exist", () => {
+      const result = resolveSessionForFolder(
+        null,
+        { id: "exited-session" },
+        true,  // handoff exists
+        true,  // has .exit marker
+        fixedId,
+      );
+      expect(result).toEqual({
+        sessionId: "fresh-uuid-123",
+        resumable: false,
+        isReconnect: false,
+      });
+    });
+  });
+});
+
+// --- isExitCommand ---
+
+describe("isExitCommand", () => {
+  it("recognizes /exit", () => expect(isExitCommand("/exit")).toBe(true));
+  it("recognizes /quit", () => expect(isExitCommand("/quit")).toBe(true));
+  it("is case-insensitive", () => expect(isExitCommand("/EXIT")).toBe(true));
+  it("trims whitespace", () => expect(isExitCommand("  /quit  ")).toBe(true));
+  it("rejects normal prompts", () => expect(isExitCommand("hello")).toBe(false));
+  it("rejects partial match", () => expect(isExitCommand("/exit now")).toBe(false));
+  it("rejects embedded /exit", () => expect(isExitCommand("run /exit")).toBe(false));
 });
 
 // --- validateFolderPath ---
@@ -1283,5 +1336,19 @@ describe("isUserTextEcho", () => {
 
   it("returns false for user event with missing message", () => {
     expect(isUserTextEcho({ type: "user" })).toBe(false);
+  });
+
+  it("returns false for user event with content array (image prompt via bridge)", () => {
+    const event = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBOR..." } },
+          { type: "text", text: "What's in this image?" },
+        ],
+      },
+    };
+    expect(isUserTextEcho(event)).toBe(false);
   });
 });

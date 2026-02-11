@@ -64,6 +64,14 @@ Send a user message. On first prompt, the bridge spawns the CC process (lazy spa
 { "type": "prompt", "text": "Your message here" }
 ```
 
+The `content` field is optional — when present, it's passed to CC's stdin as a content array (for image input). Text-only prompts use `text` alone.
+
+```json
+{ "type": "prompt", "text": "What's in this image?", "content": [{"type": "image", "source": {...}}, {"type": "text", "text": "What's in this image?"}] }
+```
+
+**Exit interception:** `/exit` and `/quit` prompts are intercepted by the bridge — they are NOT forwarded to CC (which doesn't handle them in `-p` mode). Instead, the bridge kills the CC process, writes a `.exit` marker, and sends `sessionClosed` to all clients.
+
 Sending `prompt` in lobby mode returns an error.
 
 ### abort (session only)
@@ -139,6 +147,14 @@ CC process exited. Session remains in memory for reconnect/resume.
 
 ```json
 { "source": "bridge", "type": "processExit", "code": 0, "signal": null }
+```
+
+### sessionClosed
+
+Session deliberately closed via `/exit` or `/quit` command. The bridge intercepted the command (CC doesn't handle these in `-p` mode), killed the CC process, and wrote a `.exit` marker file. Session is removed from bridge memory — reconnecting to the same folder will create a fresh session.
+
+```json
+{ "source": "bridge", "type": "sessionClosed", "deliberate": true }
 ```
 
 ### CC event (forwarded)

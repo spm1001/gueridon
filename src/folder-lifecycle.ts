@@ -31,7 +31,8 @@ export type FolderEvent =
   | { type: "lobby_entered" }
   | { type: "session_started"; sessionId: string }
   | { type: "connection_failed"; reason: string }
-  | { type: "auto_connect"; path: string; name: string };
+  | { type: "auto_connect"; path: string; name: string }
+  | { type: "session_closed" };
 
 // --- Effects (instructions, not side effects) ---
 
@@ -132,6 +133,18 @@ function transitionIdle(
       return {
         state: { phase: "browsing", folders: event.folders },
         effects: [{ type: "open_dialog", folders: event.folders }],
+      };
+
+    case "session_closed":
+      // Session deliberately closed via /exit — clear stored folder so
+      // reload doesn't auto-connect to the closed session, return to lobby
+      return {
+        state,
+        effects: [
+          { type: "clear_stored_folder" },
+          { type: "reset_agent" },
+          { type: "return_to_lobby" },
+        ],
       };
 
     default:

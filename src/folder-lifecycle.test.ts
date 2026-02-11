@@ -575,6 +575,20 @@ describe("full paths", () => {
     expect(r.effects).toEqual([]);
   });
 
+  it("session_closed: idle → clears stored folder, resets agent, returns to lobby", () => {
+    const s: FolderPhase = { phase: "idle" };
+    const r = transition(s, { type: "session_closed" });
+    expect(r.state.phase).toBe("idle");
+    expect(effectTypes(r.effects)).toEqual(["clear_stored_folder", "reset_agent", "return_to_lobby"]);
+  });
+
+  it("session_closed during browsing is a no-op", () => {
+    const browsing: FolderPhase = { phase: "browsing", folders };
+    const r = transition(browsing, { type: "session_closed" });
+    expect(r.state).toBe(browsing);
+    expect(r.effects).toEqual([]);
+  });
+
   it("flash bug scenario: session_started while browsing does NOT close dialog", () => {
     // This is THE test for gdn-jebudo
     let s: FolderPhase = { phase: "browsing", folders };
