@@ -82,10 +82,15 @@ export function emptyUsage(): Usage {
 // --- Transport interface (WebSocket later) ---
 
 export interface CCTransport {
-  send(message: string): void;
+  send(message: string | ContentBlock[]): void;
   onEvent(handler: (event: CCEvent) => void): void;
   close(): void;
 }
+
+/** Content block for multi-modal input (text + images) */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
 
 // --- Claude Code stream-json event types ---
 
@@ -231,7 +236,7 @@ export class ClaudeCodeAgent {
     return () => this.listeners.delete(fn);
   }
 
-  async prompt(input: string | AgentMessage): Promise<void> {
+  async prompt(input: string | AgentMessage | ContentBlock[]): Promise<void> {
     if (!this.transport) {
       this._state.error = "Not connected";
       this.emit({ type: "agent_end", messages: this._state.messages });
@@ -244,19 +249,31 @@ export class ClaudeCodeAgent {
       console.warn("Already streaming, message will be queued by bridge");
     }
 
-    let text = typeof input === "string" ? input : this.extractText(input);
-    if (!text) return;
+    // Resolve input to either a text string or content array
+    let sendPayload: string | ContentBlock[];
+    let displayContent: any[];
 
-    // Inject one-shot context note on threshold crossings
-    if (this._contextNote) {
-      text = `${this._contextNote}\n\n${text}`;
-      this._contextNote = null;
+    if (Array.isArray(input)) {
+      // Content array (text + images) — send as-is, display text parts
+      sendPayload = input;
+      displayContent = input.filter((b) => b.type === "text");
+    } else {
+      let text = typeof input === "string" ? input : this.extractText(input);
+      if (!text) return;
+
+      // Inject one-shot context note on threshold crossings
+      if (this._contextNote) {
+        text = `${this._contextNote}\n\n${text}`;
+        this._contextNote = null;
+      }
+      sendPayload = text;
+      displayContent = [{ type: "text", text }];
     }
 
-    // Add user message to local state
+    // Add user message to local state (text parts only for display)
     const userMessage: AgentMessage = {
       role: "user",
-      content: [{ type: "text", text }],
+      content: displayContent,
       timestamp: Date.now(),
     };
     this._state.messages = [...this._state.messages, userMessage];
@@ -267,7 +284,7 @@ export class ClaudeCodeAgent {
     this.emit({ type: "agent_start" });
     this.emit({ type: "turn_start" });
 
-    this.transport.send(text);
+    this.transport.send(sendPayload);
   }
 
   abort(): void {

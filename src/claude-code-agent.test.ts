@@ -899,6 +899,57 @@ describe("prompt guards", () => {
   });
 });
 
+describe("prompt with content arrays", () => {
+  it("sends content array via transport", () => {
+    let sent: any = null;
+    agent.connectTransport({
+      send: (msg: any) => { sent = msg; },
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    const blocks = [
+      { type: "image" as const, source: { type: "base64" as const, media_type: "image/png", data: "abc123" } },
+      { type: "text" as const, text: "What is this?" },
+    ];
+    agent.prompt(blocks);
+
+    expect(Array.isArray(sent)).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(sent[0].type).toBe("image");
+    expect(sent[1].type).toBe("text");
+  });
+
+  it("adds only text parts to message history for display", () => {
+    agent.connectTransport({
+      send: () => {},
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    agent.prompt([
+      { type: "image" as const, source: { type: "base64" as const, media_type: "image/png", data: "abc" } },
+      { type: "text" as const, text: "Describe this" },
+    ]);
+
+    const userMsg = agent.state.messages[0];
+    expect(userMsg.role).toBe("user");
+    expect(userMsg.content).toHaveLength(1);
+    expect(userMsg.content[0].text).toBe("Describe this");
+  });
+
+  it("sets isStreaming on content array prompt", () => {
+    agent.connectTransport({
+      send: () => {},
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    agent.prompt([{ type: "text" as const, text: "hello" }]);
+    expect(agent.state.isStreaming).toBe(true);
+  });
+});
+
 describe("reset", () => {
   it("clears messages", () => {
     agent.handleCCEvent({
