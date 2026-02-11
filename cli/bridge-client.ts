@@ -263,6 +263,9 @@ export class BridgeClient {
 
       case "result": {
         this._isStreaming = false;
+        // Real CC events: usage at event.result.usage
+        // Synthetic replay events (parseSessionJSONL): also at event.result.usage
+        // Fallback to event.usage for forward-compat with format changes
         this.updateUsage((event.result || event).usage);
         this.cb.onStreamEnd?.();
         break;
