@@ -1,11 +1,9 @@
 import { html, render } from "lit";
 import { ClaudeCodeAgent } from "./claude-code-agent.js";
-import { WSTransport, type ConnectionState } from "./ws-transport.js";
-import type { FolderInfo } from "./ws-transport.js";
+import { WSTransport, type ConnectionState, type FolderInfo } from "./ws-transport.js";
 import { FolderSelector } from "./folder-selector.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
 import { GueridonInterface } from "./gueridon-interface.js";
-import { initial, transition, type FolderEvent, type FolderEffect } from "./folder-lifecycle.js";
 import "./app.css";
 
 // --- Persistent folder (survives page refresh) ---
@@ -21,6 +19,10 @@ function getStoredFolder(): { path: string; name: string } | null {
 
 function storeFolder(path: string, name: string): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ path, name }));
+}
+
+function pathToName(path: string): string {
+  return path.split("/").pop() || path;
 }
 
 // --- Configuration ---
@@ -58,117 +60,40 @@ function updateStatus(state: ConnectionState) {
   gi.updateConnectionStatus(statusLabels[state], statusColors[state]);
 }
 
-// --- Folder lifecycle state machine ---
+// --- Folder picker state ---
+// Two concerns: (1) is the picker open? (2) which folder is connecting?
+// No state machine — transport owns connection mechanics, UI is just booleans.
 
-let lifecycle = initial();
 let folderDialog: FolderSelector | null = null;
 let cachedFolders: FolderInfo[] = [];
+let connectingFromDialog: string | null = null;
 
-// Dispatch queue — effects can trigger callbacks that dispatch new events.
-// Without a queue, the inner dispatch would run mid-iteration of the outer
-// dispatch's effect loop. The queue ensures each dispatch completes fully
-// before the next event is processed.
-let dispatching = false;
-const eventQueue: FolderEvent[] = [];
-
-function dispatch(event: FolderEvent) {
-  eventQueue.push(event);
-  if (dispatching) return;
-  dispatching = true;
-  while (eventQueue.length > 0) {
-    const ev = eventQueue.shift()!;
-    const result = transition(lifecycle, ev);
-    lifecycle = result.state;
-    for (const effect of result.effects) {
-      executeEffect(effect);
-    }
-  }
-  dispatching = false;
-}
-
-function executeEffect(effect: FolderEffect) {
-  switch (effect.type) {
-    case "open_dialog":
-      cachedFolders = effect.folders;
-      if (!folderDialog) {
-        folderDialog = FolderSelector.show(
-          effect.folders,
-          (folder) => {
-            dispatch({
-              type: "folder_selected",
-              path: folder.path,
-              name: folder.name,
-              inSession: transport.state === "connected",
-            });
-          },
-          () => {
-            folderDialog = null;
-            dispatch({ type: "dialog_cancelled" });
-          },
-        );
-      }
-      break;
-    case "update_dialog":
-      cachedFolders = effect.folders;
-      folderDialog?.updateFolders(effect.folders);
-      break;
-    case "close_dialog": {
-      // Null ref before close — close() triggers onCloseCallback which
-      // dispatches dialog_cancelled. With ref nulled, that's a harmless
-      // no-op (idle + dialog_cancelled → no effects).
-      const d = folderDialog;
-      folderDialog = null;
-      d?.close();
-      break;
-    }
-    case "list_folders":
-      transport.listFolders();
-      break;
-    case "connect_folder":
-      transport.connectFolder(effect.path);
-      break;
-    case "return_to_lobby":
-      transport.returnToLobby();
-      break;
-    case "reset_agent":
+function openFolderDialog(folders: FolderInfo[]) {
+  if (folderDialog) return; // prevent double-open
+  cachedFolders = folders;
+  folderDialog = FolderSelector.show(
+    folders,
+    (folder) => {
+      // User selected a folder
+      connectingFromDialog = folder.path;
       agent.reset();
-      break;
-    case "set_cwd":
-      gi.setCwd(effect.name);
-      break;
-    case "focus_input":
-      gi.focusInput();
-      break;
-    case "show_error":
-      gi.showToast(effect.message);
-      break;
-    case "store_folder":
-      storeFolder(effect.path, effect.name);
-      break;
-    case "clear_stored_folder":
-      localStorage.removeItem(STORAGE_KEY);
-      break;
-    case "start_timeout":
-      clearConnectTimeout();
-      connectTimeout = setTimeout(() => {
-        dispatch({ type: "connection_failed", reason: "Connection timed out" });
-      }, effect.ms);
-      break;
-    case "clear_timeout":
-      clearConnectTimeout();
-      break;
-  }
+      gi.setCwd(folder.name);
+      transport.connectToFolder(folder.path);
+    },
+    () => {
+      // Dialog dismissed (escape, backdrop click)
+      folderDialog = null;
+      connectingFromDialog = null;
+    },
+  );
 }
 
-// --- Connect timeout ---
-
-let connectTimeout: ReturnType<typeof setTimeout> | null = null;
-
-function clearConnectTimeout() {
-  if (connectTimeout) {
-    clearTimeout(connectTimeout);
-    connectTimeout = null;
-  }
+function closeFolderDialog() {
+  // Null ref before close — close() triggers onCloseCallback.
+  // With ref nulled, the callback's `folderDialog = null` is redundant but harmless.
+  const d = folderDialog;
+  folderDialog = null;
+  d?.close();
 }
 
 // --- Transport ---
@@ -176,28 +101,73 @@ function clearConnectTimeout() {
 const transport = new WSTransport({
   url: BRIDGE_URL,
   onStateChange: updateStatus,
-  onSessionId: (id) => dispatch({ type: "session_started", sessionId: id }),
-  onBridgeError: (err) => {
-    console.error(`[guéridon] bridge error: ${err}`);
-    dispatch({ type: "connection_failed", reason: err });
-  },
+
   onLobbyConnected: () => {
     const stored = getStoredFolder();
     if (stored) {
-      dispatch({ type: "auto_connect", path: stored.path, name: stored.name });
+      // Auto-connect to last folder (no dialog involvement)
+      gi.setCwd(stored.name);
+      transport.connectToFolder(stored.path);
     } else {
-      dispatch({ type: "lobby_entered" });
+      // No stored folder — request list to open picker
+      transport.listFolders();
     }
   },
-  onFolderList: (folders) => dispatch({ type: "folder_list", folders }),
+
+  onFolderList: (folders) => {
+    cachedFolders = folders;
+    if (folderDialog) {
+      folderDialog.updateFolders(folders);
+    } else {
+      openFolderDialog(folders);
+    }
+  },
+
+  onFolderConnected: (sessionId, path) => {
+    const name = pathToName(path);
+    storeFolder(path, name);
+    gi.setCwd(name);
+    // Close dialog only if this connect was user-initiated from the picker.
+    // Auto-connects (page reload) don't touch the dialog. This prevents
+    // the flash bug: stale session_started can't close a dialog the user
+    // is actively browsing, because the callback split is structural.
+    if (connectingFromDialog === path && folderDialog) {
+      closeFolderDialog();
+    }
+    connectingFromDialog = null;
+    gi.focusInput();
+  },
+
+  onFolderConnectFailed: (reason, _path) => {
+    connectingFromDialog = null;
+    gi.showToast(reason);
+    localStorage.removeItem(STORAGE_KEY);
+    // Show folder picker so user can try a different folder
+    transport.listFolders();
+  },
+
+  onSessionId: (_id) => {
+    // Transparent reconnect (WS dropped while in session). No UI action needed —
+    // status dot already updated via onStateChange.
+  },
+
+  onBridgeError: (err) => {
+    console.error(`[guéridon] bridge error: ${err}`);
+    // Connect-related errors handled by onFolderConnectFailed.
+    // Other errors (prompt timeout, etc.) logged only.
+  },
+
   onHistoryStart: () => agent.startReplay(),
   onHistoryEnd: () => {
     agent.endReplay();
     gi.setContextPercent(agent.contextPercent);
   },
+
   onProcessExit: (code, signal) => {
+    // CC process died. The adapter gets a synthetic result event from the transport.
+    // Connect failures during connectToFolder handled by onFolderConnectFailed.
     const detail = signal ? `signal ${signal}` : `code ${code}`;
-    dispatch({ type: "connection_failed", reason: `Claude process exited (${detail})` });
+    console.warn(`[guéridon] CC process exited (${detail})`);
   },
 });
 
@@ -221,7 +191,11 @@ agent.subscribe((event) => {
   if (event.type === "agent_end") gi.setContextPercent(agent.contextPercent);
 });
 
-gi.onFolderSelect = () => dispatch({ type: "open_requested", cachedFolders });
+gi.onFolderSelect = () => {
+  if (folderDialog) return; // prevent double-open
+  openFolderDialog(cachedFolders);
+  transport.listFolders();
+};
 
 // --- Connect and render ---
 

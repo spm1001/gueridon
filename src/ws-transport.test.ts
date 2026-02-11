@@ -687,3 +687,288 @@ describe("history replay", () => {
     expect(visibilityListeners).toHaveLength(0);
   });
 });
+
+// --- connectToFolder (high-level folder connect) ---
+
+describe("connectToFolder", () => {
+  it("sends connectFolder when already in lobby with open WS", () => {
+    const onFolderConnected = vi.fn();
+    const { transport } = createLobbyTransport({ onFolderConnected });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    transport.connectToFolder("/repos/alpha");
+
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    expect(sent).toContainEqual({ type: "connectFolder", path: "/repos/alpha" });
+  });
+
+  it("fires onFolderConnected on success", () => {
+    const onFolderConnected = vi.fn();
+    const onSessionId = vi.fn();
+    const { transport } = createLobbyTransport({ onFolderConnected, onSessionId });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    transport.connectToFolder("/repos/alpha");
+    ws.simulateMessage({ source: "bridge", type: "connected", sessionId: "sess-1" });
+
+    expect(onFolderConnected).toHaveBeenCalledWith("sess-1", "/repos/alpha");
+    // onSessionId should NOT fire — this is an explicit connect, not a transparent reconnect
+    expect(onSessionId).not.toHaveBeenCalled();
+    expect(transport.state).toBe("connected");
+  });
+
+  it("tears down session and reconnects when called mid-session", () => {
+    const onFolderConnected = vi.fn();
+    const { transport } = createLobbyTransport({ onFolderConnected });
+    const ws1 = connectAndOpen(transport);
+    ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Establish a session via old API
+    transport.connectFolder("/repos/old");
+    ws1.simulateMessage({ source: "bridge", type: "connected", sessionId: "old-sess" });
+
+    // Now switch to new folder via high-level API
+    transport.connectToFolder("/repos/new");
+
+    // Should have created a new WS (torn down old one)
+    const ws2 = wsInstances[wsInstances.length - 1];
+    ws2.simulateOpen();
+    ws2.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Should have sent connectFolder for the NEW folder, not the old one
+    const sent = ws2.sent.map((s: string) => JSON.parse(s));
+    expect(sent).toContainEqual({ type: "connectFolder", path: "/repos/new" });
+    expect(sent.filter((m: any) => m.path === "/repos/old")).toHaveLength(0);
+
+    // Complete the connection
+    ws2.simulateMessage({ source: "bridge", type: "connected", sessionId: "new-sess" });
+    expect(onFolderConnected).toHaveBeenCalledWith("new-sess", "/repos/new");
+  });
+
+  it("retries on bridge error up to maxConnectRetries", () => {
+    const onFolderConnectFailed = vi.fn();
+    const onBridgeError = vi.fn();
+    const { transport } = createLobbyTransport({
+      onFolderConnectFailed,
+      onBridgeError,
+      maxConnectRetries: 3,
+    });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    transport.connectToFolder("/repos/alpha");
+
+    // First error — retry 1
+    ws.simulateMessage({ source: "bridge", type: "error", error: "spawn failed" });
+    expect(onFolderConnectFailed).not.toHaveBeenCalled();
+    expect(onBridgeError).toHaveBeenCalledWith("spawn failed");
+
+    // Second error — retry 2
+    ws.simulateMessage({ source: "bridge", type: "error", error: "spawn failed" });
+    expect(onFolderConnectFailed).not.toHaveBeenCalled();
+
+    // Third error — max reached, fires failure
+    ws.simulateMessage({ source: "bridge", type: "error", error: "spawn failed" });
+    expect(onFolderConnectFailed).toHaveBeenCalledWith("spawn failed", "/repos/alpha");
+    expect(transport.state).toBe("lobby");
+  });
+
+  it("succeeds after partial retries", () => {
+    const onFolderConnected = vi.fn();
+    const onFolderConnectFailed = vi.fn();
+    const { transport } = createLobbyTransport({
+      onFolderConnected,
+      onFolderConnectFailed,
+      maxConnectRetries: 3,
+    });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    transport.connectToFolder("/repos/alpha");
+
+    // First error — retry
+    ws.simulateMessage({ source: "bridge", type: "error", error: "transient" });
+    // Second attempt succeeds
+    ws.simulateMessage({ source: "bridge", type: "connected", sessionId: "recovered" });
+
+    expect(onFolderConnected).toHaveBeenCalledWith("recovered", "/repos/alpha");
+    expect(onFolderConnectFailed).not.toHaveBeenCalled();
+  });
+
+  it("times out after connectTimeout", () => {
+    const onFolderConnectFailed = vi.fn();
+    const onLobbyConnected = vi.fn();
+    const { transport } = createLobbyTransport({
+      onFolderConnectFailed,
+      onLobbyConnected,
+      connectTimeout: 30_000,
+    });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+    onLobbyConnected.mockClear(); // Clear the initial lobby call
+
+    transport.connectToFolder("/repos/alpha");
+
+    vi.advanceTimersByTime(29_999);
+    expect(onFolderConnectFailed).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(onFolderConnectFailed).toHaveBeenCalledWith("Connection timed out", "/repos/alpha");
+    // onLobbyConnected NOT fired — caller handles fallback from onFolderConnectFailed
+    expect(onLobbyConnected).not.toHaveBeenCalled();
+    expect(transport.state).toBe("lobby");
+  });
+
+  it("clears timeout on success", () => {
+    const onFolderConnectFailed = vi.fn();
+    const { transport } = createLobbyTransport({
+      onFolderConnectFailed,
+      connectTimeout: 30_000,
+    });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    transport.connectToFolder("/repos/alpha");
+    ws.simulateMessage({ source: "bridge", type: "connected", sessionId: "s1" });
+
+    // Timeout should be cleared — no failure after 30s
+    vi.advanceTimersByTime(30_000);
+    expect(onFolderConnectFailed).not.toHaveBeenCalled();
+  });
+
+  it("cancels previous connect operation when called again", () => {
+    const onFolderConnected = vi.fn();
+    const onFolderConnectFailed = vi.fn();
+    const { transport } = createLobbyTransport({
+      onFolderConnected,
+      onFolderConnectFailed,
+      connectTimeout: 30_000,
+    });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // First connect
+    transport.connectToFolder("/repos/first");
+    // Second connect cancels first
+    transport.connectToFolder("/repos/second");
+
+    // First connect's timeout should NOT fire
+    vi.advanceTimersByTime(30_000);
+    expect(onFolderConnectFailed).toHaveBeenCalledTimes(1); // Only second times out
+    expect(onFolderConnectFailed).toHaveBeenCalledWith("Connection timed out", "/repos/second");
+  });
+
+  it("fails immediately on processExit (no retry)", () => {
+    const onFolderConnectFailed = vi.fn();
+    const onProcessExit = vi.fn();
+    const { transport } = createLobbyTransport({
+      onFolderConnectFailed,
+      onProcessExit,
+    });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    transport.connectToFolder("/repos/alpha");
+    ws.simulateMessage({
+      source: "bridge",
+      type: "processExit",
+      code: 1,
+      signal: null,
+    });
+
+    expect(onFolderConnectFailed).toHaveBeenCalledWith(
+      "CC process exited (code 1)",
+      "/repos/alpha",
+    );
+    expect(onProcessExit).toHaveBeenCalled();
+    expect(transport.state).toBe("lobby");
+  });
+
+  it("sends connectFolder on lobby entry when WS was disconnected", () => {
+    const onFolderConnected = vi.fn();
+    const { transport } = createLobbyTransport({ onFolderConnected });
+    // Don't connect yet — transport is disconnected
+
+    transport.connect();
+    transport.connectToFolder("/repos/alpha");
+
+    // WS connects
+    const ws = wsInstances[wsInstances.length - 1];
+    ws.simulateOpen();
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Should have sent connectFolder
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    expect(sent).toContainEqual({ type: "connectFolder", path: "/repos/alpha" });
+  });
+
+  it("close() cancels active connect operation", () => {
+    const onFolderConnectFailed = vi.fn();
+    const { transport } = createLobbyTransport({
+      onFolderConnectFailed,
+      connectTimeout: 30_000,
+    });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    transport.connectToFolder("/repos/alpha");
+    transport.close();
+
+    // Timeout should NOT fire
+    vi.advanceTimersByTime(30_000);
+    expect(onFolderConnectFailed).not.toHaveBeenCalled();
+  });
+
+  it("returnToLobby() cancels active connect operation", () => {
+    const onFolderConnectFailed = vi.fn();
+    const onLobbyConnected = vi.fn();
+    const { transport } = createLobbyTransport({
+      onFolderConnectFailed,
+      onLobbyConnected,
+      connectTimeout: 30_000,
+    });
+    const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+    onLobbyConnected.mockClear();
+
+    transport.connectToFolder("/repos/alpha");
+    transport.returnToLobby();
+
+    // New WS reconnects in lobby
+    const ws2 = wsInstances[wsInstances.length - 1];
+    ws2.simulateOpen();
+    ws2.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Should fire onLobbyConnected (not try to connectFolder)
+    expect(onLobbyConnected).toHaveBeenCalledOnce();
+    // Timeout should NOT fire
+    vi.advanceTimersByTime(30_000);
+    expect(onFolderConnectFailed).not.toHaveBeenCalled();
+  });
+
+  it("transparent reconnect still uses onSessionId (not onFolderConnected)", () => {
+    const onFolderConnected = vi.fn();
+    const onSessionId = vi.fn();
+    const { transport } = createLobbyTransport({ onFolderConnected, onSessionId });
+    const ws1 = connectAndOpen(transport);
+    ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+
+    // Connect via old API (sets folderPath for reconnect)
+    transport.connectFolder("/repos/project");
+    ws1.simulateMessage({ source: "bridge", type: "connected", sessionId: "s1" });
+
+    // WS drops
+    ws1.simulateClose();
+    vi.advanceTimersByTime(1000);
+    const ws2 = wsInstances[wsInstances.length - 1];
+    ws2.simulateOpen();
+    ws2.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+    ws2.simulateMessage({ source: "bridge", type: "connected", sessionId: "s1-restored" });
+
+    // Should use onSessionId (transparent reconnect), NOT onFolderConnected
+    expect(onSessionId).toHaveBeenCalledWith("s1-restored");
+    expect(onFolderConnected).not.toHaveBeenCalled();
+  });
+});
