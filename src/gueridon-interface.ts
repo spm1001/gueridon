@@ -199,8 +199,17 @@ export class GueridonInterface extends LitElement {
         case "message_start":
         case "turn_start":
         case "turn_end":
+          this.syncState();
+          break;
+
         case "agent_start":
           this.syncState();
+          // After replay, pin to bottom — the ResizeObserver handles streaming,
+          // but replay lands all messages in one batch before the observer fires.
+          this.userScrolled = false;
+          requestAnimationFrame(() => {
+            window.scrollTo(0, document.documentElement.scrollHeight);
+          });
           break;
 
         case "message_end":
@@ -286,6 +295,11 @@ export class GueridonInterface extends LitElement {
     // Auto-resize: collapse to content height, cap at 8rem
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 128) + "px";
+    // Typing implies intent to see the latest — jump to bottom
+    if (this.userScrolled) {
+      this.userScrolled = false;
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    }
   }
 
   // --- Gauge helpers ---
