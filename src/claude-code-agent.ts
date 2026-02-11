@@ -254,8 +254,14 @@ export class ClaudeCodeAgent {
     let displayContent: any[];
 
     if (Array.isArray(input)) {
-      // Content array (text + images) — send as-is, display text parts
-      sendPayload = input;
+      // Content array (text + images) — send as-is, display text parts.
+      // Inject context note by prepending a text block if threshold crossed.
+      if (this._contextNote) {
+        sendPayload = [{ type: "text" as const, text: this._contextNote }, ...input];
+        this._contextNote = null;
+      } else {
+        sendPayload = input;
+      }
       displayContent = input.filter((b) => b.type === "text");
     } else {
       let text = typeof input === "string" ? input : this.extractText(input);

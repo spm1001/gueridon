@@ -744,6 +744,32 @@ describe("context tracking", () => {
     expect(sent[0]).toContain("20% remaining");
   });
 
+  it("injects context note into content array prompts", () => {
+    // Push to 82% usage to trigger amber note
+    agent.handleCCEvent({
+      type: "result",
+      usage: { input_tokens: 164000, output_tokens: 0 },
+    });
+
+    const sent: any[] = [];
+    agent.connectTransport({
+      send: (msg: any) => sent.push(msg),
+      onEvent: () => {},
+      close: () => {},
+    });
+
+    // Send content array — note should be prepended as text block
+    agent.prompt([
+      { type: "image" as const, source: { type: "base64" as const, media_type: "image/png", data: "abc" } },
+      { type: "text" as const, text: "describe" },
+    ]);
+
+    expect(Array.isArray(sent[0])).toBe(true);
+    expect(sent[0]).toHaveLength(3); // note + image + text
+    expect(sent[0][0].type).toBe("text");
+    expect(sent[0][0].text).toContain("[Context:");
+  });
+
   it("sets context note on red band crossing (90%)", () => {
     // Push to 92% usage: 184000 / 200000
     agent.handleCCEvent({
