@@ -27,7 +27,7 @@ All critical findings from the initial review are resolved. See `docs/architectu
 1. **~~Agent state never resets on folder switch~~** (gdn-walaco) — `reset()` method added to ClaudeCodeAgent, called on folder switch
 2. **~~prompt() swallows null transport~~** (gdn-vosejo) — guard sets error + emits agent_end
 3. **~~Unknown CC events silently dropped~~** (gdn-pudaco) — default cases log unknown types
-4. **~~main.ts folder lifecycle~~** (gdn-jegosi) — replaced flags with pure state machine (`src/folder-lifecycle.ts`). Dialog flash bug (gdn-jebudo) structurally prevented.
+4. **~~main.ts folder lifecycle~~** (gdn-jegosi) — folder-lifecycle.ts eliminated (gdn-picoki). Transport owns connection mechanics via `connectToFolder()`. Flash bug structurally prevented by callback split (`onFolderConnected` vs `onSessionId`).
 
 ## Working Pattern: Write Analysis to Files
 

@@ -96,6 +96,8 @@ function createLobbyTransport(overrides?: Partial<Parameters<typeof WSTransport.
     onBridgeError: vi.fn(),
     onLobbyConnected: vi.fn(),
     onFolderList: vi.fn(),
+    onFolderConnected: vi.fn(),
+    onFolderConnectFailed: vi.fn(),
   };
   const transport = new WSTransport({
     url: "ws://localhost:3001",
@@ -110,6 +112,14 @@ function connectAndOpen(transport: WSTransport): MockWebSocket {
   transport.connect();
   const ws = wsInstances[wsInstances.length - 1];
   ws.simulateOpen();
+  return ws;
+}
+
+/** Establish a session via connectToFolder. Returns the WS. */
+function establishSession(transport: WSTransport, path: string, sessionId: string): MockWebSocket {
+  const ws = wsInstances[wsInstances.length - 1];
+  transport.connectToFolder(path);
+  ws.simulateMessage({ source: "bridge", type: "connected", sessionId });
   return ws;
 }
 
@@ -262,13 +272,15 @@ describe("send", () => {
     expect(JSON.parse(ws.sent[0])).toEqual({ type: "listFolders" });
   });
 
-  it("sends connectFolder request", () => {
+  it("sends connectFolder via connectToFolder", () => {
     const { transport } = createLobbyTransport();
     const ws = connectAndOpen(transport);
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
 
-    transport.connectFolder("/repos/my-project");
+    transport.connectToFolder("/repos/my-project");
 
-    expect(JSON.parse(ws.sent[0])).toEqual({ type: "connectFolder", path: "/repos/my-project" });
+    const sent = ws.sent.map((s: string) => JSON.parse(s));
+    expect(sent).toContainEqual({ type: "connectFolder", path: "/repos/my-project" });
   });
 });
 
@@ -292,14 +304,14 @@ describe("URL construction", () => {
   });
 
   it("re-sends connectFolder on reconnect when folder is set", () => {
-    const transport = new WSTransport({ url: "ws://localhost:3001" });
+    const transport = new WSTransport({ url: "ws://localhost:3001", onFolderConnected: vi.fn() });
     transport.connect();
     const ws1 = wsInstances[0];
     ws1.simulateOpen();
     ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
 
-    // User picks a folder
-    transport.connectFolder("/repos/my-project");
+    // User picks a folder via high-level API
+    transport.connectToFolder("/repos/my-project");
     ws1.simulateMessage({
       source: "bridge",
       type: "connected",
@@ -323,6 +335,7 @@ describe("URL construction", () => {
     const callbacks = {
       onLobbyConnected: vi.fn(),
       onBridgeError: vi.fn(),
+      onFolderConnected: vi.fn(),
     };
     const transport = new WSTransport({ url: "ws://localhost:3001", ...callbacks });
     transport.connect();
@@ -330,8 +343,8 @@ describe("URL construction", () => {
     ws1.simulateOpen();
     ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
 
-    // Connect to a folder
-    transport.connectFolder("/repos/my-project");
+    // Connect to a folder via high-level API
+    transport.connectToFolder("/repos/my-project");
     ws1.simulateMessage({
       source: "bridge",
       type: "connected",
@@ -511,7 +524,7 @@ describe("processExit", () => {
 
 describe("returnToLobby", () => {
   it("clears folder and reconnects in lobby mode", () => {
-    const callbacks = { onLobbyConnected: vi.fn() };
+    const callbacks = { onLobbyConnected: vi.fn(), onFolderConnected: vi.fn() };
     const transport = new WSTransport({
       url: "ws://localhost:3001",
       ...callbacks,
@@ -520,7 +533,7 @@ describe("returnToLobby", () => {
     const ws1 = wsInstances[0];
     ws1.simulateOpen();
     ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
-    transport.connectFolder("/repos/old-project");
+    transport.connectToFolder("/repos/old-project");
     ws1.simulateMessage({
       source: "bridge",
       type: "connected",
@@ -725,8 +738,8 @@ describe("connectToFolder", () => {
     const ws1 = connectAndOpen(transport);
     ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
 
-    // Establish a session via old API
-    transport.connectFolder("/repos/old");
+    // Establish a session
+    transport.connectToFolder("/repos/old");
     ws1.simulateMessage({ source: "bridge", type: "connected", sessionId: "old-sess" });
 
     // Now switch to new folder via high-level API
@@ -955,9 +968,10 @@ describe("connectToFolder", () => {
     const ws1 = connectAndOpen(transport);
     ws1.simulateMessage({ source: "bridge", type: "lobbyConnected" });
 
-    // Connect via old API (sets folderPath for reconnect)
-    transport.connectFolder("/repos/project");
+    // Establish session (sets folderPath for reconnect)
+    transport.connectToFolder("/repos/project");
     ws1.simulateMessage({ source: "bridge", type: "connected", sessionId: "s1" });
+    onFolderConnected.mockClear(); // Clear setup call
 
     // WS drops
     ws1.simulateClose();

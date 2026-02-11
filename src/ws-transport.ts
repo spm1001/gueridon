@@ -147,13 +147,6 @@ export class WSTransport implements CCTransport {
     this.ws.send(JSON.stringify({ type: "listFolders" }));
   }
 
-  /** Low-level: send connectFolder message. Used by old lifecycle and by connectToFolder. */
-  connectFolder(path: string): void {
-    this.folderPath = path;
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "connectFolder", path }));
-  }
-
   /**
    * High-level folder connect — handles lobby-teardown (if in session),
    * retry on bridge errors (up to maxConnectRetries), and overall timeout.
