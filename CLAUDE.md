@@ -74,7 +74,7 @@ npm run dev                # Vite dev server with HMR
 npm run bridge             # Bridge in separate terminal
 
 # Testing
-npm test                   # Run all tests (285 tests, ~1.2s)
+npm test                   # Run all tests (322 tests, ~1.5s)
 npm run test:watch         # Watch mode for development
 npm run test:mobile        # Launch mobile test harness (Chrome Debug + dev + bridge + CDP viewport)
 npm run test:mobile --prod # Same but using production build on :3001
@@ -119,6 +119,38 @@ Debug in this order:
 2. Check `esbuild.target` in vite.config.ts — must be `"es2020"` for [[Set]] semantics
 3. `litClassFieldFix()` plugin — still needed for Lit decorators in our code + vendored files
 4. Lit dedup aliases — vendored files import `lit`, must resolve to our single copy
+
+## CLI Client
+
+Terminal client that connects to the bridge from Mac. Same protocol as the web client, different renderer.
+
+```bash
+npx tsx cli/gdn.ts [bridge-url]       # Default: ws://localhost:3001
+npx tsx cli/gdn.ts ws://kube:3001     # Connect to Kube bridge
+```
+
+### Architecture
+
+```
+cli/bridge-client.ts   — Protocol/state layer (WS, CC event parsing, tool accumulation, reconnection)
+        ↓ semantic callbacks (onText, onToolStart, onToolResult, onAskUser, ...)
+cli/gdn.ts             — Rendering + input (currently raw ANSI + readline, replaceable by TUI)
+```
+
+`bridge-client.ts` emits semantic events — the rendering layer never sees raw CC events like `content_block_delta` or `input_json_delta`. This separation exists so the rendering layer can be replaced (raw ANSI → pi-tui) without touching protocol logic.
+
+### Dependency chain for CLI work
+
+```
+gdn-patati (prototype, features)
+    → bridge-client.ts extraction (done)
+        → gdn-kojihe (vendor pi-tui, build TUI)
+            → gdn-zerobu (share interpreter with web adapter)
+```
+
+### CC tool vocabulary
+
+`summarizeToolInput()` in gdn.ts knows how to display each CC tool's arguments (Bash→command, Read→file_path, Grep→pattern, etc.). This is domain knowledge that survives a rendering rewrite — extract it when building the TUI.
 
 ## Bridge Server
 
