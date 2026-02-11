@@ -180,6 +180,6 @@ each concern is testable in isolation.
 
 ### Remaining
 
-5. **Folder list is a dashboard** (gdn-hikosa) — show what each Claude is doing: working, finished, idle. Bridge tracks CC state; surfacing it in folder list turns picker into a status screen.
+5. ~~**Folder list is a dashboard**~~ (gdn-hikosa) — folder picker shows activity state (working/waiting/idle) per folder. Bridge tracks CC turn state via `ActiveSessionInfo`.
 6. **You know when Claude is done without looking** — page title update or push notification via service worker.
-7. **Definitive session close** (gdn-hilapa) — bridge intercepts `/exit` as protocol command, writes marker. Folder scanner distinguishes "deliberately closed" from "abandoned."
+7. ~~**Definitive session close**~~ (gdn-hilapa) — bridge intercepts `/exit` as protocol command, writes `.exit` marker, sends `sessionClosed` message. Folder scanner distinguishes "deliberately closed" from "abandoned."

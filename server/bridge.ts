@@ -913,8 +913,11 @@ wss.on("connection", (ws: WebSocket) => {
     }
 
     if (conn.state.mode === "session") {
+      // Capture session ref now — conn.state can change (e.g. destroySession
+      // transitions to lobby) before the queued .then() callback fires.
+      const session = conn.state.session;
       sessionQueue = sessionQueue
-        .then(() => handleSessionMessage(ws, conn.state.session, msg))
+        .then(() => handleSessionMessage(ws, session, msg))
         .catch((err) => console.error(`[bridge] session message error:`, err));
     } else {
       lobbyQueue = lobbyQueue
