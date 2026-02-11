@@ -425,3 +425,80 @@ export function createActiveTurnGuard(
 export const DEFAULT_IDLE_GUARDS: IdleGuard[] = [
   createActiveTurnGuard(),
 ];
+
+// --- Conflation (tick-based coalescing of CC partial events) ---
+
+export const CONFLATION_INTERVAL_MS = 250; // Flush merged deltas every 250ms (~4/sec)
+export const MESSAGE_BUFFER_CAP = 10_000; // Max events in replay buffer
+export const BACKPRESSURE_THRESHOLD = 64 * 1024; // Skip delta sends when ws.bufferedAmount exceeds 64KB
+
+/** Delta accumulation field mapping: CC delta type → which field holds the text. */
+const DELTA_FIELDS: Record<string, string> = {
+  text_delta: "text",
+  input_json_delta: "partial_json",
+  thinking: "thinking",
+};
+
+/** Info extracted from a content_block_delta event for conflation. */
+export interface DeltaInfo {
+  /** Map key: `${index}:${deltaType}` */
+  key: string;
+  index: number;
+  deltaType: string;
+  /** Field name within the delta object that carries the text payload. */
+  field: string;
+  /** The actual text/json payload from this delta. */
+  payload: string;
+}
+
+/**
+ * Check if a CC event is a content_block_delta (the high-frequency token stream).
+ * These are the only events worth conflating — everything else is structural.
+ */
+export function isStreamDelta(event: Record<string, unknown>): boolean {
+  if (event.type !== "stream_event") return false;
+  const inner = event.event as Record<string, unknown> | undefined;
+  return inner?.type === "content_block_delta";
+}
+
+/**
+ * Extract conflation info from a content_block_delta event.
+ * Returns null for non-delta events or unknown delta subtypes.
+ */
+export function extractDeltaInfo(event: Record<string, unknown>): DeltaInfo | null {
+  if (!isStreamDelta(event)) return null;
+
+  const inner = event.event as Record<string, unknown>;
+  const index = inner.index as number;
+  const delta = inner.delta as Record<string, unknown> | undefined;
+  if (!delta || typeof delta.type !== "string") return null;
+
+  const field = DELTA_FIELDS[delta.type];
+  if (!field) return null; // Unknown delta subtype — pass through immediately
+
+  const payload = (delta[field] as string) ?? "";
+  return { key: `${index}:${delta.type}`, index, deltaType: delta.type, field, payload };
+}
+
+/** Accumulated delta state for one content block index + delta type. */
+export interface PendingDelta {
+  index: number;
+  deltaType: string;
+  field: string;
+  accumulated: string;
+}
+
+/**
+ * Build a merged content_block_delta event from accumulated delta text.
+ * The adapter sees one delta with a larger chunk instead of many tiny ones.
+ */
+export function buildMergedDelta(pending: PendingDelta): Record<string, unknown> {
+  return {
+    type: "stream_event",
+    event: {
+      type: "content_block_delta",
+      index: pending.index,
+      delta: { type: pending.deltaType, [pending.field]: pending.accumulated },
+    },
+  };
+}

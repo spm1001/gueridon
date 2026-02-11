@@ -17,9 +17,16 @@ import {
   MAX_IDLE_MS,
   STALE_OUTPUT_MS,
   IDLE_RECHECK_MS,
+  isStreamDelta,
+  extractDeltaInfo,
+  buildMergedDelta,
+  CONFLATION_INTERVAL_MS,
+  MESSAGE_BUFFER_CAP,
+  BACKPRESSURE_THRESHOLD,
   type SessionProcessInfo,
   type IdleGuard,
   type IdleSessionState,
+  type PendingDelta,
 } from "./bridge-logic.js";
 
 // --- resolveStaticFile ---
@@ -1039,5 +1046,196 @@ describe("idle guard scenario: CC working while client away", () => {
     );
     expect(result.action).toBe("kill");
     expect(result.reason).toBe("safety cap exceeded");
+  });
+});
+
+// --- Conflation helpers ---
+
+describe("isStreamDelta", () => {
+  it("returns true for content_block_delta", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hi" } },
+    };
+    expect(isStreamDelta(event)).toBe(true);
+  });
+
+  it("returns false for content_block_start", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    };
+    expect(isStreamDelta(event)).toBe(false);
+  });
+
+  it("returns false for message_start", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "message_start", message: {} },
+    };
+    expect(isStreamDelta(event)).toBe(false);
+  });
+
+  it("returns false for non-stream events", () => {
+    expect(isStreamDelta({ type: "result" })).toBe(false);
+    expect(isStreamDelta({ type: "assistant" })).toBe(false);
+    expect(isStreamDelta({ type: "system" })).toBe(false);
+    expect(isStreamDelta({ type: "user" })).toBe(false);
+  });
+});
+
+describe("extractDeltaInfo", () => {
+  it("extracts text_delta info", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hello" } },
+    };
+    const info = extractDeltaInfo(event);
+    expect(info).toEqual({
+      key: "0:text_delta",
+      index: 0,
+      deltaType: "text_delta",
+      field: "text",
+      payload: "hello",
+    });
+  });
+
+  it("extracts input_json_delta info", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"cmd' } },
+    };
+    const info = extractDeltaInfo(event);
+    expect(info).toEqual({
+      key: "1:input_json_delta",
+      index: 1,
+      deltaType: "input_json_delta",
+      field: "partial_json",
+      payload: '{"cmd',
+    });
+  });
+
+  it("extracts thinking delta info", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "thinking", thinking: "Let me" } },
+    };
+    const info = extractDeltaInfo(event);
+    expect(info).toEqual({
+      key: "0:thinking",
+      index: 0,
+      deltaType: "thinking",
+      field: "thinking",
+      payload: "Let me",
+    });
+  });
+
+  it("returns null for unknown delta subtype", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "future_type", data: "x" } },
+    };
+    expect(extractDeltaInfo(event)).toBeNull();
+  });
+
+  it("returns null for non-delta stream events", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "message_start", message: {} },
+    };
+    expect(extractDeltaInfo(event)).toBeNull();
+  });
+
+  it("returns null for non-stream events", () => {
+    expect(extractDeltaInfo({ type: "result" })).toBeNull();
+  });
+
+  it("handles empty text payload", () => {
+    const event = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "" } },
+    };
+    const info = extractDeltaInfo(event);
+    expect(info?.payload).toBe("");
+  });
+
+  it("uses different keys for different indices", () => {
+    const event0 = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "a" } },
+    };
+    const event1 = {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "b" } },
+    };
+    expect(extractDeltaInfo(event0)?.key).toBe("0:text_delta");
+    expect(extractDeltaInfo(event1)?.key).toBe("1:text_delta");
+  });
+});
+
+describe("buildMergedDelta", () => {
+  it("builds a text_delta event from accumulated text", () => {
+    const pending: PendingDelta = {
+      index: 0,
+      deltaType: "text_delta",
+      field: "text",
+      accumulated: "Hello world",
+    };
+    expect(buildMergedDelta(pending)).toEqual({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Hello world" },
+      },
+    });
+  });
+
+  it("builds an input_json_delta event", () => {
+    const pending: PendingDelta = {
+      index: 1,
+      deltaType: "input_json_delta",
+      field: "partial_json",
+      accumulated: '{"command":"ls"}',
+    };
+    expect(buildMergedDelta(pending)).toEqual({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"command":"ls"}' },
+      },
+    });
+  });
+
+  it("builds a thinking delta event", () => {
+    const pending: PendingDelta = {
+      index: 0,
+      deltaType: "thinking",
+      field: "thinking",
+      accumulated: "Let me think about this carefully",
+    };
+    expect(buildMergedDelta(pending)).toEqual({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking", thinking: "Let me think about this carefully" },
+      },
+    });
+  });
+});
+
+describe("conflation constants", () => {
+  it("CONFLATION_INTERVAL_MS is 250ms", () => {
+    expect(CONFLATION_INTERVAL_MS).toBe(250);
+  });
+
+  it("MESSAGE_BUFFER_CAP is 10000", () => {
+    expect(MESSAGE_BUFFER_CAP).toBe(10_000);
+  });
+
+  it("BACKPRESSURE_THRESHOLD is 64KB", () => {
+    expect(BACKPRESSURE_THRESHOLD).toBe(64 * 1024);
   });
 });

@@ -20,7 +20,14 @@ import {
   resolveStaticFile,
   checkIdle,
   DEFAULT_IDLE_GUARDS,
+  CONFLATION_INTERVAL_MS,
+  MESSAGE_BUFFER_CAP,
+  BACKPRESSURE_THRESHOLD,
+  isStreamDelta,
+  extractDeltaInfo,
+  buildMergedDelta,
   type IdleSessionState,
+  type PendingDelta,
 } from "./bridge-logic.js";
 
 // --- Configuration ---
@@ -125,6 +132,9 @@ interface Session {
   idleStart: number | null; // When last client disconnected (null = clients connected)
   idleCheckTimer: ReturnType<typeof setTimeout> | null; // Replaces old idleTimer
   guardWasDeferred: boolean; // For grace period detection
+  // Conflation: batch content_block_delta events for fewer ws.send() calls
+  pendingDeltas: Map<string, PendingDelta>; // Keyed by `${index}:${deltaType}`
+  flushTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const sessions = new Map<string, Session>();
@@ -197,11 +207,48 @@ function sendToClient(ws: WebSocket | null, msg: ServerMessage): void {
 
 /** Send a message to all connected clients for a session. */
 function broadcast(session: Session, msg: ServerMessage): void {
-  const data = JSON.stringify(msg);
+  broadcastSerialized(session, JSON.stringify(msg), false);
+}
+
+/**
+ * Send pre-serialized data to all connected clients.
+ * When respectBackpressure is true, skips clients whose write buffer is saturated —
+ * safe for delta events (client gets the next batch), unsafe for structural events.
+ */
+function broadcastSerialized(session: Session, data: string, respectBackpressure: boolean): void {
   for (const client of session.clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(data);
-    }
+    if (client.readyState !== WebSocket.OPEN) continue;
+    if (respectBackpressure && client.bufferedAmount >= BACKPRESSURE_THRESHOLD) continue;
+    client.send(data);
+  }
+}
+
+/**
+ * Flush all pending content_block_delta events as merged deltas.
+ * Called on timer tick (250ms) and before any non-delta event (to preserve ordering).
+ */
+function flushPendingDeltas(session: Session): void {
+  if (session.flushTimer) {
+    clearTimeout(session.flushTimer);
+    session.flushTimer = null;
+  }
+
+  for (const pending of session.pendingDeltas.values()) {
+    const merged = buildMergedDelta(pending);
+    const serialized = JSON.stringify({ source: "cc", event: merged });
+    broadcastSerialized(session, serialized, true);
+    pushToBuffer(session, serialized);
+  }
+  session.pendingDeltas.clear();
+}
+
+/** Push to messageBuffer with cap to prevent unbounded memory on long sessions. */
+function pushToBuffer(session: Session, serialized: string): void {
+  session.messageBuffer.push(serialized);
+  if (session.messageBuffer.length > MESSAGE_BUFFER_CAP) {
+    // Drop oldest 10% to avoid doing this every push
+    const dropCount = Math.floor(MESSAGE_BUFFER_CAP * 0.1);
+    session.messageBuffer.splice(0, dropCount);
   }
 }
 
@@ -243,6 +290,12 @@ function scheduleIdleCheck(session: Session, delayMs: number): void {
       console.log(
         `[bridge] idle check: killing CC session=${session.id} (${action.reason})`,
       );
+      // Clean up conflation timer before killing
+      if (session.flushTimer) {
+        clearTimeout(session.flushTimer);
+        session.flushTimer = null;
+      }
+      session.pendingDeltas.clear();
       if (session.process) {
         killWithEscalation(session.process, session.id);
       }
@@ -297,12 +350,32 @@ function wireProcessToSession(session: Session): void {
       if (event.type === "result") {
         session.turnInProgress = false;
       }
-      // Inline broadcast + buffer: serialize once, send to clients, push to buffer
-      const serialized = JSON.stringify({ source: "cc", event });
-      for (const client of session.clients) {
-        if (client.readyState === WebSocket.OPEN) client.send(serialized);
+
+      // Conflation: content_block_delta events are merged and flushed on a timer.
+      // Everything else flushes pending deltas first (ordering) then sends immediately.
+      const deltaInfo = extractDeltaInfo(event);
+      if (deltaInfo) {
+        const existing = session.pendingDeltas.get(deltaInfo.key);
+        if (existing) {
+          existing.accumulated += deltaInfo.payload;
+        } else {
+          session.pendingDeltas.set(deltaInfo.key, {
+            index: deltaInfo.index,
+            deltaType: deltaInfo.deltaType,
+            field: deltaInfo.field,
+            accumulated: deltaInfo.payload,
+          });
+        }
+        if (!session.flushTimer) {
+          session.flushTimer = setTimeout(() => flushPendingDeltas(session), CONFLATION_INTERVAL_MS);
+        }
+      } else {
+        // Non-delta: flush pending deltas first to preserve event ordering
+        flushPendingDeltas(session);
+        const serialized = JSON.stringify({ source: "cc", event });
+        broadcastSerialized(session, serialized, false);
+        pushToBuffer(session, serialized);
       }
-      session.messageBuffer.push(serialized);
     } catch {
       // Non-JSON output from CC (startup banners, warnings)
       console.log(`[bridge] non-json stdout: ${trimmed.slice(0, 200)}`);
@@ -326,6 +399,9 @@ function wireProcessToSession(session: Session): void {
     console.log(
       `[bridge] CC exited session=${session.id} code=${code} signal=${signal} uptime=${uptime}ms`
     );
+
+    // Flush any buffered deltas before exit events — clients see the last chunk
+    flushPendingDeltas(session);
 
     // Early exit with non-zero code = likely flag/version problem
     if (
@@ -624,6 +700,8 @@ async function handleLobbyMessage(
           idleStart: null,
           idleCheckTimer: null,
           guardWasDeferred: false,
+          pendingDeltas: new Map(),
+          flushTimer: null,
         };
 
         // Pre-populate message buffer from JSONL for paused sessions
@@ -768,9 +846,14 @@ function shutdown() {
   }
   connections.clear();
 
-  // Kill all CC processes and clear idle check timers
+  // Kill all CC processes and clear timers
   for (const [id, session] of sessions) {
     cancelIdleCheck(session);
+    if (session.flushTimer) {
+      clearTimeout(session.flushTimer);
+      session.flushTimer = null;
+    }
+    session.pendingDeltas.clear();
     if (session.process) killWithEscalation(session.process, id);
   }
   sessions.clear();
