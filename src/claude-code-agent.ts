@@ -483,8 +483,11 @@ export class ClaudeCodeAgent {
         (result.usage.cache_read_input_tokens || 0) +
         (result.usage.cache_creation_input_tokens || 0);
 
-      // Detect compaction: significant drop (>15%) in token count between turns
-      if (prevTokens > 0 && this._lastInputTokens < prevTokens * 0.85) {
+      // Detect compaction: significant drop (>15%) in token count between turns.
+      // Minimum 20k drop avoids false positives on small sessions where token
+      // accounting jitter (e.g. after /context) easily crosses the 15% threshold.
+      const tokenDrop = prevTokens - this._lastInputTokens;
+      if (prevTokens > 0 && tokenDrop > 20_000 && this._lastInputTokens < prevTokens * 0.85) {
         if (!this._replayMode) this.onCompaction?.(prevTokens, this._lastInputTokens);
       }
 

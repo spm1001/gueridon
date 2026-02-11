@@ -453,6 +453,9 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse) {
     const data = await readFile(resolved.filePath);
     if (resolved.cache) {
       res.setHeader("Cache-Control", "public, max-age=86400");
+    } else {
+      // index.html must not be cached — stale HTML references old asset hashes
+      res.setHeader("Cache-Control", "no-cache");
     }
     res.writeHead(200, { "Content-Type": resolved.mime }).end(data);
   } catch {

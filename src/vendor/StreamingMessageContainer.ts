@@ -68,7 +68,7 @@ export class StreamingMessageContainer extends LitElement {
 		// Show loading indicator if loading but no message yet
 		if (!this._message) {
 			if (this.isStreaming)
-				return html`<div class="flex flex-col gap-3 mb-3">
+				return html`<div class="flex flex-col gap-2 mb-2">
 					<span class="mx-4 inline-block w-2 h-4 bg-muted-foreground animate-pulse"></span>
 				</div>`;
 			return html``; // Empty until a message is set
@@ -84,7 +84,7 @@ export class StreamingMessageContainer extends LitElement {
 		} else if (msg.role === "assistant") {
 			// Assistant message - render inline tool messages during streaming
 			return html`
-				<div class="flex flex-col gap-3 mb-3">
+				<div class="flex flex-col gap-2 mb-2">
 					<assistant-message
 						.message=${msg}
 						.tools=${this.tools}
