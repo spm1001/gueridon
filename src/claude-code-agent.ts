@@ -140,7 +140,7 @@ export class ClaudeCodeAgent {
 
   // Context tracking (for fuel gauge)
   private _lastInputTokens = 0;
-  private _contextWindow = 200_000; // default, updated from init event
+  private _contextWindow = 200_000; // default, updated from result.modelUsage
   private _cwd = "";
   private _lastRemainingBand: "normal" | "amber" | "red" = "normal";
 
@@ -535,7 +535,17 @@ export class ClaudeCodeAgent {
   private handleResult(event: CCEvent): void {
     const result = event.result || event;
 
-    // Update context tracking from result usage
+    // Extract contextWindow from modelUsage (CC reports per-model limits)
+    if (result.modelUsage) {
+      const firstModel = Object.values(result.modelUsage)[0] as any;
+      if (firstModel?.contextWindow) {
+        this._contextWindow = firstModel.contextWindow;
+      }
+    }
+
+    // Update context tracking from result usage.
+    // Includes output_tokens because they become input context on the next turn —
+    // slightly overstates current usage but predicts next-turn context accurately.
     if (result.usage) {
       const prevTokens = this._lastInputTokens;
       this._lastInputTokens =

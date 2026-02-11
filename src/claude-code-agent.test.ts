@@ -647,6 +647,44 @@ describe("context tracking", () => {
     expect(agent.contextPercent).toBe(80);
   });
 
+  it("extracts contextWindow from result.modelUsage", () => {
+    expect(agent.contextWindow).toBe(200_000); // default
+
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 50000, output_tokens: 5000 },
+      modelUsage: {
+        "claude-opus-4-6": {
+          contextWindow: 200000,
+          maxOutputTokens: 32000,
+          inputTokens: 50000,
+          outputTokens: 5000,
+        },
+      },
+    });
+
+    expect(agent.contextWindow).toBe(200000);
+    // contextPercent = 55000 / 200000 * 100 ≈ 27.5%
+    expect(agent.contextPercent).toBeCloseTo(27.5);
+  });
+
+  it("updates contextWindow when model reports different value", () => {
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 50000, output_tokens: 0 },
+      modelUsage: {
+        "claude-sonnet-4-5": {
+          contextWindow: 180000,
+          maxOutputTokens: 16000,
+        },
+      },
+    });
+
+    expect(agent.contextWindow).toBe(180000);
+  });
+
   it("detects compaction on >15% token drop", () => {
     let compactionArgs: [number, number] | null = null;
     agent.onCompaction = (from, to) => { compactionArgs = [from, to]; };
