@@ -1345,6 +1345,24 @@ describe("replay mode", () => {
     expect(agent.state.messages.filter((m) => m.role === "user")).toHaveLength(0);
   });
 
+  it("adds local command output to state during live operation", () => {
+    events.length = 0;
+    agent.handleCCEvent({
+      type: "user",
+      message: {
+        role: "user",
+        content: "<local-command-stdout>## Context Usage\n**Model:** claude-opus-4-6\n</local-command-stdout>",
+      },
+    });
+
+    // Local command output should be added to state (not dropped as echo)
+    const userMessages = agent.state.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect((userMessages[0].content[0] as any).text).toContain("<local-command-stdout>");
+    // Should emit message_end so UI renders it
+    expect(events.some((e) => e.type === "message_end")).toBe(true);
+  });
+
   it("context gauge is available after replay ends", () => {
     agent.startReplay();
     // Context is tracked from assistant messages, not result events

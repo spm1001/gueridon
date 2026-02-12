@@ -202,6 +202,7 @@ export class ClaudeCodeAgent {
     this.askUserToolCallIds.clear();
     this.suppressedStreamIndices.clear();
     this._lastInputTokens = 0;
+    this._skipNextCompactionCheck = false;
     this._contextWindow = 200_000;
     this._cwd = "";
     this._lastRemainingBand = "normal";
@@ -526,16 +527,22 @@ export class ClaudeCodeAgent {
     // During normal operation, prompt() already added the user message — skip
     // the echo to avoid duplicates.
     // CC echoes content as a plain string, not an array of blocks.
+    // Exception: local command output (e.g. /context, /cost) is wrapped in
+    // <local-command-stdout> tags — always add these to state.
     if (typeof msg.content === "string") {
-      if (this._replayMode) {
+      const isLocalCommandOutput = msg.content.startsWith("<local-command-stdout>");
+      if (this._replayMode || isLocalCommandOutput) {
         const userMessage: AgentMessage = {
           role: "user",
           content: [{ type: "text" as const, text: msg.content }],
           timestamp: Date.now(),
         };
         this._state.messages = [...this._state.messages, userMessage];
+        if (isLocalCommandOutput && !this._replayMode) {
+          this.emit({ type: "message_end", message: userMessage });
+        }
       }
-      return; // String content is a user echo — no tool_results to process
+      return; // String content — no tool_results to process
     }
 
     // Tool results come as user messages with tool_result content (always arrays)

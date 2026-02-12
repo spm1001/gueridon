@@ -491,7 +491,12 @@ export function isExitCommand(text: string): boolean {
 export function isUserTextEcho(event: Record<string, unknown>): boolean {
   if (event.type !== "user") return false;
   const message = event.message as Record<string, unknown> | undefined;
-  return typeof message?.content === "string";
+  if (typeof message?.content !== "string") return false;
+  // Local command output (e.g. /context, /cost) arrives as a user message with
+  // string content wrapped in <local-command-stdout>. Not an echo — must be
+  // buffered and forwarded to clients.
+  if ((message.content as string).startsWith("<local-command-stdout>")) return false;
+  return true;
 }
 
 /**

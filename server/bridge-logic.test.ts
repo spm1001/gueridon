@@ -1361,4 +1361,15 @@ describe("isUserTextEcho", () => {
     };
     expect(isUserTextEcho(event)).toBe(false);
   });
+
+  it("returns false for local command output wrapped in <local-command-stdout>", () => {
+    const event = {
+      type: "user",
+      message: {
+        role: "user",
+        content: "<local-command-stdout>## Context Usage\n\n**Model:** claude-opus-4-6\n</local-command-stdout>",
+      },
+    };
+    expect(isUserTextEcho(event)).toBe(false);
+  });
 });
