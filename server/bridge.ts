@@ -43,7 +43,7 @@ const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
 // Browser → Bridge
 interface ClientPrompt {
   type: "prompt";
-  text: string;
+  text?: string;
   content?: Array<{ type: string; [key: string]: unknown }>;
 }
 interface ClientAbort {
@@ -660,7 +660,8 @@ async function handleSessionMessage(
   switch (msg.type) {
     case "prompt": {
       // Intercept exit commands — CC doesn't handle these in -p mode
-      if (isExitCommand(msg.text)) {
+      // (content-array prompts with images have no text field)
+      if (msg.text && isExitCommand(msg.text)) {
         console.log(`[bridge] exit command intercepted session=${session.id}`);
         broadcast(session, {
           source: "bridge",
