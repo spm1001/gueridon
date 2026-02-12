@@ -541,4 +541,111 @@ describe("GueridonInterface", () => {
       expect(callback).toHaveBeenCalledOnce();
     });
   });
+
+  // -- Image upload --
+
+  describe("image upload", () => {
+    // jsdom lacks DataTransfer, so we build a minimal FileList-like object
+    function makeFile(name: string, type: string, content = "pixels"): File {
+      return new File([content], name, { type });
+    }
+
+    function makeFileList(...files: File[]): FileList {
+      const list = Object.create(FileList.prototype);
+      files.forEach((f, i) => { list[i] = f; });
+      Object.defineProperty(list, "length", { value: files.length });
+      list[Symbol.iterator] = function* () {
+        for (let i = 0; i < files.length; i++) yield files[i];
+      };
+      return list;
+    }
+
+    it("has hidden file input with correct accept types", async () => {
+      el = await createElement();
+      const input = el.querySelector('input[type="file"]') as HTMLInputElement;
+      expect(input).toBeTruthy();
+      expect(input.accept).toBe("image/jpeg,image/png,image/gif,image/webp");
+      expect(input.multiple).toBe(true);
+      expect(input.classList.contains("hidden")).toBe(true);
+    });
+
+    it("paperclip click triggers file input", async () => {
+      el = await createElement();
+      const input = el.querySelector('input[type="file"]') as HTMLInputElement;
+      const clickSpy = vi.spyOn(input, "click");
+      const paperclip = el.querySelector(
+        'button[title="Attach image"]',
+      ) as HTMLButtonElement;
+      paperclip.click();
+      expect(clickSpy).toHaveBeenCalled();
+    });
+
+    it("addFiles populates pending images", async () => {
+      el = await createElement();
+      const files = makeFileList(makeFile("photo.jpg", "image/jpeg"));
+      el.addFiles(files);
+      await el.updateComplete;
+      expect((el as any)._pendingImages).toHaveLength(1);
+    });
+
+    it("addFiles rejects unsupported types", async () => {
+      el = await createElement();
+      const toastSpy = vi.spyOn(el, "showToast");
+      const files = makeFileList(makeFile("doc.pdf", "application/pdf"));
+      el.addFiles(files);
+      expect((el as any)._pendingImages).toHaveLength(0);
+      expect(toastSpy).toHaveBeenCalledWith("Use JPEG, PNG, GIF, or WebP");
+    });
+
+    it("accepts all four supported image types", async () => {
+      el = await createElement();
+      el.addFiles(makeFileList(makeFile("a.jpg", "image/jpeg")));
+      el.addFiles(makeFileList(makeFile("b.png", "image/png")));
+      el.addFiles(makeFileList(makeFile("c.gif", "image/gif")));
+      el.addFiles(makeFileList(makeFile("d.webp", "image/webp")));
+      expect((el as any)._pendingImages).toHaveLength(4);
+    });
+
+    it("renders thumbnail strip when images pending", async () => {
+      el = await createElement();
+      el.addFiles(makeFileList(makeFile("photo.jpg", "image/jpeg")));
+      await el.updateComplete;
+      const strip = el.querySelector(".overflow-x-auto");
+      expect(strip).toBeTruthy();
+      const thumbnails = strip!.querySelectorAll("img");
+      expect(thumbnails).toHaveLength(1);
+    });
+
+    it("remove button clears image from pending", async () => {
+      el = await createElement();
+      el.addFiles(makeFileList(makeFile("photo.jpg", "image/jpeg")));
+      await el.updateComplete;
+
+      const removeBtn = el.querySelector(
+        ".overflow-x-auto button",
+      ) as HTMLButtonElement;
+      expect(removeBtn).toBeTruthy();
+      removeBtn.click();
+      await el.updateComplete;
+
+      expect((el as any)._pendingImages).toHaveLength(0);
+      expect(el.querySelector(".overflow-x-auto")).toBeFalsy();
+    });
+
+    it("send button enabled when images pending and no text", async () => {
+      el = await createElement();
+      el.addFiles(makeFileList(makeFile("photo.jpg", "image/jpeg")));
+      await el.updateComplete;
+      const btn = el.querySelector(
+        'button[title="Send"]',
+      ) as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+
+    it("no thumbnail strip when no images pending", async () => {
+      el = await createElement();
+      await el.updateComplete;
+      expect(el.querySelector(".overflow-x-auto")).toBeFalsy();
+    });
+  });
 });

@@ -29,15 +29,34 @@ export class UserMessage extends LitElement {
 	connectedCallback() { super.connectedCallback(); this.style.display = "block"; }
 
 	render() {
-		const content =
-			typeof this.message?.content === "string"
-				? this.message.content
-				: this.message?.content?.find((c: any) => c.type === "text")?.text || "";
+		const raw = this.message?.content;
+		const text =
+			typeof raw === "string"
+				? raw
+				: raw?.find((c: any) => c.type === "text")?.text || "";
+		const images = Array.isArray(raw)
+			? raw.filter((c: any) => c.type === "image")
+			: [];
 
 		return html`
 			<div class="flex justify-start mx-4">
 				<div class="user-message-container py-2 px-4 rounded-xl">
-					<markdown-block .content=${content}></markdown-block>
+					${images.length > 0
+						? html`<div class="flex gap-2 mb-2 flex-wrap">
+								${images.map(
+									(img: any) => html`
+										<img
+											src="data:${img.source.media_type};base64,${img.source.data}"
+											class="max-w-[200px] max-h-[200px] rounded-lg object-contain"
+											alt="Uploaded image"
+										/>
+									`,
+								)}
+							</div>`
+						: ""}
+					${text
+						? html`<markdown-block .content=${text}></markdown-block>`
+						: ""}
 				</div>
 			</div>
 		`;

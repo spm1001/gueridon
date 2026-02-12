@@ -35,7 +35,14 @@ import "@mariozechner/mini-lit/dist/CodeBlock.js";
 
 // Type-only (for @query decorator)
 import type { StreamingMessageContainer } from "./vendor/StreamingMessageContainer.js";
-import type { ClaudeCodeAgent } from "./claude-code-agent.js";
+import type { ClaudeCodeAgent, ContentBlock } from "./claude-code-agent.js";
+import {
+  isAcceptedImageType,
+  resizeImage,
+  fileToBase64,
+  outputMimeType,
+  type PendingImage,
+} from "./image-utils.js";
 
 @customElement("gueridon-interface")
 export class GueridonInterface extends LitElement {
@@ -54,6 +61,9 @@ export class GueridonInterface extends LitElement {
   @state() private _contextPercent = 0;
   @state() private _connectionState: string = "";
   @state() private _connectionColor: string = "";
+  @state() private _pendingImages: PendingImage[] = [];
+  @state() private _showDropOverlay = false;
+  @state() private _isSending = false;
 
   /** Callback fired when folder button is tapped. Set from main.ts. */
   onFolderSelect?: () => void;
@@ -78,6 +88,12 @@ export class GueridonInterface extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    // Document-level drag handlers prevent browser's default "open file" behavior.
+    // Template-level bindings miss fixed-position children and viewport gaps.
+    document.addEventListener("dragenter", this._onDragEnter);
+    document.addEventListener("dragover", this._onDragOver);
+    document.addEventListener("dragleave", this._onDragLeave);
+    document.addEventListener("drop", this._onDrop);
   }
 
   private _onScroll = () => {
@@ -132,6 +148,11 @@ export class GueridonInterface extends LitElement {
     this.resizeObs?.disconnect();
     this.inputBarObs?.disconnect();
     this.unsubscribe?.();
+    this._pendingImages.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+    document.removeEventListener("dragenter", this._onDragEnter);
+    document.removeEventListener("dragover", this._onDragOver);
+    document.removeEventListener("dragleave", this._onDragLeave);
+    document.removeEventListener("drop", this._onDrop);
   }
 
   // --- Public API ---
@@ -292,14 +313,42 @@ export class GueridonInterface extends LitElement {
 
   // --- Input handling ---
 
-  private handleSend() {
+  private async handleSend() {
     const text = this._inputText.trim();
-    if (!text || !this.agent) return;
+    const hasImages = this._pendingImages.length > 0;
+    if ((!text && !hasImages) || !this.agent || this._isSending) return;
+
     this._inputText = "";
-    // Reset textarea height
     const ta = this.querySelector(".gdn-textarea") as HTMLTextAreaElement;
     if (ta) ta.style.height = "auto";
-    this.agent.prompt(text);
+
+    if (!hasImages) {
+      this.agent.prompt(text);
+      return;
+    }
+
+    // Build ContentBlock[] with images + optional text
+    this._isSending = true;
+    try {
+      const blocks: ContentBlock[] = [];
+      for (const pending of this._pendingImages) {
+        const resized = await resizeImage(pending.file);
+        const data = await fileToBase64(resized);
+        const mediaType = outputMimeType(pending.file.type);
+        blocks.push({
+          type: "image",
+          source: { type: "base64", media_type: mediaType, data },
+        });
+        URL.revokeObjectURL(pending.previewUrl);
+      }
+      if (text) blocks.push({ type: "text", text });
+      this._pendingImages = [];
+      this.agent.prompt(blocks);
+    } catch (e) {
+      this.showToast("Failed to process image");
+    } finally {
+      this._isSending = false;
+    }
   }
 
   private handleAbort() {
@@ -330,6 +379,91 @@ export class GueridonInterface extends LitElement {
     }
   }
 
+  // --- Image upload ---
+
+  private handlePaperclipClick() {
+    const input = this.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    input?.click();
+  }
+
+  private handleFileInput(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (input.files) this.addFiles(input.files);
+    input.value = ""; // Reset so same file can be re-selected
+  }
+
+  addFiles(files: FileList) {
+    for (const file of files) {
+      if (!isAcceptedImageType(file.type)) {
+        this.showToast("Use JPEG, PNG, GIF, or WebP");
+        continue;
+      }
+      const id = crypto.randomUUID();
+      const previewUrl = URL.createObjectURL(file);
+      this._pendingImages = [
+        ...this._pendingImages,
+        { id, file, previewUrl },
+      ];
+    }
+  }
+
+  private handleRemoveImage(id: string) {
+    const img = this._pendingImages.find((i) => i.id === id);
+    if (img) URL.revokeObjectURL(img.previewUrl);
+    this._pendingImages = this._pendingImages.filter((i) => i.id !== id);
+  }
+
+  private handlePaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.kind === "file" && isAcceptedImageType(item.type)) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      const dt = new DataTransfer();
+      imageFiles.forEach((f) => dt.items.add(f));
+      this.addFiles(dt.files);
+    }
+    // No images: let default text paste proceed
+  }
+
+  // Arrow properties for document-level listeners (stable `this` binding)
+  private _onDragEnter = (e: DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer?.types.includes("Files")) {
+      this._showDropOverlay = true;
+    }
+  };
+
+  private _onDragOver = (e: DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  };
+
+  private _onDragLeave = (e: DragEvent) => {
+    // relatedTarget is null when leaving the viewport boundary
+    if (!e.relatedTarget) {
+      this._showDropOverlay = false;
+    }
+  };
+
+  private _onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    this._showDropOverlay = false;
+    if (e.dataTransfer?.files.length) {
+      this.addFiles(e.dataTransfer.files);
+    }
+  };
+
   // --- Gauge helpers ---
 
   private get remaining(): number {
@@ -348,6 +482,21 @@ export class GueridonInterface extends LitElement {
   render() {
     return html`
       <div class="flex flex-col min-h-[100dvh] bg-background text-foreground">
+        <!-- Hidden file input for image upload -->
+        <input type="file" class="hidden"
+          accept="image/jpeg,image/png,image/gif,image/webp" multiple
+          @change=${this.handleFileInput} />
+
+        <!-- Drop overlay -->
+        ${this._showDropOverlay
+          ? html`<div class="fixed inset-0 bg-primary/10 backdrop-blur-sm z-40
+                             flex items-center justify-center">
+              <div class="text-lg font-medium text-foreground/70 pointer-events-none">
+                Drop images here
+              </div>
+            </div>`
+          : ""}
+
         <!-- Messages -->
         <div class="flex-1">
           <div class="max-w-3xl mx-auto p-4 pb-0 gdn-scroll-inner">
@@ -383,7 +532,36 @@ export class GueridonInterface extends LitElement {
                 @input=${this.handleInput}
                 @click=${this.handleTapInput}
                 @keydown=${this.handleKeydown}
+                @paste=${this.handlePaste}
               ></textarea>
+
+              <!-- Pending image thumbnails -->
+              ${this._pendingImages.length > 0
+                ? html`<div class="flex gap-2 px-1 py-1.5 overflow-x-auto">
+                    ${this._pendingImages.map(
+                      (img) => html`
+                        <div
+                          class="relative shrink-0 w-12 h-12 rounded-lg overflow-hidden
+                                 border border-border"
+                        >
+                          <img
+                            src=${img.previewUrl}
+                            class="w-full h-full object-cover"
+                            alt="Pending upload"
+                          />
+                          <button
+                            class="absolute top-0 right-0 w-4 h-4 bg-black/60 text-white
+                                   rounded-bl-lg flex items-center justify-center text-[10px]"
+                            @click=${() => this.handleRemoveImage(img.id)}
+                            title="Remove"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      `,
+                    )}
+                  </div>`
+                : ""}
 
               <!-- Button row -->
               <div class="flex items-center gap-1 mt-1">
@@ -393,6 +571,7 @@ export class GueridonInterface extends LitElement {
                          text-muted-foreground hover:text-foreground hover:bg-secondary
                          transition-colors"
                   title="Attach image"
+                  @click=${this.handlePaperclipClick}
                 >
                   <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none"
                        stroke="currentColor" stroke-width="2"
@@ -445,7 +624,7 @@ export class GueridonInterface extends LitElement {
                              text-primary-foreground flex items-center
                              justify-center disabled:opacity-50"
                       @click=${this.handleSend}
-                      ?disabled=${!this._inputText.trim()}
+                      ?disabled=${!this._inputText.trim() && this._pendingImages.length === 0}
                       title="Send"
                     >↑</button>`}
               </div>

@@ -265,7 +265,7 @@ export class ClaudeCodeAgent {
       } else {
         sendPayload = input;
       }
-      displayContent = input.filter((b) => b.type === "text");
+      displayContent = [...input];
     } else {
       let text = typeof input === "string" ? input : this.extractText(input);
       if (!text) return;

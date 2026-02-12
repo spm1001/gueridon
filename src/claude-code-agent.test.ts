@@ -947,7 +947,7 @@ describe("prompt with content arrays", () => {
     expect(sent[1].type).toBe("text");
   });
 
-  it("adds only text parts to message history for display", () => {
+  it("includes image and text blocks in message history for display", () => {
     agent.connectTransport({
       send: () => {},
       onEvent: () => {},
@@ -961,8 +961,9 @@ describe("prompt with content arrays", () => {
 
     const userMsg = agent.state.messages[0];
     expect(userMsg.role).toBe("user");
-    expect(userMsg.content).toHaveLength(1);
-    expect(userMsg.content[0].text).toBe("Describe this");
+    expect(userMsg.content).toHaveLength(2);
+    expect(userMsg.content[0].type).toBe("image");
+    expect(userMsg.content[1].text).toBe("Describe this");
   });
 
   it("sets isStreaming on content array prompt", () => {
