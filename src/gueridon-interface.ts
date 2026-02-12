@@ -400,7 +400,7 @@ export class GueridonInterface extends LitElement {
         this.showToast("Use JPEG, PNG, GIF, or WebP");
         continue;
       }
-      const id = crypto.randomUUID();
+      const id = Math.random().toString(36).slice(2);
       const previewUrl = URL.createObjectURL(file);
       this._pendingImages = [
         ...this._pendingImages,
