@@ -1266,6 +1266,39 @@ describe("replay mode", () => {
     expect(compactionSpy).not.toHaveBeenCalled();
   });
 
+  it("does not fire false compaction after replay→live transition", () => {
+    const compactionSpy = vi.fn();
+    agent.onCompaction = compactionSpy;
+
+    agent.startReplay();
+    // Replay accumulates high token count
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 140000, output_tokens: 500 },
+    });
+    agent.endReplay();
+
+    // First live response has lower tokens (fresh API call after --resume)
+    agent.handleCCEvent({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-6",
+        content: [{ type: "text", text: "Hello" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 70000, output_tokens: 50 },
+      },
+    });
+    agent.handleCCEvent({
+      type: "result",
+      subtype: "success",
+      usage: { input_tokens: 70000, output_tokens: 50 },
+    });
+
+    // Should NOT fire — the drop is from replay, not real compaction
+    expect(compactionSpy).not.toHaveBeenCalled();
+  });
+
   it("suppresses onCwdChange during replay", () => {
     const cwdSpy = vi.fn();
     agent.onCwdChange = cwdSpy;

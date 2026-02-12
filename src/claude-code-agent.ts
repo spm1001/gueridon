@@ -146,6 +146,7 @@ export class ClaudeCodeAgent {
   // Context tracking (for fuel gauge)
   private _lastInputTokens = 0;
   private _contextWindow = 200_000; // default, updated from result.modelUsage
+  private _skipNextCompactionCheck = false;
   private _cwd = "";
   private _lastRemainingBand: "normal" | "amber" | "red" = "normal";
 
@@ -221,6 +222,9 @@ export class ClaudeCodeAgent {
   /** End replay — re-enables notifications and triggers a sync so UI renders all at once */
   endReplay(): void {
     this._replayMode = false;
+    // The first live response will compare against replayed token counts,
+    // which produces a false "compaction detected" event. Skip that comparison.
+    this._skipNextCompactionCheck = true;
     // If CC was mid-turn when we reconnected, the adapter has accumulated a
     // partial streamMessage (isStreaming is already true — set by startStreamMessage
     // during replay). Push the partial to the UI since emits were suppressed.
@@ -467,7 +471,9 @@ export class ClaudeCodeAgent {
       // Minimum 20k drop avoids false positives on small sessions where token
       // accounting jitter (e.g. after /context) easily crosses the 15% threshold.
       const tokenDrop = prevTokens - this._lastInputTokens;
-      if (prevTokens > 0 && tokenDrop > 20_000 && this._lastInputTokens < prevTokens * 0.85) {
+      if (this._skipNextCompactionCheck) {
+        this._skipNextCompactionCheck = false;
+      } else if (prevTokens > 0 && tokenDrop > 20_000 && this._lastInputTokens < prevTokens * 0.85) {
         if (!this._replayMode) this.onCompaction?.(prevTokens, this._lastInputTokens);
       }
 
