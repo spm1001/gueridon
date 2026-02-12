@@ -10,7 +10,19 @@ set -euo pipefail
 HOST="kube.lan"
 REMOTE_DIR="/home/modha/Repos/gueridon"
 
-echo "=== Deploying guéridon to $HOST ==="
+# Guard: don't deploy unpushed changes
+if [ -n "$(git status --porcelain)" ]; then
+  echo "ERROR: Uncommitted changes. Commit first." >&2
+  exit 1
+fi
+LOCAL=$(git rev-parse HEAD)
+REMOTE=$(git rev-parse origin/main 2>/dev/null || echo "")
+if [ "$LOCAL" != "$REMOTE" ]; then
+  echo "ERROR: Local HEAD ($LOCAL) != origin/main ($REMOTE). Push first." >&2
+  exit 1
+fi
+
+echo "=== Deploying guéridon to $HOST ($(git log -1 --format='%h %s')) ==="
 
 ssh "$HOST" bash -s "$REMOTE_DIR" << 'DEPLOY'
 set -euo pipefail
