@@ -180,7 +180,16 @@ const connections = new Map<WebSocket, Connection>();
 
 /** Build activeProcesses map from sessions for scanFolders. */
 function getActiveSessions(): Map<string, import("./bridge-logic.js").ActiveSessionInfo> {
-  return getActiveSessionsFromSessions(sessions);
+  const infos = new Map<string, import("./bridge-logic.js").SessionProcessInfo>();
+  for (const [id, s] of sessions) {
+    infos.set(id, {
+      folder: s.folder,
+      process: s.process,
+      turnInProgress: s.turnInProgress,
+      clientCount: s.clients.size,
+    });
+  }
+  return getActiveSessionsFromSessions(infos);
 }
 
 // --- CC process management ---

@@ -286,6 +286,7 @@ export interface SessionProcessInfo {
   folder: string;
   process: { exitCode: number | null } | null;
   turnInProgress: boolean;
+  clientCount: number;
 }
 
 /** Runtime session info for folder scanner. */
@@ -295,7 +296,8 @@ export interface ActiveSessionInfo {
 }
 
 /**
- * Build a map of folder path → session info for folders with running CC processes.
+ * Build a map of folder path → session info for folders with active sessions.
+ * A session is active if it has a running CC process OR connected browser clients.
  * Used by scanFolders to mark active folders with activity state.
  */
 export function getActiveSessions(
@@ -303,10 +305,11 @@ export function getActiveSessions(
 ): Map<string, ActiveSessionInfo> {
   const active = new Map<string, ActiveSessionInfo>();
   for (const [id, session] of sessions) {
-    if (session.process && session.process.exitCode === null) {
+    const hasProcess = session.process && session.process.exitCode === null;
+    if (hasProcess || session.clientCount > 0) {
       active.set(session.folder, {
         sessionId: id,
-        activity: session.turnInProgress ? "working" : "waiting",
+        activity: hasProcess && session.turnInProgress ? "working" : "waiting",
       });
     }
   }

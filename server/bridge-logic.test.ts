@@ -417,7 +417,7 @@ describe("getActiveSessions", () => {
 
   it("includes session with running process and activity state", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: false }],
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: false, clientCount: 0 }],
     ]);
     const active = getActiveSessions(sessions);
     const info = active.get("/repos/myproject");
@@ -427,37 +427,49 @@ describe("getActiveSessions", () => {
 
   it("marks working when turnInProgress is true", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: true }],
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: true, clientCount: 0 }],
     ]);
     const info = getActiveSessions(sessions).get("/repos/myproject");
     expect(info?.activity).toBe("working");
   });
 
-  it("excludes session with exited process", () => {
+  it("excludes session with exited process and no clients", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: { exitCode: 0 }, turnInProgress: false }],
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: 0 }, turnInProgress: false, clientCount: 0 }],
     ]);
     expect(getActiveSessions(sessions).size).toBe(0);
   });
 
-  it("excludes session with null process (not yet spawned)", () => {
+  it("excludes session with null process and no clients", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: null, turnInProgress: false }],
+      ["sid-1", { folder: "/repos/myproject", process: null, turnInProgress: false, clientCount: 0 }],
     ]);
     expect(getActiveSessions(sessions).size).toBe(0);
+  });
+
+  it("includes session with connected clients but no process (reconnect before first prompt)", () => {
+    const sessions = new Map<string, SessionProcessInfo>([
+      ["sid-1", { folder: "/repos/myproject", process: null, turnInProgress: false, clientCount: 1 }],
+    ]);
+    const active = getActiveSessions(sessions);
+    const info = active.get("/repos/myproject");
+    expect(info?.sessionId).toBe("sid-1");
+    expect(info?.activity).toBe("waiting");
   });
 
   it("handles mixed sessions correctly", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["active-1", { folder: "/repos/a", process: { exitCode: null }, turnInProgress: true }],
-      ["exited-2", { folder: "/repos/b", process: { exitCode: 1 }, turnInProgress: false }],
-      ["unspawned-3", { folder: "/repos/c", process: null, turnInProgress: false }],
-      ["active-4", { folder: "/repos/d", process: { exitCode: null }, turnInProgress: false }],
+      ["active-1", { folder: "/repos/a", process: { exitCode: null }, turnInProgress: true, clientCount: 1 }],
+      ["exited-2", { folder: "/repos/b", process: { exitCode: 1 }, turnInProgress: false, clientCount: 0 }],
+      ["unspawned-3", { folder: "/repos/c", process: null, turnInProgress: false, clientCount: 0 }],
+      ["active-4", { folder: "/repos/d", process: { exitCode: null }, turnInProgress: false, clientCount: 0 }],
+      ["reconnected-5", { folder: "/repos/e", process: null, turnInProgress: false, clientCount: 2 }],
     ]);
     const active = getActiveSessions(sessions);
-    expect(active.size).toBe(2);
+    expect(active.size).toBe(3);
     expect(active.get("/repos/a")?.activity).toBe("working");
     expect(active.get("/repos/d")?.activity).toBe("waiting");
+    expect(active.get("/repos/e")?.activity).toBe("waiting");
   });
 });
 
