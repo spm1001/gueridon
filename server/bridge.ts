@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -59,12 +59,17 @@ interface ClientConnectFolder {
 interface ClientCreateFolder {
   type: "createFolder";
 }
+interface ClientDeleteFolder {
+  type: "deleteFolder";
+  path: string;
+}
 type ClientMessage =
   | ClientPrompt
   | ClientAbort
   | ClientListFolders
   | ClientConnectFolder
-  | ClientCreateFolder;
+  | ClientCreateFolder
+  | ClientDeleteFolder;
 
 // Bridge → Browser
 interface BridgeConnected {
@@ -119,6 +124,11 @@ interface BridgeSessionClosed {
   type: "sessionClosed";
   deliberate: boolean;
 }
+interface BridgeFolderDeleted {
+  source: "bridge";
+  type: "folderDeleted";
+  path: string;
+}
 type ServerMessage =
   | BridgeConnected
   | BridgePromptReceived
@@ -130,7 +140,8 @@ type ServerMessage =
   | BridgeHistoryStart
   | BridgeHistoryEnd
   | BridgeCCEvent
-  | BridgeSessionClosed;
+  | BridgeSessionClosed
+  | BridgeFolderDeleted;
 
 // --- Session state ---
 
@@ -660,6 +671,56 @@ async function handleCreateFolder(ws: WebSocket): Promise<void> {
   }
 }
 
+/** Delete a folder: destroy session, remove directory if it's under SCAN_ROOT. */
+async function handleDeleteFolder(ws: WebSocket, folderPath: string): Promise<void> {
+  if (!folderPath || !validateFolderPath(folderPath, SCAN_ROOT)) {
+    sendToClient(ws, {
+      source: "bridge",
+      type: "error",
+      error: "Invalid folder path",
+    });
+    return;
+  }
+
+  // Destroy any active session for this folder
+  for (const session of sessions.values()) {
+    if (session.folder === folderPath) {
+      // Notify connected clients before destroying
+      broadcast(session, {
+        source: "bridge",
+        type: "sessionClosed",
+        deliberate: true,
+      });
+      destroySession(session);
+      break;
+    }
+  }
+
+  // Delete the directory (recursive — removes CC session files too)
+  try {
+    await rm(folderPath, { recursive: true, force: true });
+    console.log(`[bridge] deleted folder: ${folderPath}`);
+  } catch (err) {
+    console.error(`[bridge] deleteFolder failed:`, err);
+    sendToClient(ws, {
+      source: "bridge",
+      type: "error",
+      error: `Failed to delete folder: ${(err as Error).message}`,
+    });
+    return;
+  }
+
+  sendToClient(ws, { source: "bridge", type: "folderDeleted", path: folderPath });
+
+  // Send updated folder list to all lobby clients
+  const folders = await scanFolders(getActiveSessions());
+  for (const [client, conn] of connections) {
+    if (conn.state.mode === "lobby" && client.readyState === WebSocket.OPEN) {
+      sendToClient(client, { source: "bridge", type: "folderList", folders });
+    }
+  }
+}
+
 /** Handle messages on a session-mode connection. */
 async function handleSessionMessage(
   ws: WebSocket,
@@ -735,6 +796,11 @@ async function handleSessionMessage(
 
     case "createFolder": {
       await handleCreateFolder(ws);
+      break;
+    }
+
+    case "deleteFolder": {
+      await handleDeleteFolder(ws, msg.path);
       break;
     }
 
@@ -870,6 +936,11 @@ async function handleLobbyMessage(
         sessionId: session.id,
         resumed: session.resumable,
       });
+      break;
+    }
+
+    case "deleteFolder": {
+      await handleDeleteFolder(ws, msg.path);
       break;
     }
 

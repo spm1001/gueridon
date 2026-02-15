@@ -1385,3 +1385,100 @@ describe("isUserTextEcho", () => {
     expect(isUserTextEcho(event)).toBe(false);
   });
 });
+
+// --- isExitCommand with content-array prompts (gdn-tezima) ---
+// Content-array prompts (images) have no text field. The bridge guards with
+// `msg.text && isExitCommand(msg.text)`. These tests verify the guard logic.
+
+describe("isExitCommand with content-array prompts", () => {
+  it("does not crash when text is undefined", () => {
+    // Simulates the guard: msg.text && isExitCommand(msg.text)
+    const msg = { type: "prompt", content: [{ type: "image", source: {} }] } as any;
+    expect(msg.text && isExitCommand(msg.text)).toBeFalsy();
+  });
+
+  it("does not crash when text is empty string", () => {
+    expect(isExitCommand("")).toBe(false);
+  });
+
+  it("still catches /exit when text is present alongside content", () => {
+    const msg = { type: "prompt", text: "/exit", content: [{ type: "text", text: "/exit" }] };
+    expect(msg.text && isExitCommand(msg.text)).toBe(true);
+  });
+
+  it("passes through normal text when content array also present", () => {
+    const msg = { type: "prompt", text: "What's in this image?", content: [{ type: "image", source: {} }] };
+    expect(msg.text && isExitCommand(msg.text)).toBe(false);
+  });
+});
+
+// --- isUserTextEcho with content-array messages (gdn-tezima) ---
+
+describe("isUserTextEcho with content-array user messages", () => {
+  it("array-content user event is NOT a text echo", () => {
+    const event = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "..." } },
+          { type: "text", text: "What's in this image?" },
+        ],
+      },
+    };
+    expect(isUserTextEcho(event)).toBe(false);
+  });
+});
+
+// --- lobbyQueue error recovery (gdn-zibeji) ---
+
+describe("lobby queue error recovery pattern", () => {
+  it("subsequent messages process after a failure", async () => {
+    const results: string[] = [];
+    let queue = Promise.resolve();
+
+    const failingHandler = async () => {
+      throw new Error("folder scan failed");
+    };
+    const succeedingHandler = async () => {
+      results.push("ok");
+    };
+
+    queue = queue.then(failingHandler).catch(() => { /* bridge logs here */ });
+    queue = queue.then(succeedingHandler).catch(() => {});
+
+    await queue;
+    expect(results).toEqual(["ok"]);
+  });
+});
+
+// --- connectFolder session reuse (gdn-zibeji) ---
+
+describe("resolveSessionForFolder reuse", () => {
+  it("reconnects to existing bridge session", () => {
+    const existing = { id: "existing-uuid", resumable: true };
+    const result = resolveSessionForFolder(
+      existing,
+      { id: "existing-uuid", jsonlPath: "/some/path" },
+      true,
+      false,
+      () => "should-not-be-called",
+    );
+    expect(result.isReconnect).toBe(true);
+    expect(result.sessionId).toBe("existing-uuid");
+  });
+
+  it("does not call UUID generator when reconnecting", () => {
+    let uuidCalled = false;
+    const existing = { id: "existing-uuid", resumable: true };
+    const result = resolveSessionForFolder(
+      existing,
+      { id: "existing-uuid", jsonlPath: "/some/path" },
+      false,
+      false,
+      () => { uuidCalled = true; return "new-uuid"; },
+    );
+    expect(result.isReconnect).toBe(true);
+    expect(uuidCalled).toBe(false);
+  });
+});

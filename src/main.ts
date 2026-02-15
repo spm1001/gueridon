@@ -52,16 +52,8 @@ const statusLabels: Record<ConnectionState, string> = {
   disconnected: "Reconnecting…",
   error: "Connection error",
 };
-const statusColors: Record<ConnectionState, string> = {
-  connecting: "bg-yellow-500",
-  lobby: "bg-blue-500",
-  connected: "bg-green-500",
-  disconnected: "bg-yellow-500",
-  error: "bg-red-500",
-};
-
 function updateStatus(state: ConnectionState) {
-  gi.updateConnectionStatus(statusLabels[state], statusColors[state]);
+  gi.updateConnectionStatus(statusLabels[state]);
 }
 
 // --- Folder picker state ---
@@ -92,6 +84,10 @@ function openFolderDialog(folders: FolderInfo[]) {
     () => {
       // New folder requested
       transport.createFolder();
+    },
+    (folder) => {
+      // Delete folder requested (swipe-to-delete)
+      transport.deleteFolder(folder.path);
     },
   );
 }
@@ -144,6 +140,7 @@ const transport = new WSTransport({
     const name = pathToName(path);
     storeFolder(path, name);
     gi.setCwd(name);
+    gi.dismissError();
     // Close dialog only if this connect was user-initiated from the picker.
     // Auto-connects (page reload) don't touch the dialog. This prevents
     // the flash bug: stale session_started can't close a dialog the user
@@ -157,7 +154,13 @@ const transport = new WSTransport({
 
   onFolderConnectFailed: (reason, _path) => {
     connectingFromDialog = null;
-    gi.showToast(reason);
+    gi.showError(reason, {
+      action: "Switch folder",
+      onAction: () => {
+        gi.dismissError();
+        transport.listFolders();
+      },
+    });
     clearStoredFolder();
     // Show folder picker so user can try a different folder
     transport.listFolders();
@@ -165,7 +168,7 @@ const transport = new WSTransport({
 
   onSessionId: (_id) => {
     // Transparent reconnect (WS dropped while in session). No UI action needed —
-    // status dot already updated via onStateChange.
+    // placeholder text already updated via onStateChange.
   },
 
   onBridgeError: (err) => {
@@ -191,6 +194,13 @@ const transport = new WSTransport({
     clearStoredFolder();
     agent.reset();
     transport.returnToLobby();
+  },
+
+  onFolderDeleted: (path) => {
+    // Remove from cached list and update dialog
+    cachedFolders = cachedFolders.filter((f) => f.path !== path);
+    if (folderDialog) folderDialog.updateFolders(cachedFolders);
+    gi.showToast("Folder deleted");
   },
 });
 

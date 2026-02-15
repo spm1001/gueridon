@@ -166,48 +166,45 @@ describe("GueridonInterface", () => {
 
   // -- Connection status --
 
-  describe("connection status", () => {
-    it("hidden by default", async () => {
+  describe("connection status via placeholder (gdn-mezajo)", () => {
+    it("default placeholder is 'Message Claude…'", async () => {
       el = await createElement();
-      // Dot is always in DOM but invisible (opacity 0) by default
-      const dot = el.querySelector(".w-1\\.5.h-1\\.5.rounded-full") as HTMLElement;
-      expect(dot).toBeTruthy();
-      expect(dot.style.opacity).toBe("0");
+      const ta = el.querySelector(".gdn-textarea") as HTMLTextAreaElement;
+      expect(ta.placeholder).toBe("Message Claude…");
     });
 
-    it("shows dot with correct color when set", async () => {
+    it("shows connection state as placeholder", async () => {
       el = await createElement();
-      el.updateConnectionStatus("Reconnecting\u2026", "bg-amber-500");
+      el.updateConnectionStatus("Reconnecting…");
       await el.updateComplete;
-      const dot = el.querySelector(".w-1\\.5.h-1\\.5.rounded-full");
-      expect(dot).toBeTruthy();
-      expect(dot!.classList.contains("bg-amber-500")).toBe(true);
+      const ta = el.querySelector(".gdn-textarea") as HTMLTextAreaElement;
+      expect(ta.placeholder).toBe("Reconnecting…");
     });
 
-    it("auto-hides Connected after 2s", async () => {
+    it("auto-hides Connected after 2s, restoring default placeholder", async () => {
       vi.useFakeTimers();
       el = await createElement();
-      el.updateConnectionStatus("Connected", "bg-green-500");
+      el.updateConnectionStatus("Connected");
       await el.updateComplete;
-      const dot = el.querySelector(".w-1\\.5.h-1\\.5.rounded-full") as HTMLElement;
-      expect(dot.style.opacity).toBe("1");
+      const ta = el.querySelector(".gdn-textarea") as HTMLTextAreaElement;
+      // "Connected" maps to default placeholder
+      expect(ta.placeholder).toBe("Message Claude…");
 
       vi.advanceTimersByTime(2000);
       await el.updateComplete;
-      expect(dot.style.opacity).toBe("0");
+      expect(ta.placeholder).toBe("Message Claude…");
     });
 
-    it("non-Connected status stays visible", async () => {
+    it("non-Connected status stays as placeholder", async () => {
       vi.useFakeTimers();
       el = await createElement();
-      el.updateConnectionStatus("Disconnected", "bg-red-500");
+      el.updateConnectionStatus("Connection error");
       await el.updateComplete;
 
       vi.advanceTimersByTime(5000);
       await el.updateComplete;
-      const dot = el.querySelector(".w-1\\.5.h-1\\.5.rounded-full");
-      expect(dot).toBeTruthy();
-      expect(dot!.classList.contains("bg-red-500")).toBe(true);
+      const ta = el.querySelector(".gdn-textarea") as HTMLTextAreaElement;
+      expect(ta.placeholder).toBe("Connection error");
     });
   });
 

@@ -11,16 +11,28 @@ import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
 import { DialogHeader, DialogContent } from "@mariozechner/mini-lit/dist/Dialog.js";
 import type { FolderInfo, FolderState, FolderActivity } from "./ws-transport.js";
 
+const SWIPE_THRESHOLD = 80; // px to reveal delete zone
+
 @customElement("folder-selector")
 export class FolderSelector extends DialogBase {
   @state() folders: FolderInfo[] = [];
   @state() private filter = "";
   @state() private connectingPath: string | null = null;
   @state() private creatingFolder = false;
+  @state() private swipedPath: string | null = null; // Which folder is swiped open
+  @state() private confirmingDelete: string | null = null; // Awaiting confirmation
 
   private onSelectCallback?: (folder: FolderInfo) => void;
   private onCloseCallback?: () => void;
   private onNewFolderCallback?: () => void;
+  private onDeleteCallback?: (folder: FolderInfo) => void;
+
+  // Touch tracking for swipe gesture
+  private touchStartX = 0;
+  private touchStartY = 0;
+  private touchCurrentX = 0;
+  private swipeRow: HTMLElement | null = null;
+  private isSwipeGesture = false;
 
   // Dialog dimensions — nearly full screen on mobile
   protected override modalWidth = "min(480px, 92vw)";
@@ -32,12 +44,14 @@ export class FolderSelector extends DialogBase {
     onSelect: (folder: FolderInfo) => void,
     onClose?: () => void,
     onNewFolder?: () => void,
+    onDelete?: (folder: FolderInfo) => void,
   ): FolderSelector {
     const dialog = new FolderSelector();
     dialog.folders = folders;
     dialog.onSelectCallback = onSelect;
     dialog.onCloseCallback = onClose;
     dialog.onNewFolderCallback = onNewFolder;
+    dialog.onDeleteCallback = onDelete;
     dialog.open();
     return dialog;
   }
@@ -122,6 +136,89 @@ export class FolderSelector extends DialogBase {
     }
   }
 
+  // --- Swipe gesture ---
+
+  private handleTouchStart(e: TouchEvent, path: string) {
+    // Reset any other open swipe
+    if (this.swipedPath && this.swipedPath !== path) {
+      this.resetSwipe();
+    }
+    this.touchStartX = e.touches[0].clientX;
+    this.touchStartY = e.touches[0].clientY;
+    this.touchCurrentX = this.touchStartX;
+    this.isSwipeGesture = false;
+    this.swipeRow = (e.currentTarget as HTMLElement).querySelector(".swipe-content");
+  }
+
+  private handleTouchMove(e: TouchEvent) {
+    const dx = e.touches[0].clientX - this.touchStartX;
+    const dy = e.touches[0].clientY - this.touchStartY;
+
+    // Decide swipe vs scroll on first significant movement
+    if (!this.isSwipeGesture && Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) {
+      // Vertical — let the list scroll
+      this.swipeRow = null;
+      return;
+    }
+
+    if (Math.abs(dx) > 10) {
+      this.isSwipeGesture = true;
+    }
+
+    if (!this.isSwipeGesture || !this.swipeRow) return;
+
+    e.preventDefault(); // Prevent scroll while swiping horizontally
+    // Only allow swiping left (negative dx), clamp to delete zone width
+    const clampedDx = Math.max(-SWIPE_THRESHOLD - 20, Math.min(0, dx));
+    this.touchCurrentX = this.touchStartX + clampedDx;
+    this.swipeRow.style.transform = `translateX(${clampedDx}px)`;
+    this.swipeRow.style.transition = "none";
+  }
+
+  private handleTouchEnd(_e: TouchEvent, path: string) {
+    if (!this.swipeRow || !this.isSwipeGesture) {
+      this.swipeRow = null;
+      return;
+    }
+
+    const dx = this.touchCurrentX - this.touchStartX;
+    this.swipeRow.style.transition = "transform 0.2s ease";
+
+    if (dx < -SWIPE_THRESHOLD * 0.6) {
+      // Past threshold — lock open
+      this.swipeRow.style.transform = `translateX(-${SWIPE_THRESHOLD}px)`;
+      this.swipedPath = path;
+    } else {
+      // Snap back
+      this.swipeRow.style.transform = "translateX(0)";
+      this.swipedPath = null;
+    }
+    this.swipeRow = null;
+  }
+
+  private resetSwipe() {
+    this.swipedPath = null;
+    this.confirmingDelete = null;
+    // Reset all swipe-content transforms
+    const rows = this.querySelectorAll(".swipe-content") as NodeListOf<HTMLElement>;
+    for (const row of rows) {
+      row.style.transition = "transform 0.2s ease";
+      row.style.transform = "translateX(0)";
+    }
+  }
+
+  private handleDelete(folder: FolderInfo) {
+    if (this.confirmingDelete === folder.path) {
+      // Second tap — confirmed
+      this.onDeleteCallback?.(folder);
+      this.confirmingDelete = null;
+      this.swipedPath = null;
+    } else {
+      // First tap — ask for confirmation
+      this.confirmingDelete = folder.path;
+    }
+  }
+
   // --- Render ---
 
   protected override renderContent() {
@@ -202,38 +299,57 @@ export class FolderSelector extends DialogBase {
     const dot = this.stateColor(folder.state);
     const ago = folder.lastActive ? this.timeAgo(folder.lastActive) : null;
     const label = this.stateLabel(folder.state, folder.activity);
+    const isConfirming = this.confirmingDelete === folder.path;
 
     return html`
-      <button
-        class="w-full text-left px-4 py-3 flex items-start gap-3
-               active:bg-secondary/50 transition-colors"
-        style="min-height: 52px; touch-action: manipulation"
-        ?disabled=${!!this.connectingPath}
-        @click=${() => this.handleSelect(folder)}
+      <div class="relative overflow-hidden"
+        @touchstart=${(e: TouchEvent) => this.handleTouchStart(e, folder.path)}
+        @touchmove=${(e: TouchEvent) => this.handleTouchMove(e)}
+        @touchend=${(e: TouchEvent) => this.handleTouchEnd(e, folder.path)}
       >
-        <div
-          class="mt-1.5 w-2.5 h-2.5 shrink-0 flex items-center justify-center"
+        <!-- Delete zone (revealed by swipe) -->
+        <div class="absolute right-0 top-0 bottom-0 flex items-center justify-center"
+             style="width: ${SWIPE_THRESHOLD}px">
+          <button
+            class="w-full h-full flex items-center justify-center text-sm font-medium
+                   text-white ${isConfirming ? 'bg-red-600' : 'bg-red-500'}
+                   active:bg-red-700 transition-colors"
+            @click=${() => this.handleDelete(folder)}
+          >${isConfirming ? "Confirm" : "Delete"}</button>
+        </div>
+
+        <!-- Swipeable content row -->
+        <button
+          class="swipe-content relative w-full text-left px-4 py-3 flex items-start gap-3
+                 bg-background active:bg-secondary/50 transition-colors"
+          style="min-height: 52px; touch-action: pan-y"
+          ?disabled=${!!this.connectingPath}
+          @click=${() => this.swipedPath === folder.path ? this.resetSwipe() : this.handleSelect(folder)}
         >
-          ${dot
-            ? html`<span class="w-2 h-2 rounded-full ${dot}"></span>`
-            : nothing}
-        </div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-baseline justify-between gap-2">
-            <span class="font-medium text-sm text-foreground truncate">
-              ${folder.name}
-            </span>
-            <span class="text-xs text-muted-foreground shrink-0">
-              ${isConnecting ? "connecting…" : ago ? ago : label}
-            </span>
+          <div
+            class="mt-1.5 w-2.5 h-2.5 shrink-0 flex items-center justify-center"
+          >
+            ${dot
+              ? html`<span class="w-2 h-2 rounded-full ${dot}"></span>`
+              : nothing}
           </div>
-          ${folder.handoffPurpose
-            ? html`<div class="text-xs text-muted-foreground mt-0.5 truncate">
-                ${folder.handoffPurpose}
-              </div>`
-            : nothing}
-        </div>
-      </button>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="font-medium text-sm text-foreground truncate">
+                ${folder.name}
+              </span>
+              <span class="text-xs text-muted-foreground shrink-0">
+                ${isConnecting ? "connecting…" : ago ? ago : label}
+              </span>
+            </div>
+            ${folder.handoffPurpose
+              ? html`<div class="text-xs text-muted-foreground mt-0.5 truncate">
+                  ${folder.handoffPurpose}
+                </div>`
+              : nothing}
+          </div>
+        </button>
+      </div>
     `;
   }
 }

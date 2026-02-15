@@ -60,7 +60,6 @@ export class GueridonInterface extends LitElement {
   @state() private _cwdShort = "";
   @state() private _contextPercent = 0;
   @state() private _connectionState: string = "";
-  @state() private _connectionColor: string = "";
   @state() private _pendingImages: PendingImage[] = [];
   @state() private _showDropOverlay = false;
   @state() private _isSending = false;
@@ -174,15 +173,19 @@ export class GueridonInterface extends LitElement {
   setCwd(cwd: string) {
     this._cwd = cwd;
     this._cwdShort = cwd.split("/").filter(Boolean).pop() || cwd;
+    // Update document title so Safari Reader Mode invalidates its
+    // cached snapshot on session/folder switch (gdn-rawira).
+    document.title = this._cwdShort
+      ? `${this._cwdShort} — Guéridon`
+      : "Guéridon";
   }
 
   setContextPercent(pct: number) {
     this._contextPercent = Math.max(0, Math.min(100, pct));
   }
 
-  updateConnectionStatus(label: string, color: string) {
+  updateConnectionStatus(label: string) {
     this._connectionState = label;
-    this._connectionColor = color;
     // Auto-hide "Connected" after 2s
     if (label === "Connected") {
       setTimeout(() => {
@@ -199,6 +202,7 @@ export class GueridonInterface extends LitElement {
     this.showToast(`Context compacted: ${fromK}k → ${toK}k`);
   }
 
+  /** Transient info notification — auto-dismisses after 4s */
   showToast(text: string) {
     // Lazy-create toast element
     if (!this._toast) {
@@ -232,6 +236,24 @@ export class GueridonInterface extends LitElement {
     }, 4000);
   }
 
+  /** Persistent error banner — stays until dismissed or cleared (gdn-vipebi).
+   *  Use for connection errors, process failures, anything needing attention. */
+  showError(text: string, opts?: { action?: string; onAction?: () => void }) {
+    this._errorText = text;
+    this._errorAction = opts?.action ?? null;
+    this._errorOnAction = opts?.onAction ?? null;
+  }
+
+  dismissError() {
+    this._errorText = "";
+    this._errorAction = null;
+    this._errorOnAction = null;
+  }
+
+  @state() private _errorText = "";
+  private _errorAction: string | null = null;
+  private _errorOnAction: (() => void) | null = null;
+
   private _toast: HTMLElement | null = null;
   private _toastTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -256,7 +278,12 @@ export class GueridonInterface extends LitElement {
           this.syncState();
           // After replay, pin to bottom — the ResizeObserver handles streaming,
           // but replay lands all messages in one batch before the observer fires.
-          requestAnimationFrame(() => this.scrollToBottom(true));
+          // Double-rAF: first waits for Lit render, second waits for layout
+          // reflow. Single rAF undershoots on iOS Safari after large DOM
+          // updates, causing empty space at top (gdn-gocuze).
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => this.scrollToBottom(true))
+          );
           break;
 
         case "message_end":
@@ -466,6 +493,33 @@ export class GueridonInterface extends LitElement {
     }
   };
 
+  // --- Placeholder (connection status via input hint — gdn-mezajo) ---
+
+  private get _placeholder(): string {
+    if (this._connectionState && this._connectionState !== "Connected") {
+      return this._connectionState;
+    }
+    return "Message Claude…";
+  }
+
+  private get _inputDisabled(): boolean {
+    return !!this._connectionState &&
+      this._connectionState !== "Connected" &&
+      this._connectionState !== "";
+  }
+
+  // --- Tap-to-focus (gdn-vipita) ---
+
+  private handleMessageAreaClick(e: MouseEvent) {
+    // Don't steal focus if user is selecting text
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return;
+    // Don't steal focus if they clicked an interactive element
+    const target = e.target as HTMLElement;
+    if (target.closest("a, button, code-block, details")) return;
+    this.focusInput();
+  }
+
   // --- Gauge helpers ---
 
   private get remaining(): number {
@@ -499,8 +553,8 @@ export class GueridonInterface extends LitElement {
             </div>`
           : ""}
 
-        <!-- Messages -->
-        <div class="flex-1">
+        <!-- Messages (tap empty space to focus input — gdn-vipita) -->
+        <div class="flex-1" @click=${this.handleMessageAreaClick}>
           <div class="max-w-3xl mx-auto p-4 pb-0 gdn-scroll-inner">
             <message-list
               .messages=${this._messages}
@@ -517,19 +571,47 @@ export class GueridonInterface extends LitElement {
           </div>
         </div>
 
+        <!-- Error banner — persistent, above input bar (gdn-vipebi) -->
+        ${this._errorText
+          ? html`<div class="fixed bottom-[4.5rem] left-0 right-0 z-30
+                             flex items-center justify-center px-4"
+                      style="padding-bottom: env(safe-area-inset-bottom, 0)">
+              <div class="max-w-3xl w-full flex items-center gap-2 px-3 py-2
+                          rounded-xl bg-red-500/10 border border-red-500/30
+                          text-sm text-red-700 dark:text-red-300">
+                <span class="flex-1">${this._errorText}</span>
+                ${this._errorAction
+                  ? html`<button
+                      class="shrink-0 px-2 py-0.5 rounded-md bg-red-500/20
+                             text-red-700 dark:text-red-300 text-xs font-medium
+                             hover:bg-red-500/30 transition-colors"
+                      @click=${() => this._errorOnAction?.()}
+                    >${this._errorAction}</button>`
+                  : ""}
+                <button
+                  class="shrink-0 w-5 h-5 flex items-center justify-center
+                         rounded-full text-red-500/60 hover:text-red-500
+                         transition-colors text-xs"
+                  @click=${() => this.dismissError()}
+                  title="Dismiss"
+                >&times;</button>
+              </div>
+            </div>`
+          : ""}
+
         <!-- Input area — fixed to viewport bottom -->
         <div class="gdn-input-bar fixed bottom-0 left-0 right-0 bg-background">
           <div
             class="max-w-3xl mx-auto px-2"
             style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0.5rem))"
           >
-            <div class="rounded-2xl border border-border bg-secondary/50 p-2">
+            <div class="rounded-2xl border ${this._isStreaming ? 'border-primary/50 animate-pulse' : 'border-border'} bg-secondary/50 p-2 transition-colors">
               <!-- Textarea (full width) -->
               <textarea
                 class="gdn-textarea w-full resize-none bg-transparent text-foreground
                        text-base outline-none px-2 py-1.5 max-h-32"
                 rows="1"
-                placeholder="Message Claude…"
+                placeholder=${this._placeholder}
                 .value=${this._inputText}
                 @input=${this.handleInput}
                 @click=${this.handleTapInput}
@@ -585,7 +667,7 @@ export class GueridonInterface extends LitElement {
                 <!-- Folder selector (doubles as CWD display + connection status) -->
                 <button
                   class="shrink-0 h-10 px-2 rounded-lg flex items-center gap-1.5
-                         text-xs text-muted-foreground hover:text-foreground
+                         text-xs font-medium text-muted-foreground hover:text-foreground
                          hover:bg-secondary transition-colors truncate"
                   style="max-width: 45%"
                   title=${this._cwd || "Choose folder"}
@@ -599,8 +681,6 @@ export class GueridonInterface extends LitElement {
                   <span class="truncate">
                     ${this._cwdShort || "Choose folder"}
                   </span>
-                  <span class="inline-block w-1.5 h-1.5 rounded-full shrink-0 ${this._connectionColor}"
-                        style="opacity: ${this._connectionState ? 1 : 0}; transition: opacity 0.3s ease"></span>
                 </button>
 
                 <!-- Spacer -->

@@ -60,6 +60,8 @@ export interface WSTransportOptions {
   onFolderCreated?: (folder: FolderInfo) => void;
   /** Called when bridge deliberately closes the session (/exit, /quit) */
   onSessionClosed?: (deliberate: boolean) => void;
+  /** Called when bridge confirms folder deletion */
+  onFolderDeleted?: (path: string) => void;
 }
 
 // --- Reconnect backoff ---
@@ -161,6 +163,11 @@ export class WSTransport implements CCTransport {
   createFolder(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: "createFolder" }));
+  }
+
+  deleteFolder(path: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "deleteFolder", path }));
   }
 
   /**
@@ -275,6 +282,9 @@ export class WSTransport implements CCTransport {
           break;
         case "folderCreated":
           this.options.onFolderCreated?.(msg.folder);
+          break;
+        case "folderDeleted":
+          this.options.onFolderDeleted?.(msg.path);
           break;
 
         case "connected":
