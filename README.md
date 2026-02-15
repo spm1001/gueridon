@@ -4,7 +4,7 @@
 
 ## Status
 
-**Robustness:** Alpha — actively developed, architecture stable but features incomplete
+**Robustness:** Beta — actively developed, architecture stable
 **Works with:** Claude Code (as backend), any browser (as client)
 **Install:** `npm install && npm run start`
 **Requires:** Node.js 20+, Claude Code CLI, MAX subscription
