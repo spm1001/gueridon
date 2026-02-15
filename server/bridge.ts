@@ -3,6 +3,7 @@ import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
 import { readFile, mkdir, rm } from "node:fs/promises";
+import { readFileSync, readdirSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -670,8 +671,45 @@ function stopPingPong(ws: WebSocket, ping: PingPongState): void {
 
 const DIST_DIR = join(import.meta.dirname, "..", "dist");
 
+(function checkDistBuild() {
+  try {
+    let versionJson: { short?: string; time?: string } | null = null;
+    try {
+      versionJson = JSON.parse(readFileSync(join(DIST_DIR, "version.json"), "utf-8"));
+    } catch {
+      console.log("[bridge] ⚠ No dist/version.json — run 'npm run build'");
+    }
+
+    try {
+      const assets = readdirSync(join(DIST_DIR, "assets"));
+      const indexBundle = assets.find((f) => f.startsWith("index-") && f.endsWith(".js"));
+      if (indexBundle) {
+        const content = readFileSync(join(DIST_DIR, "assets", indexBundle), "utf-8");
+        if (content.includes("location.hostname}:3001")) {
+          console.log("[bridge] ⚠ dist/ was built in dev mode — WS URL points to :3001. Rebuild with 'npm run build'");
+        }
+      }
+    } catch {}
+
+    if (versionJson) {
+      console.log(`[bridge] serving dist/ built from ${versionJson.short} at ${versionJson.time}`);
+    }
+  } catch {}
+})();
+
 async function serveStatic(req: IncomingMessage, res: ServerResponse) {
   const pathname = new URL(req.url || "/", "http://localhost").pathname;
+
+  if (pathname === "/version") {
+    try {
+      const data = readFileSync(join(DIST_DIR, "version.json"), "utf-8");
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-cache" }).end(data);
+    } catch {
+      res.writeHead(404).end("Not found");
+    }
+    return;
+  }
+
   const resolved = resolveStaticFile(pathname, DIST_DIR);
 
   if (!resolved.ok) {

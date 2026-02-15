@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
+import { execSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
 
@@ -38,8 +40,23 @@ function litClassFieldFix(): Plugin {
   };
 }
 
+function buildVersionJson(): Plugin {
+  return {
+    name: "build-version-json",
+    apply: "build",
+    closeBundle() {
+      const sha = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+      const short = execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+      const time = new Date().toISOString();
+      const outDir = resolve("dist");
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(join(outDir, "version.json"), JSON.stringify({ sha, time, short }));
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [litClassFieldFix(), tailwindcss()],
+  plugins: [litClassFieldFix(), tailwindcss(), buildVersionJson()],
   server: {
     allowedHosts: ["kube"],
   },

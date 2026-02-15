@@ -91,6 +91,9 @@ function openFolderDialog(folders: FolderInfo[]) {
       transport.deleteFolder(folder.path);
     },
   );
+  fetch("/version").then(r => r.ok ? r.json() : null).then(v => {
+    if (v && folderDialog) folderDialog.version = `${v.short} · ${new Date(v.time).toLocaleDateString()}`;
+  }).catch(() => {});
 }
 
 function closeFolderDialog() {

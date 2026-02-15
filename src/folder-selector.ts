@@ -16,6 +16,7 @@ const SWIPE_THRESHOLD = 80; // px to reveal delete zone
 @customElement("folder-selector")
 export class FolderSelector extends DialogBase {
   @state() folders: FolderInfo[] = [];
+  @state() version = "";
   @state() private filter = "";
   @state() private connectingPath: string | null = null;
   @state() private creatingFolder = false;
@@ -289,6 +290,12 @@ export class FolderSelector extends DialogBase {
                   </div>
                 `}
           </div>
+
+          ${this.version ? html`
+            <div class="px-4 py-2 text-center text-[10px] text-muted-foreground/50 shrink-0">
+              ${this.version}
+            </div>
+          ` : nothing}
         `,
       })}
     `;
