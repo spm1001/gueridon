@@ -62,6 +62,8 @@ export interface WSTransportOptions {
   onSessionClosed?: (deliberate: boolean) => void;
   /** Called when bridge confirms folder deletion */
   onFolderDeleted?: (path: string) => void;
+  /** Called when a prompt is queued (CC mid-turn) — position is 1-based */
+  onPromptQueued?: (position: number) => void;
 }
 
 // --- Reconnect backoff ---
@@ -307,10 +309,15 @@ export class WSTransport implements CCTransport {
           this.clearPromptTimer();
           break;
 
+        case "promptQueued":
+          this.clearPromptTimer();
+          this.options.onPromptQueued?.(msg.position);
+          break;
+
         case "error":
-          this.options.onBridgeError?.(msg.error);
           if (this.connectOp) {
-            // Error during connectToFolder — retry or fail
+            // Error during connectToFolder — retry or fail.
+            // Don't fire onBridgeError: onFolderConnectFailed handles user feedback.
             this.connectOp.retries++;
             if (this.connectOp.retries >= this.options.maxConnectRetries) {
               this.failConnectOp(msg.error);
@@ -321,7 +328,11 @@ export class WSTransport implements CCTransport {
             // Auto-connectFolder on reconnect failed — fall back to lobby
             this.folderPath = null;
             this.setState("lobby");
+            this.options.onBridgeError?.(msg.error);
             this.options.onLobbyConnected?.();
+          } else {
+            // Session-mode error — surface to user
+            this.options.onBridgeError?.(msg.error);
           }
           break;
 

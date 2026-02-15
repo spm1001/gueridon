@@ -173,9 +173,11 @@ const transport = new WSTransport({
 
   onBridgeError: (err) => {
     console.error(`[guéridon] bridge error: ${err}`);
-    // Connect-related errors handled by onFolderConnectFailed.
     // Reset folder creation state so user can retry.
     folderDialog?.resetCreating();
+    // Transport suppresses onBridgeError during connect ops (retries handled
+    // by onFolderConnectFailed). This only fires for session-mode errors.
+    gi.showError(err);
   },
 
   onHistoryStart: () => agent.startReplay(),
@@ -189,11 +191,18 @@ const transport = new WSTransport({
     // Connect failures during connectToFolder handled by onFolderConnectFailed.
     const detail = signal ? `signal ${signal}` : `code ${code}`;
     console.warn(`[guéridon] CC process exited (${detail})`);
+    // Show persistent banner — user needs to know Claude stopped.
+    // Next prompt will respawn CC (lazy spawn), so no action button needed.
+    gi.showError(`Claude process exited (${detail}) — next message will restart it`, { autoDismiss: true });
   },
   onSessionClosed: () => {
     clearStoredFolder();
     agent.reset();
     transport.returnToLobby();
+  },
+
+  onPromptQueued: (position) => {
+    gi.showToast(`Message queued (#${position}) — will send when Claude finishes`);
   },
 
   onFolderDeleted: (path) => {
@@ -220,7 +229,10 @@ agent.onCwdChange = (cwd) => gi.setCwd(cwd);
 agent.onCompaction = (from, to) => gi.notifyCompaction(from, to);
 
 agent.subscribe((event) => {
-  if (event.type === "agent_start") dismissAskUserOverlay();
+  if (event.type === "agent_start") {
+    dismissAskUserOverlay();
+    gi.dismissError(true); // Clear auto-dismissable errors (e.g. process exit) when CC responds
+  }
   if (event.type === "agent_end") gi.setContextPercent(agent.contextPercent);
 });
 

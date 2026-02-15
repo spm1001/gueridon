@@ -237,22 +237,28 @@ export class GueridonInterface extends LitElement {
   }
 
   /** Persistent error banner — stays until dismissed or cleared (gdn-vipebi).
-   *  Use for connection errors, process failures, anything needing attention. */
-  showError(text: string, opts?: { action?: string; onAction?: () => void }) {
+   *  Use for connection errors, process failures, anything needing attention.
+   *  Auto-dismissable errors (e.g. process exit) clear on agent_start;
+   *  non-auto-dismissable errors persist until user dismisses. */
+  showError(text: string, opts?: { action?: string; onAction?: () => void; autoDismiss?: boolean }) {
     this._errorText = text;
     this._errorAction = opts?.action ?? null;
     this._errorOnAction = opts?.onAction ?? null;
+    this._errorAutoDismiss = opts?.autoDismiss ?? false;
   }
 
-  dismissError() {
+  dismissError(onlyAutoDismiss = false) {
+    if (onlyAutoDismiss && !this._errorAutoDismiss) return;
     this._errorText = "";
     this._errorAction = null;
     this._errorOnAction = null;
+    this._errorAutoDismiss = false;
   }
 
   @state() private _errorText = "";
   private _errorAction: string | null = null;
   private _errorOnAction: (() => void) | null = null;
+  private _errorAutoDismiss = false;
 
   private _toast: HTMLElement | null = null;
   private _toastTimer: ReturnType<typeof setTimeout> | null = null;

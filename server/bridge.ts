@@ -82,6 +82,11 @@ interface BridgePromptReceived {
   source: "bridge";
   type: "promptReceived";
 }
+interface BridgePromptQueued {
+  source: "bridge";
+  type: "promptQueued";
+  position: number; // 1-based position in queue
+}
 interface BridgeError {
   source: "bridge";
   type: "error";
@@ -132,6 +137,7 @@ interface BridgeFolderDeleted {
 type ServerMessage =
   | BridgeConnected
   | BridgePromptReceived
+  | BridgePromptQueued
   | BridgeError
   | BridgeProcessExit
   | BridgeLobbyConnected
@@ -167,6 +173,8 @@ interface Session {
   // Conflation: batch content_block_delta events for fewer ws.send() calls
   pendingDeltas: Map<string, PendingDelta>; // Keyed by `${index}:${deltaType}`
   flushTimer: ReturnType<typeof setTimeout> | null;
+  // Message queueing: prompts sent while CC is mid-turn
+  promptQueue: ClientPrompt[];
 }
 
 const sessions = new Map<string, Session>();
@@ -386,6 +394,49 @@ function writeToStdin(session: Session, data: string): boolean {
   }
 }
 
+/**
+ * Deliver a prompt to CC stdin — handles lazy spawn, buffering, and broadcast.
+ * Used for both immediate sends and queue flushes.
+ */
+function deliverPrompt(ws: WebSocket | null, session: Session, msg: ClientPrompt): void {
+  // Lazy spawn: start CC process on first prompt (or respawn if dead)
+  const needsResume = session.process === null && session.resumable;
+  if (!ensureProcess(session, needsResume)) return;
+
+  // Buffer the user message for replay BEFORE writing to stdin.
+  const ccContent = msg.content ?? msg.text;
+  const userEvent = JSON.stringify({
+    source: "cc",
+    event: { type: "user", message: { role: "user", content: ccContent } },
+  });
+  pushToBuffer(session, userEvent);
+  // Broadcast to other tabs so they see the user message immediately
+  for (const client of session.clients) {
+    if (client !== ws && client.readyState === WebSocket.OPEN) {
+      client.send(userEvent);
+    }
+  }
+
+  // Write prompt to CC stdin
+  const envelope = JSON.stringify({
+    type: "user",
+    message: { role: "user", content: ccContent },
+  });
+  if (writeToStdin(session, envelope + "\n")) {
+    session.turnInProgress = true;
+    if (ws) sendToClient(ws, { source: "bridge", type: "promptReceived" });
+  }
+}
+
+/** Flush the next queued prompt after a turn completes. */
+function flushPromptQueue(session: Session): void {
+  const next = session.promptQueue.shift();
+  if (!next) return;
+  console.log(`[bridge] flushing queued prompt session=${session.id} (${session.promptQueue.length} remaining)`);
+  // ws=null: queued prompt has no specific originator — ack was already sent as promptQueued
+  deliverPrompt(null, session, next);
+}
+
 function wireProcessToSession(session: Session): void {
   const proc = session.process;
   if (!proc || !proc.stdout) return;
@@ -406,6 +457,8 @@ function wireProcessToSession(session: Session): void {
       // Detect turn completion: result event means CC finished its turn
       if (event.type === "result") {
         session.turnInProgress = false;
+        // Flush next queued prompt (if any) now that CC is idle
+        flushPromptQueue(session);
       }
 
       // Conflation: content_block_delta events are merged and flushed on a timer.
@@ -492,6 +545,12 @@ function wireProcessToSession(session: Session): void {
     session.process = null;
     session.spawnedAt = null;
     session.turnInProgress = false;
+    // Discard queued prompts — CC is dead, context is gone.
+    // User will see the processExit banner and can re-send.
+    if (session.promptQueue.length > 0) {
+      console.log(`[bridge] discarding ${session.promptQueue.length} queued prompt(s) after process exit`);
+      session.promptQueue = [];
+    }
   });
 
   proc.on("error", (err) => {
@@ -503,6 +562,8 @@ function wireProcessToSession(session: Session): void {
     });
     session.process = null;
     session.spawnedAt = null;
+    session.turnInProgress = false;
+    session.promptQueue = [];
   });
 }
 
@@ -745,36 +806,16 @@ async function handleSessionMessage(
         return;
       }
 
-      // Lazy spawn: start CC process on first prompt (or respawn if dead)
-      const needsResume = session.process === null && session.resumable;
-      if (!ensureProcess(session, needsResume)) return;
-
-      // Buffer the user message for replay BEFORE writing to stdin.
-      // This ensures user messages appear in the replay buffer at the correct
-      // position (before the assistant's response), regardless of when CC's
-      // --replay-user-messages echo arrives on stdout.
-      const ccContent = msg.content ?? msg.text;
-      const userEvent = JSON.stringify({
-        source: "cc",
-        event: { type: "user", message: { role: "user", content: ccContent } },
-      });
-      pushToBuffer(session, userEvent);
-      // Broadcast to other tabs so they see the user message immediately
-      for (const client of session.clients) {
-        if (client !== ws && client.readyState === WebSocket.OPEN) {
-          client.send(userEvent);
-        }
+      // Queue if CC is mid-turn — flush when result event arrives
+      if (session.turnInProgress) {
+        session.promptQueue.push(msg);
+        const pos = session.promptQueue.length;
+        console.log(`[bridge] prompt queued (position ${pos}) session=${session.id}`);
+        sendToClient(ws, { source: "bridge", type: "promptQueued", position: pos });
+        break;
       }
 
-      // Write prompt to CC stdin
-      const envelope = JSON.stringify({
-        type: "user",
-        message: { role: "user", content: ccContent },
-      });
-      if (writeToStdin(session, envelope + "\n")) {
-        session.turnInProgress = true;
-        sendToClient(ws, { source: "bridge", type: "promptReceived" });
-      }
+      deliverPrompt(ws, session, msg);
       break;
     }
 
@@ -901,6 +942,7 @@ async function handleLobbyMessage(
           guardWasDeferred: false,
           pendingDeltas: new Map(),
           flushTimer: null,
+          promptQueue: [],
         };
 
         // Pre-populate message buffer from JSONL for paused sessions

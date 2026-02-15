@@ -98,6 +98,7 @@ function createLobbyTransport(overrides?: Partial<Parameters<typeof WSTransport.
     onFolderList: vi.fn(),
     onFolderConnected: vi.fn(),
     onFolderConnectFailed: vi.fn(),
+    onPromptQueued: vi.fn(),
   };
   const transport = new WSTransport({
     url: "ws://localhost:3001",
@@ -200,9 +201,12 @@ describe("message dispatch", () => {
     expect(received[0].message.content[0].text).toBe("hi");
   });
 
-  it("routes bridge errors to onBridgeError", () => {
+  it("routes bridge errors to onBridgeError in session mode", () => {
     const { transport, callbacks } = createLobbyTransport();
     const ws = connectAndOpen(transport);
+    // Enter session mode so error routes to onBridgeError (not connect/lobby handling)
+    ws.simulateMessage({ source: "bridge", type: "lobbyConnected" });
+    ws.simulateMessage({ source: "bridge", type: "connected", sessionId: "s1" });
 
     ws.simulateMessage({ source: "bridge", type: "error", error: "Something broke" });
 
@@ -486,6 +490,20 @@ describe("prompt timeout", () => {
     vi.advanceTimersByTime(10_000);
     // Should NOT have fired error
     expect(callbacks.onBridgeError).not.toHaveBeenCalled();
+  });
+
+  it("clears timeout and fires onPromptQueued on promptQueued", () => {
+    const { transport, callbacks } = createLobbyTransport({ promptTimeout: 10_000 });
+    const ws = connectAndOpen(transport);
+
+    transport.send("test");
+    ws.simulateMessage({ source: "bridge", type: "promptQueued", position: 2 });
+
+    // Prompt timer should be cleared (no error after timeout)
+    vi.advanceTimersByTime(10_000);
+    expect(callbacks.onBridgeError).not.toHaveBeenCalled();
+    // Callback should fire with position
+    expect(callbacks.onPromptQueued).toHaveBeenCalledWith(2);
   });
 
   it("uses custom timeout value", () => {
@@ -844,10 +862,10 @@ describe("connectToFolder", () => {
 
     transport.connectToFolder("/repos/alpha");
 
-    // First error — retry 1
+    // First error — retry 1 (onBridgeError suppressed during connectOp)
     ws.simulateMessage({ source: "bridge", type: "error", error: "spawn failed" });
     expect(onFolderConnectFailed).not.toHaveBeenCalled();
-    expect(onBridgeError).toHaveBeenCalledWith("spawn failed");
+    expect(onBridgeError).not.toHaveBeenCalled();
 
     // Second error — retry 2
     ws.simulateMessage({ source: "bridge", type: "error", error: "spawn failed" });
