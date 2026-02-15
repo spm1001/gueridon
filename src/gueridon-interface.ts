@@ -77,8 +77,10 @@ export class GueridonInterface extends LitElement {
 
   private resizeObs?: ResizeObserver;
   private inputBarObs?: ResizeObserver;
-  @state() private userScrolled = false;
+  @state() userScrolled = false;
   private _scrollLockUntil = 0;
+  /** Temporarily suppress auto-scroll (e.g. during fold/expand toggles) */
+  _suppressAutoScroll = false;
 
   // --- Lit lifecycle ---
 
@@ -123,7 +125,7 @@ export class GueridonInterface extends LitElement {
     const inner = this.querySelector(".gdn-scroll-inner") as HTMLElement;
     if (inner) {
       this.resizeObs = new ResizeObserver(() => {
-        if (!this.userScrolled) {
+        if (!this.userScrolled && !this._suppressAutoScroll) {
           this.scrollToBottom();
         }
       });

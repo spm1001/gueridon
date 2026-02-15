@@ -45,11 +45,27 @@ export class FoldableBlock extends LitElement {
 	connectedCallback() { super.connectedCallback(); this.style.display = "block"; }
 
 	private toggle() {
+		const yBefore = this.getBoundingClientRect().top;
+
+		// Suppress auto-scroll-to-bottom while content resizes
+		const gi = document.querySelector("gueridon-interface") as any;
+		if (gi) gi._suppressAutoScroll = true;
+
 		this._expanded = !this._expanded;
 		// Mode 2: toggle sibling visibility
 		if (this.siblingTarget) {
 			this.siblingTarget.style.display = this._expanded ? "block" : "none";
 		}
+
+		// Compensate scroll drift synchronously (mode 2) then release after layout settles
+		requestAnimationFrame(() => {
+			const drift = this.getBoundingClientRect().top - yBefore;
+			if (drift !== 0) window.scrollBy(0, drift);
+			// Release after one more frame so ResizeObserver doesn't snap back
+			requestAnimationFrame(() => {
+				if (gi) gi._suppressAutoScroll = false;
+			});
+		});
 	}
 
 	render() {

@@ -39,7 +39,7 @@ export class UserMessage extends LitElement {
 			: [];
 
 		return html`
-			<div class="flex justify-start mx-4">
+			<div class="flex justify-end mx-4">
 				<div class="user-message-container py-2 px-4 rounded-xl">
 					${images.length > 0
 						? html`<div class="flex gap-2 mb-2 flex-wrap">

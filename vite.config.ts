@@ -40,6 +40,9 @@ function litClassFieldFix(): Plugin {
 
 export default defineConfig({
   plugins: [litClassFieldFix(), tailwindcss()],
+  server: {
+    allowedHosts: ["kube"],
+  },
   resolve: {
     alias: {
       // Deduplicate Lit: vendored files import lit, which must resolve to
