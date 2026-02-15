@@ -45,8 +45,15 @@ function buildVersionJson(): Plugin {
     name: "build-version-json",
     apply: "build",
     closeBundle() {
-      const sha = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
-      const short = execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+      let sha = "unknown";
+      let short = "unknown";
+      try {
+        sha = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+        short = execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+      } catch {
+        sha = process.env.GIT_SHA || "unknown";
+        short = sha.substring(0, 7);
+      }
       const time = new Date().toISOString();
       const outDir = resolve("dist");
       mkdirSync(outDir, { recursive: true });

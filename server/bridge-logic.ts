@@ -6,7 +6,7 @@
  * IO — session resolution, path validation, arg construction.
  */
 
-import { resolve, join, extname } from "node:path";
+import { resolve, join, extname, sep } from "node:path";
 
 // --- Configuration constants ---
 
@@ -79,8 +79,9 @@ export function resolveStaticFile(
   }
 
   const filePath = join(distDir, pathname);
-  // Path traversal guard
-  if (!filePath.startsWith(distDir)) {
+  // Path traversal guard (use sep-terminated root to prevent prefix collisions)
+  const root = distDir.endsWith(sep) ? distDir : distDir + sep;
+  if (!filePath.startsWith(root) && filePath !== distDir) {
     return { ok: false, status: 403 };
   }
 

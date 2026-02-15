@@ -16,6 +16,7 @@ self.addEventListener("push", (event) => {
     icon: "/icon-192.svg",
     badge: "/icon-192.svg",
     tag: data.tag || "gueridon-default",
+    renotify: true,
     data: { folder: data.folder || "/" },
     vibrate: data.vibrate || [200],
   };

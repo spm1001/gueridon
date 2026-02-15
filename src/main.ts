@@ -111,6 +111,12 @@ const transport = new WSTransport({
   onStateChange: updateStatus,
 
   onLobbyConnected: () => {
+    // Re-subscribe to push if permission already granted (covers subscription
+    // dropped server-side via 403/410 cleanup without waiting for next prompt).
+    if (Notification.permission === "granted" && transport.vapidPublicKey) {
+      subscribeToPush(transport.vapidPublicKey, (msg) => transport.sendRaw(msg));
+    }
+
     // Check for folder passed via notification click (cold start)
     const params = new URLSearchParams(location.search);
     const notifFolder = params.get("folder");
