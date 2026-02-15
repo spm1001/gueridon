@@ -2,10 +2,12 @@
 
 *The tableside trolley — bringing the service to you.*
 
-> **Status:** Alpha — actively developed, architecture stable but features incomplete
-> **Works with:** Claude Code (as backend), any browser (as client)
-> **Install:** `npm install && npm run start`
-> **Requires:** Node.js 20+, Claude Code CLI, MAX subscription
+## Status
+
+**Robustness:** Alpha — actively developed, architecture stable but features incomplete
+**Works with:** Claude Code (as backend), any browser (as client)
+**Install:** `npm install && npm run start`
+**Requires:** Node.js 20+, Claude Code CLI, MAX subscription
 
 A mobile web UI for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Open your phone, pick a project folder, and start a session — Claude Code runs on your server, you interact from wherever you are.
 
