@@ -110,7 +110,7 @@ One-time copy from `pi-mono` commit `41c4157b` (2026-02-09):
 
 Our own `<user-message>`, `<assistant-message>`, `<tool-message>`. Replaces
 pi-web-ui's Messages.ts + renderTool chain. No pdfjs-dist, xlsx, jszip, or
-@aws-sdk transitive deps.
+`@aws-sdk` transitive deps.
 
 ### If components render blank
 
