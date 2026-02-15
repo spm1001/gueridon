@@ -1168,6 +1168,14 @@ describe("replay mode", () => {
     expect(agent.state.messages[0].content[0]).toEqual({ type: "text", text: "replayed" });
   });
 
+  it("isReplaying reflects replay state", () => {
+    expect(agent.isReplaying).toBe(false);
+    agent.startReplay();
+    expect(agent.isReplaying).toBe(true);
+    agent.endReplay();
+    expect(agent.isReplaying).toBe(false);
+  });
+
   it("endReplay re-enables emit and fires agent_start sync event", () => {
     agent.startReplay();
     agent.handleCCEvent({

@@ -244,6 +244,21 @@ describe("GueridonInterface", () => {
       ) as HTMLButtonElement;
       expect(btn.disabled).toBe(false);
     });
+
+    it("fires onPromptSent callback when sending", async () => {
+      el = await createElement();
+      const agent = new ClaudeCodeAgent();
+      agent.connectTransport({ send: () => {}, onEvent: () => () => {} } as any);
+      el.setAgent(agent);
+      const spy = vi.fn();
+      el.onPromptSent = spy;
+      (el as any)._inputText = "hello";
+      el.requestUpdate();
+      await el.updateComplete;
+      const btn = el.querySelector('button[title="Send"]') as HTMLButtonElement;
+      btn.click();
+      expect(spy).toHaveBeenCalledOnce();
+    });
   });
 
   // -- Agent wiring (CC events → DOM) --
@@ -643,6 +658,131 @@ describe("GueridonInterface", () => {
       el = await createElement();
       await el.updateComplete;
       expect(el.querySelector(".overflow-x-auto")).toBeFalsy();
+    });
+  });
+
+  // -- Title badge state --
+
+  describe("title badge state", () => {
+    it("setCwd sets base title", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/myproject");
+      expect(document.title).toBe("myproject — Guéridon");
+    });
+
+    it("setTitleState('working') adds ⏳ prefix", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/myproject");
+      el.setTitleState("working");
+      expect(document.title).toBe("⏳ myproject — Guéridon");
+    });
+
+    it("setTitleState('done') adds ✓ prefix", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/myproject");
+      el.setTitleState("done");
+      expect(document.title).toBe("✓ myproject — Guéridon");
+    });
+
+    it("setTitleState('asking') adds ❓ prefix", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/myproject");
+      el.setTitleState("asking");
+      expect(document.title).toBe("❓ myproject — Guéridon");
+    });
+
+    it("setTitleState('idle') removes prefix", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/myproject");
+      el.setTitleState("done");
+      el.setTitleState("idle");
+      expect(document.title).toBe("myproject — Guéridon");
+    });
+
+    it("window focus resets done state to idle", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/myproject");
+      el.setTitleState("done");
+      expect(document.title).toBe("✓ myproject — Guéridon");
+      window.dispatchEvent(new Event("focus"));
+      expect(document.title).toBe("myproject — Guéridon");
+    });
+
+    it("window focus resets asking state to idle", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/myproject");
+      el.setTitleState("asking");
+      window.dispatchEvent(new Event("focus"));
+      expect(document.title).toBe("myproject — Guéridon");
+    });
+
+    it("window focus does NOT reset working state", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/myproject");
+      el.setTitleState("working");
+      window.dispatchEvent(new Event("focus"));
+      expect(document.title).toBe("⏳ myproject — Guéridon");
+    });
+
+    it("setCwd preserves current title state", async () => {
+      el = await createElement();
+      el.setTitleState("working");
+      el.setCwd("/home/user/Repos/other");
+      expect(document.title).toBe("⏳ other — Guéridon");
+    });
+
+    it("title is plain Guéridon when no cwd set", async () => {
+      el = await createElement();
+      el.setTitleState("done");
+      expect(document.title).toBe("✓ Guéridon");
+    });
+  });
+
+  // -- Favicon badge --
+
+  describe("favicon badge", () => {
+    afterEach(() => {
+      document.querySelector('link[rel="icon"]')?.remove();
+    });
+
+    it("creates favicon link element", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/test");
+      const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement;
+      expect(link).toBeTruthy();
+      expect(link.href).toContain("data:image/svg+xml,");
+    });
+
+    it("idle favicon has no dot", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/test");
+      el.setTitleState("idle");
+      const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement;
+      expect(link.href).not.toContain("r=\"6\"");
+    });
+
+    it("done favicon has green dot", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/test");
+      el.setTitleState("done");
+      const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement;
+      expect(link.href).toContain("%2322c55e"); // #22c55e URL-encoded
+    });
+
+    it("working favicon has amber dot", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/test");
+      el.setTitleState("working");
+      const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement;
+      expect(link.href).toContain("%23f59e0b"); // #f59e0b URL-encoded
+    });
+
+    it("asking favicon has red dot", async () => {
+      el = await createElement();
+      el.setCwd("/home/user/Repos/test");
+      el.setTitleState("asking");
+      const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement;
+      expect(link.href).toContain("%23ef4444"); // #ef4444 URL-encoded
     });
   });
 });

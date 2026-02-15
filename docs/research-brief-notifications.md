@@ -142,3 +142,17 @@ For **Push API** (server-sent): hook into the `result` event handler in `bridge.
 - **Deployed via systemd on Linux** — VAPID keys and subscriptions need to survive restarts
 - **No build-time framework changes desired** — prefer minimal additions over pulling in large PWA toolkits
 - **Must work on iOS Safari standalone mode** — this is the primary mobile platform
+
+---
+
+## Implementation Status (2026-02-15)
+
+### Done
+1. **Page title + favicon badge** — document.title shows ✓/⏳/❓, SVG favicon with colored dot. Window focus resets.
+2. **Service worker + manifest + Notification API** — SW registered, manifest with display:standalone, notifications fire on agent_end and AskUserQuestion. Permission requested from user gesture (send button tap). Replay suppressed.
+3. **SW lifecycle** — skipWaiting + clients.claim for instant activation. notificationclick focuses existing tab.
+
+### Remaining
+4. **HTTPS via Tailscale cert** (gdn-jahaku) — prerequisite for Push API
+5. **Push API with VAPID** (gdn-beceto) — phone-in-pocket notifications, server-side push when no clients connected
+6. **iOS device testing** — all iOS Safari behaviour is speculative until tested on real hardware

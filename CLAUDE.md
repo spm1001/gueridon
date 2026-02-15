@@ -74,7 +74,7 @@ npm run dev                # Vite dev server with HMR
 npm run bridge             # Bridge in separate terminal
 
 # Testing
-npm test                   # Run all tests (322 tests, ~1.5s)
+npm test                   # Run all tests (411 tests, ~1.5s)
 npm run test:watch         # Watch mode for development
 npm run test:mobile        # Launch mobile test harness (Chrome Debug + dev + bridge + CDP viewport)
 npm run test:mobile --prod # Same but using production build on :3001
@@ -184,3 +184,12 @@ Key design decisions:
 - **Hard:** Kill process → `--resume` for next turn (8s penalty)
 - SIGINT and control messages both kill the process dead (bridge uses SIGTERM→SIGKILL escalation)
 - Stdin close lets response finish then exits cleanly
+
+## Notifications
+
+- **Service worker** (`public/sw.js`): push + notificationclick handlers, skipWaiting/claim for instant activation. No fetch/cache handler yet (see gdn-gabeda).
+- **Manifest** (`public/manifest.json`): minimal PWA manifest for iOS standalone notification support.
+- **Client notifications** (`src/notifications.ts`): Notification API, permission request from user gesture, fires on agent_end (turn complete) and AskUserQuestion. Only notifies when page lacks focus.
+- **Title badge**: document.title shows ✓/⏳/❓ prefix per Claude state. Favicon SVG gets colored dot.
+- **Replay guard**: notifications and title badges suppressed during session replay.
+- **Icons**: SVG icons in `public/` (icon-192.svg, icon-512.svg). iOS apple-touch-icon is SVG (may need PNG for better home screen icon quality).

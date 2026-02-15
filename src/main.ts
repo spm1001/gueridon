@@ -4,6 +4,7 @@ import { WSTransport, type ConnectionState, type FolderInfo } from "./ws-transpo
 import { FolderSelector } from "./folder-selector.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
 import { GueridonInterface } from "./gueridon-interface.js";
+import { registerServiceWorker, requestPermission, notifyTurnComplete, notifyAskUser } from "./notifications.js";
 import "./app.css";
 
 // --- Persistent folder (survives page refresh) ---
@@ -217,7 +218,12 @@ agent.connectTransport(transport);
 
 // --- Callbacks ---
 
+let currentFolder = "";
+let currentFolderPath = "";
+
 agent.onAskUser = (data) => {
+  gi.setTitleState("asking");
+  notifyAskUser(currentFolder, currentFolderPath);
   showAskUserOverlay(
     data,
     (answer) => agent.prompt(answer),
@@ -225,15 +231,31 @@ agent.onAskUser = (data) => {
   );
 };
 
-agent.onCwdChange = (cwd) => gi.setCwd(cwd);
+agent.onCwdChange = (cwd) => {
+  currentFolderPath = cwd;
+  currentFolder = pathToName(cwd);
+  gi.setCwd(cwd);
+};
 agent.onCompaction = (from, to) => gi.notifyCompaction(from, to);
+
+// Request permission from user gesture (tap on send button)
+gi.onPromptSent = () => requestPermission();
 
 agent.subscribe((event) => {
   if (event.type === "agent_start") {
     dismissAskUserOverlay();
     gi.dismissError(true); // Clear auto-dismissable errors (e.g. process exit) when CC responds
+    gi.setTitleState("working");
   }
-  if (event.type === "agent_end") gi.setContextPercent(agent.contextPercent);
+  if (event.type === "agent_end") {
+    gi.setContextPercent(agent.contextPercent);
+    // Don't notify or badge during replay — Claude didn't just finish,
+    // we're just catching up on history.
+    if (!agent.isReplaying) {
+      gi.setTitleState("done");
+      notifyTurnComplete(currentFolder, currentFolderPath);
+    }
+  }
 });
 
 gi.onFolderSelect = () => {
@@ -241,6 +263,25 @@ gi.onFolderSelect = () => {
   openFolderDialog(cachedFolders);
   transport.listFolders();
 };
+
+// --- Service worker + notifications ---
+
+registerServiceWorker();
+
+// When user taps a notification, SW posts a message with the folder.
+// Focus the tab (SW handles that) and connect to the right folder.
+navigator.serviceWorker?.addEventListener("message", (event) => {
+  if (event.data?.type === "notificationClick" && event.data.folder) {
+    const folder = event.data.folder;
+    // If we're already in this folder, just focus (SW already did that).
+    // Otherwise, connect to the folder from the notification.
+    if (currentFolderPath !== folder) {
+      agent.reset();
+      gi.setCwd(pathToName(folder));
+      transport.connectToFolder(folder);
+    }
+  }
+});
 
 // --- Connect and render ---
 

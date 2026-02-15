@@ -64,8 +64,13 @@ export class GueridonInterface extends LitElement {
   @state() private _showDropOverlay = false;
   @state() private _isSending = false;
 
+  /** Title badge state — drives document.title prefix */
+  private _titleState: "idle" | "working" | "done" | "asking" = "idle";
+
   /** Callback fired when folder button is tapped. Set from main.ts. */
   onFolderSelect?: () => void;
+  /** Callback fired when user sends a prompt (inside user gesture). */
+  onPromptSent?: () => void;
 
   // --- Child element references ---
 
@@ -95,7 +100,15 @@ export class GueridonInterface extends LitElement {
     document.addEventListener("dragover", this._onDragOver);
     document.addEventListener("dragleave", this._onDragLeave);
     document.addEventListener("drop", this._onDrop);
+    // Reset title badge when user returns to tab
+    window.addEventListener("focus", this._onWindowFocus);
   }
+
+  private _onWindowFocus = () => {
+    if (this._titleState === "done" || this._titleState === "asking") {
+      this.setTitleState("idle");
+    }
+  };
 
   private _onScroll = () => {
     // Ignore scroll events caused by our own scrollTo or iOS keyboard animation
@@ -146,6 +159,7 @@ export class GueridonInterface extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     window.removeEventListener("scroll", this._onScroll);
+    window.removeEventListener("focus", this._onWindowFocus);
     this.resizeObs?.disconnect();
     this.inputBarObs?.disconnect();
     this.unsubscribe?.();
@@ -173,11 +187,46 @@ export class GueridonInterface extends LitElement {
   setCwd(cwd: string) {
     this._cwd = cwd;
     this._cwdShort = cwd.split("/").filter(Boolean).pop() || cwd;
-    // Update document title so Safari Reader Mode invalidates its
-    // cached snapshot on session/folder switch (gdn-rawira).
-    document.title = this._cwdShort
+    this.updateTitle();
+  }
+
+  /** Update title badge state. Drives document.title prefix (✓/⏳/❓). */
+  setTitleState(state: "idle" | "working" | "done" | "asking") {
+    this._titleState = state;
+    this.updateTitle();
+  }
+
+  private updateTitle() {
+    const base = this._cwdShort
       ? `${this._cwdShort} — Guéridon`
       : "Guéridon";
+    const prefixes = { idle: "", working: "⏳ ", done: "✓ ", asking: "❓ " };
+    document.title = `${prefixes[this._titleState]}${base}`;
+    this.updateFavicon();
+  }
+
+  private updateFavicon() {
+    // Dot color per state — null means no dot (base icon only)
+    const dotColors: Record<string, string | null> = {
+      idle: null,
+      working: "#f59e0b", // amber
+      done: "#22c55e",    // green
+      asking: "#ef4444",  // red
+    };
+    const dot = dotColors[this._titleState] ?? null;
+    // SVG: guéridon table icon (circle on a line) + optional status dot
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+      <circle cx="16" cy="12" r="8" fill="none" stroke="%23e5e7eb" stroke-width="2"/>
+      <text x="16" y="16" text-anchor="middle" font-size="12" fill="%23e5e7eb">G</text>
+      ${dot ? `<circle cx="26" cy="6" r="6" fill="${dot.replace("#", "%23")}"/>` : ""}
+    </svg>`;
+    let link = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
+    if (!link) {
+      link = document.createElement("link");
+      link.rel = "icon";
+      document.head.appendChild(link);
+    }
+    link.href = `data:image/svg+xml,${svg}`;
   }
 
   setContextPercent(pct: number) {
@@ -353,6 +402,7 @@ export class GueridonInterface extends LitElement {
     const hasImages = this._pendingImages.length > 0;
     if ((!text && !hasImages) || !this.agent || this._isSending) return;
 
+    this.onPromptSent?.();
     this._inputText = "";
     const ta = this.querySelector(".gdn-textarea") as HTMLTextAreaElement;
     if (ta) ta.style.height = "auto";

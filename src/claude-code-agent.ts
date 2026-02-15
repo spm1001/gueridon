@@ -239,6 +239,10 @@ export class ClaudeCodeAgent {
     return this._state;
   }
 
+  get isReplaying(): boolean {
+    return this._replayMode;
+  }
+
   subscribe(fn: (e: AgentEvent) => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
