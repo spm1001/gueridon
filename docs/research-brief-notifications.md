@@ -152,7 +152,9 @@ For **Push API** (server-sent): hook into the `result` event handler in `bridge.
 2. **Service worker + manifest + Notification API** — SW registered, manifest with display:standalone, notifications fire on agent_end and AskUserQuestion. Permission requested from user gesture (send button tap). Replay suppressed.
 3. **SW lifecycle** — skipWaiting + clients.claim for instant activation. notificationclick focuses existing tab.
 
+3. **HTTPS via `tailscale serve`** (gdn-jahaku) — TLS termination by Tailscale daemon, zero code in bridge. Certs auto-renew, no restart needed. See `docs/deploy.md`.
+4. **Push API with VAPID** (gdn-beceto) — `server/push.ts` module, `web-push` npm package. Bridge pushes when `clients.size === 0` on result and AskUserQuestion events. Client subscribes via `PushManager` on first prompt (user gesture). Subscriptions persisted to `~/.config/gueridon/push-subscriptions.json`.
+5. **iOS device testing** — verified on iOS Safari standalone mode (Add to Home Screen). Permission dialog appears, push notifications delivered to lock screen with vibration.
+
 ### Remaining
-4. **HTTPS via Tailscale cert** (gdn-jahaku) — prerequisite for Push API
-5. **Push API with VAPID** (gdn-beceto) — phone-in-pocket notifications, server-side push when no clients connected
-6. **iOS device testing** — all iOS Safari behaviour is speculative until tested on real hardware
+6. **Push test script** — `scripts/send-test-push.ts` for end-to-end verification without waiting for a real CC turn

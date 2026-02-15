@@ -87,6 +87,7 @@ export class WSTransport implements CCTransport {
   private closed = false; // True after explicit close() — stops reconnect
   private _state: ConnectionState = "disconnected";
   private boundVisibilityHandler: (() => void) | null = null;
+  vapidPublicKey: string | null = null; // Set by lobbyConnected, read by main.ts for push subscription
 
   // Active connectToFolder operation — null when no explicit connect is in flight.
   // Separate from folderPath (transparent reconnect) because connectToFolder has
@@ -120,6 +121,13 @@ export class WSTransport implements CCTransport {
       : { type: "prompt", text: message };
     this.ws.send(JSON.stringify(payload));
     this.startPromptTimer();
+  }
+
+  /** Send a raw message to the bridge (for non-prompt protocol messages). */
+  sendRaw(msg: unknown): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+    }
   }
 
   onEvent(handler: (event: CCEvent) => void): void {
@@ -267,6 +275,7 @@ export class WSTransport implements CCTransport {
     if (msg.source === "bridge") {
       switch (msg.type) {
         case "lobbyConnected":
+          if (msg.vapidPublicKey) this.vapidPublicKey = msg.vapidPublicKey;
           if (this.connectOp) {
             // Active connectToFolder operation — send connectFolder for target
             this.ws!.send(JSON.stringify({ type: "connectFolder", path: this.connectOp.path }));

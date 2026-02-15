@@ -37,8 +37,9 @@ self.addEventListener("notificationclick", (event) => {
           return;
         }
       }
-      // No existing tab — open a new one
-      return self.clients.openWindow("/");
+      // No existing tab — open with folder context
+      const url = folder !== "/" ? `/?folder=${encodeURIComponent(folder)}` : "/";
+      return self.clients.openWindow(url);
     })
   );
 });

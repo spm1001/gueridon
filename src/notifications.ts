@@ -1,24 +1,31 @@
 /**
  * Notification system for Guéridon.
  *
- * Handles service worker registration, permission requests, and
- * showing notifications when Claude finishes or needs input.
+ * Handles service worker registration, permission requests,
+ * push subscription, and showing notifications when Claude
+ * finishes or needs input.
  *
  * Notifications only fire when the page is NOT focused — no point
  * notifying someone who's already looking at the screen.
+ *
+ * Push notifications fire from the bridge when no WS clients are
+ * connected (phone-in-pocket scenario).
  */
 
 let swRegistration: ServiceWorkerRegistration | null = null;
+let swReady: Promise<ServiceWorkerRegistration | null>;
 let permissionGranted = false;
 
 /** Register the service worker. Call once at startup. */
-export async function registerServiceWorker(): Promise<void> {
-  if (!("serviceWorker" in navigator)) return;
-  try {
-    swRegistration = await navigator.serviceWorker.register("/sw.js");
-  } catch (e) {
-    console.warn("[notifications] SW registration failed:", e);
+export function registerServiceWorker(): void {
+  if (!("serviceWorker" in navigator)) {
+    swReady = Promise.resolve(null);
+    return;
   }
+  swReady = navigator.serviceWorker.register("/sw.js").then(
+    (reg) => { swRegistration = reg; return reg; },
+    (e) => { console.warn("[notifications] SW registration failed:", e); return null; },
+  );
 }
 
 /**
@@ -35,6 +42,49 @@ export async function requestPermission(): Promise<boolean> {
   const result = await Notification.requestPermission();
   permissionGranted = result === "granted";
   return permissionGranted;
+}
+
+/**
+ * Subscribe to push notifications via the bridge.
+ * Called after permission is granted and lobbyConnected provides the VAPID key.
+ * Sends the subscription to the bridge for server-side push delivery.
+ */
+export async function subscribeToPush(
+  vapidPublicKey: string,
+  sendToBridge: (msg: unknown) => void,
+): Promise<void> {
+  // Ensure SW registration has completed (race on first load)
+  await swReady;
+  if (!swRegistration || !vapidPublicKey) return;
+  if (!("PushManager" in window)) {
+    console.log("[notifications] Push API not available");
+    return;
+  }
+  try {
+    // Check for existing subscription first
+    let sub = await swRegistration.pushManager.getSubscription();
+    if (!sub) {
+      const applicationServerKey = urlBase64ToUint8Array(vapidPublicKey);
+      sub = await swRegistration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+    }
+    // Send subscription to bridge
+    sendToBridge({ type: "pushSubscribe", subscription: sub.toJSON() });
+    console.log("[notifications] Push subscription sent to bridge");
+  } catch (e) {
+    console.warn("[notifications] Push subscription failed:", e);
+  }
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
 }
 
 /** Show a notification that Claude finished a turn. */

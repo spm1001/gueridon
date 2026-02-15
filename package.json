@@ -21,6 +21,7 @@
     "@mariozechner/pi-agent-core": "^0.52.8",
     "@mariozechner/pi-ai": "^0.52.8",
     "lit": "^3.3.2",
+    "web-push": "^3.6.7",
     "ws": "^8.19.0"
   },
   "devDependencies": {

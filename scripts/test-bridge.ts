@@ -7,7 +7,7 @@
 
 import WebSocket from "ws";
 
-const BRIDGE_URL = "ws://localhost:3001";
+const BRIDGE_URL = process.env.BRIDGE_URL || "ws://localhost:3001";
 const TEST_FOLDER = `${process.env.HOME}/Repos/gueridon`;
 
 let sessionId: string | null = null;
@@ -514,7 +514,7 @@ async function testReplay(): Promise<void> {
 async function testHttpSmoke(): Promise<void> {
   console.log("\n=== Test 10: HTTP smoke — static serving ===");
 
-  const BRIDGE_HTTP = "http://localhost:3001";
+  const BRIDGE_HTTP = process.env.BRIDGE_HTTP_URL || BRIDGE_URL.replace(/^ws/, "http");
 
   // GET / should return HTML (SPA index)
   const rootRes = await fetch(BRIDGE_HTTP);

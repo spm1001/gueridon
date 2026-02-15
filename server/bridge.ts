@@ -8,6 +8,7 @@ import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { scanFolders, getLatestSession, getLatestHandoff, getSessionJSONLPath, hasExitMarker, writeExitMarker, FolderInfo, SCAN_ROOT } from "./folders.js";
 import { generateFolderName } from "./fun-names.js";
+import { getVapidPublicKey, addSubscription, removeSubscription, pushTurnComplete, pushAskUser } from "./push.js";
 import {
   IDLE_TIMEOUT_MS,
   PING_INTERVAL_MS,
@@ -63,13 +64,23 @@ interface ClientDeleteFolder {
   type: "deleteFolder";
   path: string;
 }
+interface ClientPushSubscribe {
+  type: "pushSubscribe";
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+}
+interface ClientPushUnsubscribe {
+  type: "pushUnsubscribe";
+  endpoint: string;
+}
 type ClientMessage =
   | ClientPrompt
   | ClientAbort
   | ClientListFolders
   | ClientConnectFolder
   | ClientCreateFolder
-  | ClientDeleteFolder;
+  | ClientDeleteFolder
+  | ClientPushSubscribe
+  | ClientPushUnsubscribe;
 
 // Bridge → Browser
 interface BridgeConnected {
@@ -101,6 +112,7 @@ interface BridgeProcessExit {
 interface BridgeLobbyConnected {
   source: "bridge";
   type: "lobbyConnected";
+  vapidPublicKey: string | null;
 }
 interface BridgeFolderList {
   source: "bridge";
@@ -134,6 +146,10 @@ interface BridgeFolderDeleted {
   type: "folderDeleted";
   path: string;
 }
+interface BridgePushSubscribed {
+  source: "bridge";
+  type: "pushSubscribed";
+}
 type ServerMessage =
   | BridgeConnected
   | BridgePromptReceived
@@ -147,7 +163,8 @@ type ServerMessage =
   | BridgeHistoryEnd
   | BridgeCCEvent
   | BridgeSessionClosed
-  | BridgeFolderDeleted;
+  | BridgeFolderDeleted
+  | BridgePushSubscribed;
 
 // --- Session state ---
 
@@ -459,6 +476,18 @@ function wireProcessToSession(session: Session): void {
         session.turnInProgress = false;
         // Flush next queued prompt (if any) now that CC is idle
         flushPromptQueue(session);
+        // Push notification if no clients connected (phone-in-pocket)
+        if (session.clients.size === 0) {
+          pushTurnComplete(session.folder).catch(() => {});
+        }
+      }
+
+      // Detect AskUserQuestion tool use — Claude needs input
+      if (event.type === "content_block_start" &&
+          event.content_block?.type === "tool_use" &&
+          event.content_block?.name === "AskUserQuestion" &&
+          session.clients.size === 0) {
+        pushAskUser(session.folder).catch(() => {});
       }
 
       // Conflation: content_block_delta events are merged and flushed on a timer.
@@ -1014,7 +1043,7 @@ wss.on("connection", (ws: WebSocket) => {
   connections.set(ws, conn);
   startPingPong(ws, ping);
 
-  sendToClient(ws, { source: "bridge", type: "lobbyConnected" });
+  sendToClient(ws, { source: "bridge", type: "lobbyConnected", vapidPublicKey: getVapidPublicKey() });
   console.log("[bridge] client connected (lobby mode)");
 
   // Single message handler — dispatches based on current mode.
@@ -1035,6 +1064,17 @@ wss.on("connection", (ws: WebSocket) => {
         type: "error",
         error: "Invalid JSON from client",
       });
+      return;
+    }
+
+    // Push subscription management — works in any mode
+    if (msg.type === "pushSubscribe") {
+      addSubscription(msg.subscription);
+      sendToClient(ws, { source: "bridge", type: "pushSubscribed" });
+      return;
+    }
+    if (msg.type === "pushUnsubscribe") {
+      removeSubscription(msg.endpoint);
       return;
     }
 

@@ -4,7 +4,7 @@ import { WSTransport, type ConnectionState, type FolderInfo } from "./ws-transpo
 import { FolderSelector } from "./folder-selector.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
 import { GueridonInterface } from "./gueridon-interface.js";
-import { registerServiceWorker, requestPermission, notifyTurnComplete, notifyAskUser } from "./notifications.js";
+import { registerServiceWorker, requestPermission, subscribeToPush, notifyTurnComplete, notifyAskUser } from "./notifications.js";
 import "./app.css";
 
 // --- Persistent folder (survives page refresh) ---
@@ -35,7 +35,7 @@ function pathToName(path: string): string {
 // Dev: Vite on :5173, bridge on :3001 — need explicit bridge URL
 // Prod: bridge serves everything — same-origin works
 const BRIDGE_URL = import.meta.env.DEV
-  ? `ws://${location.hostname}:3001`
+  ? `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.hostname}:3001`
   : `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 
 // --- Core objects (created first, wired below) ---
@@ -108,6 +108,17 @@ const transport = new WSTransport({
   onStateChange: updateStatus,
 
   onLobbyConnected: () => {
+    // Check for folder passed via notification click (cold start)
+    const params = new URLSearchParams(location.search);
+    const notifFolder = params.get("folder");
+    if (notifFolder) {
+      // Clear the URL param so refresh doesn't re-trigger
+      history.replaceState(null, "", "/");
+      gi.setCwd(pathToName(notifFolder));
+      transport.connectToFolder(notifFolder);
+      return;
+    }
+
     const stored = getStoredFolder();
     if (stored) {
       // Auto-connect to last folder (no dialog involvement)
@@ -238,8 +249,14 @@ agent.onCwdChange = (cwd) => {
 };
 agent.onCompaction = (from, to) => gi.notifyCompaction(from, to);
 
-// Request permission from user gesture (tap on send button)
-gi.onPromptSent = () => requestPermission();
+// Request permission from user gesture (tap on send button).
+// After permission granted, subscribe to push notifications.
+gi.onPromptSent = async () => {
+  const granted = await requestPermission();
+  if (granted && transport.vapidPublicKey) {
+    subscribeToPush(transport.vapidPublicKey, (msg) => transport.sendRaw(msg));
+  }
+};
 
 agent.subscribe((event) => {
   if (event.type === "agent_start") {
