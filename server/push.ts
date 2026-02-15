@@ -31,7 +31,10 @@ function init(): void {
   try {
     const keys = JSON.parse(readFileSync(VAPID_PATH, "utf-8"));
     publicKey = keys.publicKey;
-    webpush.setVapidDetails("mailto:gueridon@localhost", keys.publicKey, keys.privateKey);
+    webpush.setVapidDetails(
+      process.env.VAPID_SUBJECT || "mailto:gueridon@planetmodha.com",
+      keys.publicKey, keys.privateKey,
+    );
     vapidReady = true;
     console.log("[push] VAPID configured");
   } catch (e) {
@@ -98,8 +101,9 @@ export async function sendPush(payload: {
       await webpush.sendNotification(sub, data);
     } catch (err: unknown) {
       const statusCode = (err as { statusCode?: number }).statusCode;
-      if (statusCode === 410 || statusCode === 404) {
-        // Subscription expired or invalid — remove it
+      if (statusCode === 410 || statusCode === 404 || statusCode === 403) {
+        // Subscription expired, invalid, or JWT rejected — remove it.
+        // 403 BadJwtToken from Apple means the subscription needs re-creating.
         expired.push(endpoint);
       } else {
         console.warn(`[push] Failed to send to ${endpoint.slice(0, 60)}:`, err);
