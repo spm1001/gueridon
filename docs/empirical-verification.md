@@ -240,13 +240,32 @@ This is the graceful shutdown path — lets the response complete, then clean ex
 
 Test: `--allowed-tools AskUserQuestion` (only AskUserQuestion listed). Init event showed all 22 standard tools, not just AskUserQuestion. The flag adds to the default set.
 
-This is how persistent-assistant's permission routing works:
-1. `--allowed-tools Read,Edit,Write,Glob,Grep,...` (whitelist, excluding Bash)
-2. CC tries Bash → not in allowed list → **denied** → appears in `permission_denials`
-3. Bridge surfaces denial to user (Telegram approval prompt)
-4. User approves → bridge retries with Bash added to `--allowed-tools`
-
 **`--allowed-tools` + `permission_denials` = working deny-and-notify.** Unlike `--disallowedTools` (which hides tools entirely), `--allowed-tools` leaves all tools visible but gates execution. The model attempts the tool, gets denied, and the denial appears in the result event with full tool input.
+
+### Verified: settings.json Takes Precedence (2026-02-16)
+
+**`settings.json` allow list overrides `--allowed-tools`.** If settings.json has a blanket `"Bash"` in its allow list, Bash runs without denial regardless of whether `--allowed-tools` includes it. Tested with `--allowed-tools "Read,Edit,Write,Glob,Grep"` (Bash excluded) and `--permission-mode default` — Bash ran successfully, `permission_denials: []`.
+
+**To gate Bash via `--allowed-tools`, you must first remove the blanket `"Bash"` from settings.json** and replace it with specific patterns (e.g., `"Bash(git:*)"`, `"Bash(npm:*)"`, etc.).
+
+### Verified: Persistent Stdin Hangs on Unlisted Tools (2026-02-16)
+
+**In persistent `-p` mode with stdin pipe, an unlisted tool causes a hang, not a denial.** CC blocks waiting for interactive TTY approval that can never come. No output, no `permission_denials` event. The process must be killed externally.
+
+This only affects the persistent stdin model (Guéridon). **Spawn-per-message with stdin=/dev/null** (persistent-assistant's model) gets proper denial because CC detects no TTY and fails the permission prompt immediately.
+
+The Feb 11 test (above) showed AskUserQuestion being denied — this was because AskUserQuestion has a unique **second permission gate** that always denies in `-p` mode regardless of `--allowed-tools`. Regular tools like Bash do not have this second gate and hang instead.
+
+### persistent-assistant's Permission Model (2026-02-16)
+
+persistent-assistant (github.com/davidbeglenboyle/persistent-assistant) uses a spawn-per-message architecture with stdin ignored. Their permission routing works because of this architecture difference:
+
+1. `--allowed-tools Read,Edit,Write,Glob,Grep,...` (whitelist, excluding Bash)
+2. CC tries Bash → not in allowed list → **denied** (stdin is /dev/null, so no hang)
+3. Bridge surfaces denial to user (Telegram approval prompt)
+4. User approves → bridge respawns with Bash added to `--allowed-tools`
+
+**This pattern cannot be directly adopted for Guéridon's persistent stdin model.** See `~/.claude/plans/serene-floating-map.md` for the adapted approach using settings.json patterns as the primary gate.
 
 ### Verified: AskUserQuestion Two-Gate Behavior (2026-02-11)
 
