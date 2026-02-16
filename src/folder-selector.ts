@@ -12,6 +12,7 @@ import { DialogHeader, DialogContent } from "@mariozechner/mini-lit/dist/Dialog.
 import type { FolderInfo, FolderState, FolderActivity } from "./ws-transport.js";
 
 const SWIPE_THRESHOLD = 80; // px to reveal delete zone
+const SWIPE_DEAD_ZONE = 30; // px of horizontal movement before swipe activates
 
 @customElement("folder-selector")
 export class FolderSelector extends DialogBase {
@@ -32,6 +33,8 @@ export class FolderSelector extends DialogBase {
   private touchStartX = 0;
   private touchStartY = 0;
   private touchCurrentX = 0;
+  private touchLastX = 0;
+  private touchLastTime = 0;
   private swipeRow: HTMLElement | null = null;
   private isSwipeGesture = false;
 
@@ -147,6 +150,8 @@ export class FolderSelector extends DialogBase {
     this.touchStartX = e.touches[0].clientX;
     this.touchStartY = e.touches[0].clientY;
     this.touchCurrentX = this.touchStartX;
+    this.touchLastX = this.touchStartX;
+    this.touchLastTime = e.timeStamp;
     this.isSwipeGesture = false;
     this.swipeRow = (e.currentTarget as HTMLElement).querySelector(".swipe-content");
   }
@@ -155,38 +160,47 @@ export class FolderSelector extends DialogBase {
     const dx = e.touches[0].clientX - this.touchStartX;
     const dy = e.touches[0].clientY - this.touchStartY;
 
-    // Decide swipe vs scroll on first significant movement
-    if (!this.isSwipeGesture && Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 10) {
-      // Vertical — let the list scroll
-      this.swipeRow = null;
-      return;
-    }
+    // Once locked as vertical scroll, stay locked
+    if (this.swipeRow === null && !this.isSwipeGesture) return;
 
-    if (Math.abs(dx) > 10) {
+    // Decide swipe vs scroll: vertical wins if dominant before dead zone
+    if (!this.isSwipeGesture) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
+        this.swipeRow = null; // Lock as scroll — won't re-enter
+        return;
+      }
+      // Must cross dead zone horizontally before activating swipe
+      if (Math.abs(dx) < SWIPE_DEAD_ZONE) return;
       this.isSwipeGesture = true;
     }
 
-    if (!this.isSwipeGesture || !this.swipeRow) return;
+    if (!this.swipeRow) return;
 
     e.preventDefault(); // Prevent scroll while swiping horizontally
     // Only allow swiping left (negative dx), clamp to delete zone width
     const clampedDx = Math.max(-SWIPE_THRESHOLD - 20, Math.min(0, dx));
+    this.touchLastX = this.touchCurrentX;
+    this.touchLastTime = e.timeStamp;
     this.touchCurrentX = this.touchStartX + clampedDx;
     this.swipeRow.style.transform = `translateX(${clampedDx}px)`;
     this.swipeRow.style.transition = "none";
   }
 
-  private handleTouchEnd(_e: TouchEvent, path: string) {
+  private handleTouchEnd(e: TouchEvent, path: string) {
     if (!this.swipeRow || !this.isSwipeGesture) {
       this.swipeRow = null;
       return;
     }
 
     const dx = this.touchCurrentX - this.touchStartX;
+    // Velocity: px/ms of the final movement segment
+    const dt = Math.max(1, e.timeStamp - this.touchLastTime);
+    const velocity = (this.touchCurrentX - this.touchLastX) / dt;
+
     this.swipeRow.style.transition = "transform 0.2s ease";
 
-    if (dx < -SWIPE_THRESHOLD * 0.6) {
-      // Past threshold — lock open
+    // Lock open if past 60% of threshold OR flicking left fast (>0.5 px/ms)
+    if (dx < -SWIPE_THRESHOLD * 0.6 || velocity < -0.5) {
       this.swipeRow.style.transform = `translateX(-${SWIPE_THRESHOLD}px)`;
       this.swipedPath = path;
     } else {
