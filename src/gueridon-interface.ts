@@ -86,6 +86,11 @@ export class GueridonInterface extends LitElement {
   /** Temporarily suppress auto-scroll (e.g. during fold/expand toggles) */
   _suppressAutoScroll = false;
 
+  // --- iOS keyboard offset (visualViewport API) ---
+  // NOT @state — we apply directly to DOM to avoid Lit re-render flicker during streaming
+  private _keyboardOffset = 0;
+  private _viewportRaf = 0;
+
   // --- Lit lifecycle ---
 
   createRenderRoot() {
@@ -102,6 +107,13 @@ export class GueridonInterface extends LitElement {
     document.addEventListener("drop", this._onDrop);
     // Reset title badge when user returns to tab
     window.addEventListener("focus", this._onWindowFocus);
+    // iOS Safari: visualViewport shrinks when keyboard opens, but doesn't
+    // resize the layout viewport. Fixed-bottom elements get hidden behind
+    // the keyboard. Track the offset and apply it as inline bottom style.
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", this._onViewportResize);
+      window.visualViewport.addEventListener("scroll", this._onViewportResize);
+    }
   }
 
   private _onWindowFocus = () => {
@@ -109,6 +121,38 @@ export class GueridonInterface extends LitElement {
       this.setTitleState("idle");
     }
   };
+
+  private _onViewportResize = () => {
+    // Coalesce rapid-fire resize events during keyboard animation into
+    // a single update per frame — prevents the Cheshire Cat effect.
+    cancelAnimationFrame(this._viewportRaf);
+    this._viewportRaf = requestAnimationFrame(() => {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      const offset = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      if (offset === this._keyboardOffset) return;
+      const opening = offset > this._keyboardOffset;
+      this._keyboardOffset = offset;
+      // Direct DOM manipulation — bypasses Lit render cycle entirely.
+      // Using @state would re-render the template on every keyboard animation
+      // frame, causing the input bar to flicker during streaming.
+      this._applyKeyboardOffset();
+      if (opening) this.scrollToBottom();
+    });
+  };
+
+  /** Apply keyboard offset via CSS custom property on the host element.
+   *  Child elements reference var(--kb-offset) — survives Lit re-renders
+   *  because the property lives on the host, not the re-rendered children. */
+  private _applyKeyboardOffset() {
+    this.style.setProperty("--kb-offset", `${this._keyboardOffset}px`);
+    // Content padding still needs direct update (not template-driven)
+    const bar = this.querySelector(".gdn-input-bar") as HTMLElement;
+    const inner = this.querySelector(".gdn-scroll-inner") as HTMLElement;
+    if (bar && inner) {
+      inner.style.paddingBottom = `${bar.offsetHeight + this._keyboardOffset}px`;
+    }
+  }
 
   private _onScroll = () => {
     // Ignore scroll events caused by our own scrollTo or iOS keyboard animation
@@ -144,12 +188,14 @@ export class GueridonInterface extends LitElement {
       this.resizeObs.observe(inner);
     }
 
-    // Match content padding-bottom to input bar height so the last message
-    // sits exactly above the fixed bar, not behind it.
+    // Match content padding-bottom to input bar height + keyboard offset
+    // so the last message sits exactly above the fixed bar, not behind it.
     const bar = this.querySelector(".gdn-input-bar") as HTMLElement;
     if (bar && inner) {
       this.inputBarObs = new ResizeObserver(() => {
-        inner.style.paddingBottom = `${bar.offsetHeight}px`;
+        // _keyboardOffset is added here too — when keyboard is open and bar
+        // resizes (e.g. textarea grows), padding must account for both.
+        inner.style.paddingBottom = `${bar.offsetHeight + this._keyboardOffset}px`;
       });
       this.inputBarObs.observe(bar);
     }
@@ -160,6 +206,10 @@ export class GueridonInterface extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener("scroll", this._onScroll);
     window.removeEventListener("focus", this._onWindowFocus);
+    if (window.visualViewport) {
+      window.visualViewport.removeEventListener("resize", this._onViewportResize);
+      window.visualViewport.removeEventListener("scroll", this._onViewportResize);
+    }
     this.resizeObs?.disconnect();
     this.inputBarObs?.disconnect();
     this.unsubscribe?.();
@@ -629,9 +679,9 @@ export class GueridonInterface extends LitElement {
 
         <!-- Error banner — persistent, above input bar (gdn-vipebi) -->
         ${this._errorText
-          ? html`<div class="fixed bottom-[4.5rem] left-0 right-0 z-30
+          ? html`<div class="gdn-error-banner fixed left-0 right-0 z-30
                              flex items-center justify-center px-4"
-                      style="padding-bottom: env(safe-area-inset-bottom, 0)">
+                      style="bottom: calc(4.5rem + var(--kb-offset, 0px)); padding-bottom: env(safe-area-inset-bottom, 0)">
               <div class="max-w-3xl w-full flex items-center gap-2 px-3 py-2
                           rounded-xl bg-red-500/10 border border-red-500/30
                           text-sm text-red-700 dark:text-red-300">
@@ -655,8 +705,9 @@ export class GueridonInterface extends LitElement {
             </div>`
           : ""}
 
-        <!-- Input area — fixed to viewport bottom -->
-        <div class="gdn-input-bar fixed bottom-0 left-0 right-0 bg-background">
+        <!-- Input area — fixed to viewport bottom, offset for iOS keyboard -->
+        <div class="gdn-input-bar fixed left-0 right-0 bg-background transition-[bottom] duration-150"
+             style="bottom: var(--kb-offset, 0px)">
           <div
             class="max-w-3xl mx-auto px-2"
             style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0.5rem))"
