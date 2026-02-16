@@ -375,6 +375,24 @@ describe("scanFolders", () => {
     expect(result[0].handoffPurpose).toBeNull();
   });
 
+  it("paused when newer session exists after stale handoff", async () => {
+    // Handoff was for session N, but session N+1 was started after.
+    // The stale handoff should NOT prevent resuming session N+1.
+    addDir(REPOS, ["alpha"]);
+    addFolder("alpha", {
+      session: { id: "session-N-plus-1", mtime: new Date("2026-01-20") },
+      handoff: {
+        sessionId: "session-N",
+        purpose: "Old work",
+        mtime: new Date("2026-01-10"),
+      },
+    });
+
+    const result = await scanFolders(new Map());
+    expect(result[0].state).toBe("paused");
+    expect(result[0].sessionId).toBe("session-N-plus-1");
+  });
+
   it("closed when .exit marker exists (no handoff)", async () => {
     addDir(REPOS, ["alpha"]);
     addFolder("alpha", {

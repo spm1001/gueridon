@@ -137,8 +137,9 @@ describe("resolveStaticFile", () => {
 });
 
 // --- resolveSessionForFolder ---
-// This is the critical decision tree. The resume bug from session 8 was
-// caused by resuming closed sessions (handoff existed but was ignored).
+// Decision tree for connecting to a folder. Handoff/exit only block resume
+// when they match the latest session — stale signals from old sessions don't
+// prevent resuming newer ones.
 
 describe("resolveSessionForFolder", () => {
   const fixedId = () => "fresh-uuid-123";
@@ -148,7 +149,7 @@ describe("resolveSessionForFolder", () => {
       const result = resolveSessionForFolder(
         { id: "bridge-session-1", resumable: true },
         null,
-        false,
+        null,
         false,
         fixedId,
       );
@@ -163,7 +164,7 @@ describe("resolveSessionForFolder", () => {
       const result = resolveSessionForFolder(
         { id: "bridge-session-2", resumable: false },
         null,
-        false,
+        null,
         false,
         fixedId,
       );
@@ -175,7 +176,7 @@ describe("resolveSessionForFolder", () => {
       const result = resolveSessionForFolder(
         { id: "bridge-session-3", resumable: true },
         { id: "old-session-file" },
-        true, // handoff exists — but bridge session takes priority
+        "old-session-file", // handoff matches — but bridge session takes priority
         false,
         fixedId,
       );
@@ -189,7 +190,7 @@ describe("resolveSessionForFolder", () => {
       const result = resolveSessionForFolder(
         null,
         { id: "paused-session-abc" },
-        false, // no handoff
+        null, // no handoff
         false, // no .exit
         fixedId,
       );
@@ -201,12 +202,12 @@ describe("resolveSessionForFolder", () => {
     });
   });
 
-  describe("closed folder (handoff exists)", () => {
-    it("creates fresh session when handoff exists", () => {
+  describe("closed folder (handoff matches latest session)", () => {
+    it("creates fresh session when handoff matches", () => {
       const result = resolveSessionForFolder(
         null,
         { id: "old-closed-session" },
-        true, // handoff exists = was closed
+        "old-closed-session", // handoff matches latest session
         false,
         fixedId,
       );
@@ -218,12 +219,10 @@ describe("resolveSessionForFolder", () => {
     });
 
     it("does NOT reuse session ID from closed session — the resume bug", () => {
-      // This is the exact bug from session 8: connectFolder was checking
-      // for session files but not handoffs, so it resumed closed sessions.
       const result = resolveSessionForFolder(
         null,
         { id: "should-not-reuse-this" },
-        true, // handoff exists
+        "should-not-reuse-this", // handoff matches
         false,
         fixedId,
       );
@@ -233,12 +232,29 @@ describe("resolveSessionForFolder", () => {
     });
   });
 
+  describe("stale handoff (handoff from old session, newer session exists)", () => {
+    it("resumes newer session despite stale handoff", () => {
+      const result = resolveSessionForFolder(
+        null,
+        { id: "session-N-plus-1" },
+        "session-N", // handoff is from older session — doesn't match
+        false,
+        fixedId,
+      );
+      expect(result).toEqual({
+        sessionId: "session-N-plus-1",
+        resumable: true,
+        isReconnect: false,
+      });
+    });
+  });
+
   describe("fresh folder (no session files, no handoff)", () => {
     it("creates fresh session", () => {
       const result = resolveSessionForFolder(
         null,
         null,
-        false,
+        null,
         false,
         fixedId,
       );
@@ -252,12 +268,10 @@ describe("resolveSessionForFolder", () => {
 
   describe("edge: handoff but no session files", () => {
     it("creates fresh session (defensive — shouldn't happen in practice)", () => {
-      // Handoff implies a session existed, but the files might have been
-      // cleaned up. Should still create a fresh session.
       const result = resolveSessionForFolder(
         null,
         null,
-        true,
+        "orphan-handoff", // handoff exists but no session files
         false,
         fixedId,
       );
@@ -273,10 +287,10 @@ describe("resolveSessionForFolder", () => {
     let counter = 0;
     const gen = () => `gen-${++counter}`;
 
-    const r1 = resolveSessionForFolder(null, null, false, false, gen);
+    const r1 = resolveSessionForFolder(null, null, null, false, gen);
     expect(r1.sessionId).toBe("gen-1");
 
-    const r2 = resolveSessionForFolder(null, null, true, false, gen);
+    const r2 = resolveSessionForFolder(null, null, "stale", false, gen);
     expect(r2.sessionId).toBe("gen-2");
   });
 
@@ -285,7 +299,7 @@ describe("resolveSessionForFolder", () => {
       const result = resolveSessionForFolder(
         null,
         { id: "exited-session" },
-        false, // no handoff
+        null, // no handoff
         true,  // has .exit marker
         fixedId,
       );
@@ -300,7 +314,7 @@ describe("resolveSessionForFolder", () => {
       const result = resolveSessionForFolder(
         null,
         { id: "exited-session" },
-        true,  // handoff exists
+        "exited-session", // handoff matches
         true,  // has .exit marker
         fixedId,
       );
@@ -1460,7 +1474,7 @@ describe("resolveSessionForFolder reuse", () => {
     const result = resolveSessionForFolder(
       existing,
       { id: "existing-uuid", jsonlPath: "/some/path" },
-      true,
+      "existing-uuid",
       false,
       () => "should-not-be-called",
     );
@@ -1474,7 +1488,7 @@ describe("resolveSessionForFolder reuse", () => {
     const result = resolveSessionForFolder(
       existing,
       { id: "existing-uuid", jsonlPath: "/some/path" },
-      false,
+      null,
       false,
       () => { uuidCalled = true; return "new-uuid"; },
     );

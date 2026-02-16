@@ -6,7 +6,7 @@ import { readFile, mkdir, rm } from "node:fs/promises";
 import { readFileSync, readdirSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { scanFolders, getLatestSession, getLatestHandoff, getSessionJSONLPath, hasExitMarker, writeExitMarker, FolderInfo, SCAN_ROOT } from "./folders.js";
 import { generateFolderName } from "./fun-names.js";
 import { getVapidPublicKey, addSubscription, removeSubscription, pushTurnComplete, pushAskUser } from "./push.js";
@@ -983,10 +983,13 @@ async function handleLobbyMessage(
       const resolution = resolveSessionForFolder(
         existingSession ? { id: existingSession.id, resumable: existingSession.resumable } : null,
         latestSession,
-        !!handoff,
+        handoff?.sessionId ?? null,
         exitMarker,
         randomUUID,
       );
+
+      const action = resolution.isReconnect ? "reconnect" : resolution.resumable ? "resume" : "fresh";
+      console.log(`[bridge] session resolution for ${basename(folderPath)}: ${action} (id=${resolution.sessionId.slice(0, 8)}, handoff=${handoff?.sessionId?.slice(0, 8) ?? "none"}, latestSession=${latestSession?.id.slice(0, 8) ?? "none"}, exit=${exitMarker})`);
 
       let session: Session;
       if (resolution.isReconnect) {

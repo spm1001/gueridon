@@ -278,11 +278,9 @@ export async function scanFolders(
         lastActive: session!.lastActive.toISOString(),
         handoffPurpose: handoff?.purpose ?? null,
       });
-    } else if (handoff) {
-      // Intentionally closed — handoff exists regardless of leftover session files.
-      // Still provide sessionId for --resume if user wants to reopen.
-      // lastActive: prefer session mtime, fall back to handoff mtime (covers
-      // repos where handoff was written from a different folder's session).
+    } else if (handoff && (!session || handoff.sessionId === session.id)) {
+      // Handoff matches latest session (or no session) → intentionally closed.
+      // Stale handoff from session N doesn't block session N+1 from showing as paused.
       folders.push({
         name,
         path: fullPath,

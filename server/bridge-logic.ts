@@ -103,20 +103,20 @@ export interface SessionResolution {
  * Decide how to connect a folder: reconnect to existing bridge session,
  * resume a paused CC session, or start fresh.
  *
- * This encodes the critical decision tree:
+ * Decision tree:
  * - Existing bridge session for folder → reconnect (multi-WS)
- * - CC session files + no handoff → resume (was paused/abandoned)
- * - Handoff exists → fresh session (was intentionally closed)
- * - Neither → fresh session
+ * - CC session files + .exit marker for THAT session → fresh
+ * - CC session files + handoff for THAT session → fresh (intentionally closed)
+ * - CC session files (no matching close signal) → resume
+ * - No session files → fresh
  *
- * The resume bug from session 8: connectFolder was resuming closed sessions
- * because it only checked for session files, not handoffs. The `hasHandoff`
- * parameter fixes this.
+ * Key: handoff/exit only block resume when they match the latest session.
+ * A stale handoff from session N must not prevent resuming session N+1.
  */
 export function resolveSessionForFolder(
   existingBridgeSession: { id: string; resumable: boolean } | null,
   latestSessionFile: { id: string } | null,
-  hasHandoff: boolean,
+  handoffSessionId: string | null,
   hasExit: boolean,
   generateId: () => string,
 ): SessionResolution {
@@ -129,19 +129,37 @@ export function resolveSessionForFolder(
     };
   }
 
-  // Paused: CC session exists but wasn't deliberately closed → resume
-  if (latestSessionFile && !hasHandoff && !hasExit) {
+  // No session files on disk → fresh
+  if (!latestSessionFile) {
     return {
-      sessionId: latestSessionFile.id,
-      resumable: true,
+      sessionId: generateId(),
+      resumable: false,
       isReconnect: false,
     };
   }
 
-  // Closed (handoff or .exit marker) or fresh (no session files) → new session
+  // .exit marker for this session → was deliberately closed
+  if (hasExit) {
+    return {
+      sessionId: generateId(),
+      resumable: false,
+      isReconnect: false,
+    };
+  }
+
+  // Handoff matches this session → was intentionally closed via /close
+  if (handoffSessionId === latestSessionFile.id) {
+    return {
+      sessionId: generateId(),
+      resumable: false,
+      isReconnect: false,
+    };
+  }
+
+  // Session exists, no matching close signal → resume
   return {
-    sessionId: generateId(),
-    resumable: false,
+    sessionId: latestSessionFile.id,
+    resumable: true,
     isReconnect: false,
   };
 }
