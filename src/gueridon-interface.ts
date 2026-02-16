@@ -295,11 +295,6 @@ export class GueridonInterface extends LitElement {
     }
   }
 
-  notifyCompaction(fromTokens: number, toTokens: number) {
-    const fromK = Math.round(fromTokens / 1000);
-    const toK = Math.round(toTokens / 1000);
-    this.showToast(`Context compacted: ${fromK}k → ${toK}k`);
-  }
 
   /** Transient info notification — auto-dismisses after 4s */
   showToast(text: string) {

@@ -846,15 +846,15 @@ httpServer.on("error", (err: NodeJS.ErrnoException) => {
 /** Attach a WebSocket to a session, cancelling any idle check. */
 function attachWsToSession(ws: WebSocket, session: Session): void {
   cancelIdleCheck(session);
-  // Replay history BEFORE adding to clients — synchronous within one event-loop
-  // tick, so no readline callback can interleave live events with replay.
-  if (session.messageBuffer.length > 0) {
-    sendToClient(ws, { source: "bridge", type: "historyStart" });
-    for (const serialized of session.messageBuffer) {
-      if (ws.readyState === WebSocket.OPEN) ws.send(serialized);
-    }
-    sendToClient(ws, { source: "bridge", type: "historyEnd" });
+  // Always send historyStart/historyEnd — even for empty buffers. The client
+  // uses historyStart as a "new session boundary" signal to reset messages and
+  // context gauge. Without it, transparent reconnect to a fresh session leaves
+  // stale UI state from the previous session (gdn-zejeji).
+  sendToClient(ws, { source: "bridge", type: "historyStart" });
+  for (const serialized of session.messageBuffer) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(serialized);
   }
+  sendToClient(ws, { source: "bridge", type: "historyEnd" });
   session.clients.add(ws);
 }
 

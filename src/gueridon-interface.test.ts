@@ -527,19 +527,6 @@ describe("GueridonInterface", () => {
       expect(sendBtn.disabled).toBe(true);
     });
 
-    it("shows compaction toast via notifyCompaction", async () => {
-      el = await createElement();
-      el.notifyCompaction(150000, 80000);
-      // Toast is appended to document.body with position:fixed
-      const toast = [...document.body.children].find(
-        (child) =>
-          child instanceof HTMLElement && child.style.position === "fixed",
-      ) as HTMLElement;
-      expect(toast).toBeTruthy();
-      expect(toast.textContent).toContain("150k");
-      expect(toast.textContent).toContain("80k");
-    });
-
     it("folder button fires onFolderSelect callback", async () => {
       el = await createElement();
       const callback = vi.fn();

@@ -260,7 +260,8 @@ agent.onCwdChange = (cwd) => {
   currentFolder = pathToName(cwd);
   gi.setCwd(cwd);
 };
-agent.onCompaction = (from, to) => gi.notifyCompaction(from, to);
+// Compaction detection kept in agent (useful for future context injection — gdn-lalepa)
+// but no longer surfaced as a toast. The user doesn't need to know.
 
 // Request permission from user gesture (tap on send button).
 // After permission granted, subscribe to push notifications.
