@@ -145,6 +145,7 @@ export class ClaudeCodeAgent {
 
   // Context tracking (for fuel gauge)
   private _lastInputTokens = 0;
+  private _seenMessageIds = new Set<string>();
   private _contextWindow = 200_000; // default, updated from result.modelUsage
   private _skipNextCompactionCheck = false;
   private _cwd = "";
@@ -201,6 +202,7 @@ export class ClaudeCodeAgent {
     this.toolCallNames.clear();
     this.askUserToolCallIds.clear();
     this.suppressedStreamIndices.clear();
+    this._seenMessageIds.clear();
     this._lastInputTokens = 0;
     this._skipNextCompactionCheck = false;
     this._contextWindow = 200_000;
@@ -427,6 +429,11 @@ export class ClaudeCodeAgent {
   private handleAssistantComplete(event: CCEvent): void {
     const msg = event.message;
     if (!msg) return;
+
+    // Dedup: CC replays conversation on --resume stdout while bridge already
+    // replayed from JSONL. Skip messages we've already processed (gdn-vubegi).
+    if (msg.id && this._seenMessageIds.has(msg.id)) return;
+    if (msg.id) this._seenMessageIds.add(msg.id);
 
     // Detect AskUserQuestion tool calls — during live operation, fire callback,
     // track IDs, and filter them from content (overlay handles display).

@@ -71,8 +71,10 @@ function openFolderDialog(folders: FolderInfo[]) {
   folderDialog = FolderSelector.show(
     folders,
     (folder) => {
-      // User selected a folder
+      // User selected a folder — store immediately so reconnect targets the
+      // intended folder, not the previous one (gdn-padebo).
       connectingFromDialog = folder.path;
+      storeFolder(folder.path, folder.name);
       agent.reset();
       gi.setCwd(folder.name);
       transport.connectToFolder(folder.path);
@@ -123,7 +125,9 @@ const transport = new WSTransport({
     if (notifFolder) {
       // Clear the URL param so refresh doesn't re-trigger
       history.replaceState(null, "", "/");
-      gi.setCwd(pathToName(notifFolder));
+      const name = pathToName(notifFolder);
+      storeFolder(notifFolder, name);
+      gi.setCwd(name);
       transport.connectToFolder(notifFolder);
       return;
     }
@@ -302,8 +306,10 @@ navigator.serviceWorker?.addEventListener("message", (event) => {
     // If we're already in this folder, just focus (SW already did that).
     // Otherwise, connect to the folder from the notification.
     if (currentFolderPath !== folder) {
+      const name = pathToName(folder);
+      storeFolder(folder, name);
       agent.reset();
-      gi.setCwd(pathToName(folder));
+      gi.setCwd(name);
       transport.connectToFolder(folder);
     }
   }

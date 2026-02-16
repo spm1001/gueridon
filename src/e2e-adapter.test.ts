@@ -59,12 +59,13 @@ function messageStop() {
   return { type: "stream_event", event: { type: "message_stop" } };
 }
 
+let msgCounter = 0;
 function assistantComplete(content: any[], stopReason = "end_turn", usage = { input_tokens: 500, output_tokens: 50 }) {
   return {
     type: "assistant",
     message: {
       model: "claude-opus-4-6",
-      id: "msg_1",
+      id: `msg_${++msgCounter}`,
       role: "assistant",
       content,
       stop_reason: stopReason,
