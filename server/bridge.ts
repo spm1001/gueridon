@@ -209,6 +209,7 @@ interface SessionRecord {
   sessionId: string;
   folder: string;
   pid: number;
+  spawnedAt: number; // Date.now() — guards against PID recycling
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -221,7 +222,7 @@ function persistSessions(): void {
     const records: SessionRecord[] = [];
     for (const s of sessions.values()) {
       if (s.process?.pid) {
-        records.push({ sessionId: s.id, folder: s.folder, pid: s.process.pid });
+        records.push({ sessionId: s.id, folder: s.folder, pid: s.process.pid, spawnedAt: s.spawnedAt ?? Date.now() });
       }
     }
     try {
@@ -249,8 +250,14 @@ function reapOrphans(): void {
     return; // corrupt or empty file
   }
 
+  const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h — beyond this, PID may have recycled
   let reaped = 0;
   for (const rec of records) {
+    // Guard against PID recycling: skip records older than 24h
+    if (rec.spawnedAt && Date.now() - rec.spawnedAt > MAX_AGE_MS) {
+      console.log(`[bridge] skipping stale orphan record pid=${rec.pid} (spawned ${Math.round((Date.now() - rec.spawnedAt) / 3600000)}h ago)`);
+      continue;
+    }
     try {
       // Signal 0 = check if alive without killing
       process.kill(rec.pid, 0);
