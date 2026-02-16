@@ -12,76 +12,23 @@ Process-per-session with `--session-id <uuid>`. Resume via `--resume` after proc
 
 ## Deployment
 
-Runs on **kube** (Debian Linux on Tailscale). Single systemd service.
+Runs on **kube** (Debian Linux, Tailscale). Single systemd service.
 
 ```bash
-sudo systemctl restart gueridon    # Build + restart (ExecStartPre runs npm run build)
+sudo systemctl restart gueridon    # Build dist/ (ExecStartPre) then start bridge
 sudo systemctl status gueridon     # Check health
 journalctl -u gueridon -f          # Tail logs
 ```
 
-The service uses `KillMode=process` so restarting the bridge does NOT kill running CC child processes. They become orphaned but resumable — the next client connection picks them up via disk-based session resolution.
-
-HTTPS is terminated by `tailscale serve` — the bridge itself listens on HTTP :3001.
+- **`KillMode=process`** — bridge restart does NOT kill CC child processes. They become orphaned; the new bridge reaps them on startup (SIGTERM) and the next client connection resumes via `--resume`.
+- **`ExecStartPre=npm run build`** — every restart rebuilds `dist/`. Safe because Vite build is ~2s.
+- **HTTPS terminated by `tailscale serve`** — bridge listens on HTTP :3001.
+- **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
+- **Session persistence** — `~/.config/gueridon/sessions.json` tracks active CC PIDs so the bridge can reap orphans after restart.
 
 See `docs/deploy.md` for VAPID key setup, Tailscale plumbing, and first-time install.
 
-## Key Docs
-
-| Doc | Purpose |
-|-----|---------|
-| `docs/deploy.md` | **Deployment guide.** systemd service, Tailscale, VAPID keys, first-time setup. |
-| `docs/architecture-and-review.md` | Full architecture map + three-lens code review (2026-02-09). File map, element nesting, dep table, build pipeline, 23 findings ranked by severity. |
-| `docs/empirical-verification.md` | Verified JSONL schemas for CC 2.1.37. Every event type, edge case, abort mechanism. |
-| `docs/event-mapping.md` | CC events → pi-web-ui AgentEvents translation table. The adapter blueprint. |
-| `docs/bridge-protocol.md` | WebSocket protocol between browser and bridge. Message types, session lifecycle, reliability. |
-| `docs/decisions.md` | Architecture decisions with rationale. **Note:** the `--allowed-tools` migration (gdn-kugeto) is planned but not yet shipped — code still uses `--dangerously-skip-permissions`. |
-| `docs/kube-brain-mac-body.md` | Two-machine architecture: Kube runs CC, Mac is the viewport. |
-| `docs/lifecycle-map.md` | Behavioral lifecycle map — session states, transitions, edge cases. |
-
-## Fixed Bugs (from code review 2026-02-09)
-
-All critical findings from the initial review are resolved. See `docs/architecture-and-review.md` for the original analysis.
-
-1. **~~Agent state never resets on folder switch~~** (gdn-walaco) — `reset()` method added to ClaudeCodeAgent, called on folder switch
-2. **~~prompt() swallows null transport~~** (gdn-vosejo) — guard sets error + emits agent_end
-3. **~~Unknown CC events silently dropped~~** (gdn-pudaco) — default cases log unknown types
-4. **~~main.ts folder lifecycle~~** (gdn-jegosi) — folder-lifecycle.ts eliminated (gdn-picoki). Transport owns connection mechanics via `connectToFolder()`. Flash bug structurally prevented by callback split (`onFolderConnected` vs `onSessionId`).
-
-## Working Pattern: Write Analysis to Files
-
-When producing architecture maps, reviews, or other analysis: **write to file first, present summary in chat**. Context can lock without warning. In-context-only analysis evaporates. Files survive.
-
-## The Input Format (Critical)
-
-```json
-{"type":"user","message":{"role":"user","content":"..."}}
-```
-
-Other formats fail silently or with cryptic errors. See `docs/empirical-verification.md` for the wrong formats.
-
-## Required CLI Flags
-
-```bash
-claude -p --verbose \
-  --input-format stream-json \
-  --output-format stream-json \
-  --include-partial-messages \
-  --replay-user-messages \
-  --session-id <uuid> \
-  --dangerously-skip-permissions --allow-dangerously-skip-permissions
-```
-
-`--verbose` is mandatory for stream-json. Without it you get an unhelpful error.
-
-## Quick Verify
-
-```bash
-python3 scripts/hello-cc.py
-python3 scripts/hello-cc.py "What tools do you have?"
-```
-
-## Running
+## Running Locally
 
 ```bash
 # Production (single process — bridge serves static files + WS on :3001)
@@ -101,6 +48,70 @@ npm run test:mobile:stop   # Tear down test harness
 ```
 
 **BRIDGE_URL logic:** `import.meta.env.DEV` (Vite) selects between dev (`ws://hostname:3001`) and prod (`same-origin`). In prod, the browser's own origin is the bridge — no separate URL needed.
+
+**Build test isolation:** `build.test.ts` builds to a temp dir with explicit `NODE_ENV=production` so vitest's `import.meta.env.DEV=true` doesn't contaminate the real `dist/`.
+
+## Quick Verify
+
+```bash
+python3 scripts/hello-cc.py
+python3 scripts/hello-cc.py "What tools do you have?"
+```
+
+## CC Process Flags
+
+```bash
+claude -p --verbose \
+  --input-format stream-json \
+  --output-format stream-json \
+  --include-partial-messages \
+  --replay-user-messages \
+  --session-id <uuid> \
+  --dangerously-skip-permissions --allow-dangerously-skip-permissions
+```
+
+- `--verbose` is mandatory for stream-json mode. Without it you get an unhelpful error.
+- `--dangerously-skip-permissions` is still in use. The `--allowed-tools` migration (gdn-kugeto) is **planned but not shipped**. `docs/decisions.md` describes it as if done — it's aspirational.
+- `--append-system-prompt` coaches CC about AskUserQuestion error behavior on mobile.
+
+### The Input Format (Critical)
+
+```json
+{"type":"user","message":{"role":"user","content":"..."}}
+```
+
+Other formats fail silently or with cryptic errors. See `docs/empirical-verification.md` for the wrong formats.
+
+## Bridge Server
+
+`server/bridge.ts` — HTTP + WebSocket server. Serves static files from `dist/` and proxies WebSocket connections to CC processes. Full protocol in `docs/bridge-protocol.md`.
+
+Key design decisions:
+- **Single process:** HTTP static serving + WS on one port (:3001).
+- **Static files from `dist/`:** SPA fallback (extensionless paths → `index.html`), path traversal guard, MIME types, cache headers for Vite hashed assets.
+- **Lazy spawn:** CC process starts on first prompt, not on WS connect.
+- **`source` discriminator:** All server messages carry `source: "bridge"` or `source: "cc"`.
+- **`promptReceived` ack:** Confirms prompt hit CC stdin. "sending → waiting" UI transition.
+- **Ping/pong:** 30s interval, 30s timeout (generous for DERP relay on cellular).
+- **SIGTERM → SIGKILL:** 3s escalation on all process kills.
+- **Early exit detection:** CC dying within 2s of spawn = flag/version problem, stderr surfaced to client.
+- **Orphan reaping:** On startup, reads `sessions.json`, SIGTERMs any live CC processes from the previous bridge instance.
+
+### Session Model
+
+- One `claude -p` process per browser session (spawned lazily on first prompt)
+- ~8s cold start (hooks + init + first API call), fast subsequent turns
+- Idle timeout (5min) → kill process → `--resume` on reconnect
+- Multi-turn works over persistent stdin (verified)
+- Mid-stream messages queue (no native steering)
+- Session resolution: reconnect (in-memory) > resume (disk, handoff doesn't match) > fresh
+
+### Abort
+
+- **Soft (default):** Stop rendering on client, let backend finish
+- **Hard:** Kill process → `--resume` for next turn (8s penalty)
+- SIGINT and control messages both kill the process dead (bridge uses SIGTERM→SIGKILL escalation)
+- Stdin close lets response finish then exits cleanly
 
 ## Dependencies
 
@@ -171,39 +182,6 @@ gdn-patati (prototype, features)
 
 `summarizeToolInput()` in gdn.ts knows how to display each CC tool's arguments (Bash→command, Read→file_path, Grep→pattern, etc.). This is domain knowledge that survives a rendering rewrite — extract it when building the TUI.
 
-## Bridge Server
-
-`server/bridge.ts` — HTTP + WebSocket server. Serves static files from `dist/` and proxies WebSocket connections to CC processes. Full protocol in `docs/bridge-protocol.md`.
-
-```bash
-npx tsx scripts/test-bridge.ts  # Integration tests (needs bridge running)
-```
-
-Key design decisions:
-- **Single process:** HTTP static serving + WS on one port (:3001). Deployable as-is.
-- **Static files from `dist/`:** SPA fallback (extensionless paths → `index.html`), path traversal guard, MIME types, cache headers for Vite hashed assets.
-- **Lazy spawn:** CC process starts on first prompt, not on WS connect. No wasted processes.
-- **`source` discriminator:** All server messages carry `source: "bridge"` or `source: "cc"` — structural, not string-convention.
-- **`promptReceived` ack:** Confirms prompt hit CC stdin. Hook point for "sending → waiting" UI transition.
-- **Ping/pong:** 30s interval, 30s timeout (generous for DERP relay on cellular). Catches silently-dead mobile connections.
-- **SIGTERM → SIGKILL:** 3s escalation on all process kills.
-- **Early exit detection:** CC dying within 2s of spawn = flag/version problem, stderr surfaced to client.
-
-## Session Model
-
-- One `claude -p` process per browser session (spawned lazily on first prompt)
-- ~8s cold start (hooks + init + first API call), fast subsequent turns
-- Idle timeout (5min) → kill process → `--resume` on reconnect
-- Multi-turn works over persistent stdin (verified)
-- Mid-stream messages queue (no native steering)
-
-## Abort
-
-- **Soft (default):** Stop rendering on client, let backend finish
-- **Hard:** Kill process → `--resume` for next turn (8s penalty)
-- SIGINT and control messages both kill the process dead (bridge uses SIGTERM→SIGKILL escalation)
-- Stdin close lets response finish then exits cleanly
-
 ## Notifications
 
 - **Service worker** (`public/sw.js`): push + notificationclick handlers, skipWaiting/claim for instant activation. No fetch/cache handler yet (see gdn-gabeda).
@@ -212,3 +190,20 @@ Key design decisions:
 - **Title badge**: document.title shows ✓/⏳/❓ prefix per Claude state. Favicon SVG gets colored dot.
 - **Replay guard**: notifications and title badges suppressed during session replay.
 - **Icons**: SVG icons in `public/` (icon-192.svg, icon-512.svg). iOS apple-touch-icon is SVG (may need PNG for better home screen icon quality).
+
+## Key Docs
+
+| Doc | Purpose |
+|-----|---------|
+| `docs/deploy.md` | **Deployment guide.** systemd service, Tailscale, VAPID keys, first-time setup. |
+| `docs/architecture-and-review.md` | Full architecture map + three-lens code review (2026-02-09). |
+| `docs/empirical-verification.md` | Verified JSONL schemas for CC 2.1.37. Every event type, edge case, abort mechanism. |
+| `docs/event-mapping.md` | CC events → pi-web-ui AgentEvents translation table. The adapter blueprint. |
+| `docs/bridge-protocol.md` | WebSocket protocol between browser and bridge. Message types, session lifecycle, reliability. |
+| `docs/decisions.md` | Architecture decisions with rationale. Permissions section is aspirational (see gdn-kugeto). |
+| `docs/kube-brain-mac-body.md` | Two-machine architecture: Kube runs CC, Mac is the viewport. |
+| `docs/lifecycle-map.md` | Behavioral lifecycle map — session states, transitions, edge cases. |
+
+## Working Pattern: Write Analysis to Files
+
+When producing architecture maps, reviews, or other analysis: **write to file first, present summary in chat**. Context can lock without warning. In-context-only analysis evaporates. Files survive.
