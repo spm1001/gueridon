@@ -14,18 +14,11 @@ The bridge is a WebSocket-to-stdio proxy with session management. It spawns and 
 
 ```
 ws://host:3001                    # Lobby mode (folder chooser, no session)
-ws://host:3001?session=<uuid>     # Direct session (legacy, backwards compat)
 ```
 
 Port configurable via `BRIDGE_PORT` env var.
 
-### Lobby Mode
-
-Connecting without `?session=` enters **lobby mode** — no CC process, no session. The browser can list folders and pick one before committing to a session. This is the path used by the folder chooser UI.
-
-### Direct Session Mode
-
-Connecting with `?session=<uuid>` skips the lobby and immediately creates/reconnects a session. This is the legacy path, preserved for backwards compatibility.
+All connections enter **lobby mode** — no CC process, no session. The browser lists folders, picks one via `connectFolder`, then transitions to session mode. The direct `?session=` path was removed (gdn-nicaju).
 
 ## Message Discrimination
 
@@ -86,7 +79,7 @@ Kill the CC process (SIGTERM, escalates to SIGKILL after 3s).
 
 ### lobbyConnected
 
-Sent on WebSocket connection without `?session=`. The browser is in lobby mode — can send `listFolders` and `connectFolder`.
+Sent on WebSocket connection. The browser is in lobby mode — can send `listFolders` and `connectFolder`.
 
 ```json
 { "source": "bridge", "type": "lobbyConnected" }
@@ -117,7 +110,7 @@ States: `active` (CC running), `paused` (session files exist), `closed` (handoff
 
 ### connected
 
-Sent after `connectFolder` or on direct `?session=` connection. No CC process is spawned yet (lazy spawn).
+Sent after `connectFolder`. No CC process is spawned yet (lazy spawn).
 
 ```json
 { "source": "bridge", "type": "connected", "sessionId": "uuid", "resumed": false }
@@ -169,23 +162,16 @@ See `docs/empirical-verification.md` for all CC event types and their schemas.
 
 ## Session Lifecycle
 
-### Lobby → Session Flow (folder chooser)
+### Connection Flow
 
 ```
-Browser connects (no ?session=)  → bridge:lobbyConnected
+Browser connects                 → bridge:lobbyConnected
 Browser sends listFolders        → bridge:folderList (enriched folder data)
 Browser sends connectFolder      → bridge:connected (session created, no CC yet)
 Browser sends prompt             → CC spawned (lazy) → bridge:promptReceived
 ```
 
-### Direct Session Flow (legacy)
-
-```
-Browser connects (?session=uuid) → bridge:connected (no CC process yet)
-Browser sends prompt             → CC spawned (lazy) → bridge:promptReceived
-```
-
-### Common (both flows)
+### Session Lifecycle
 
 ```
 CC streams events         → forwarded as cc:event messages
@@ -205,7 +191,7 @@ Second tab connects       → added to same session's client set
 
 ### Ping/pong (mobile connection health)
 
-Server pings every 30s. If no pong within 10s, connection is terminated. This catches silently-dead mobile connections that would otherwise leave orphaned CC processes.
+Server pings every 30s. If no pong within 30s (generous for DERP relay on cellular), connection is terminated. This catches silently-dead mobile connections that would otherwise leave orphaned CC processes.
 
 Browsers respond to WebSocket pings automatically — no client-side code needed.
 

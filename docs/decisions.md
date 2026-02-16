@@ -18,7 +18,7 @@ The bridge spawns `claude -p` with `cwd` set to the chosen directory.
 
 ## Permissions
 
-**Migrate to `--allowed-tools` whitelist** (gdn-tedaje). Previously used `--dangerously-skip-permissions` — this worked but bypasses all permission gates indiscriminately.
+**Planned: migrate to `--allowed-tools` whitelist** (gdn-kugeto, originally gdn-tedaje). Currently still using `--dangerously-skip-permissions` — this works but bypasses all permission gates indiscriminately. The migration below is the intended direction, not the current state.
 
 The `--allowed-tools` pattern (proven in persistent-assistant) gives us:
 - **Whitelisted tools run without prompts** — same UX as `--dangerously-skip-permissions` for safe tools
@@ -67,7 +67,7 @@ claude -p \
   --permission-mode default
 ```
 
-Note: `--dangerously-skip-permissions` replaced by `--allowed-tools` whitelist (gdn-tedaje). Bash intentionally excluded — requires user approval via mobile UI.
+Note: `--dangerously-skip-permissions` will be replaced by `--allowed-tools` whitelist (gdn-kugeto). Bash intentionally excluded — will require user approval via mobile UI. **Not yet shipped — code still uses `--dangerously-skip-permissions`.**
 
 Optional per-session:
 - `--append-system-prompt "User is on mobile device"` — mobile context
@@ -120,7 +120,7 @@ Informed by persistent-assistant's approach and empirical testing of `--allowed-
 
 **Previous decision:** Option B (observe and intervene with `--dangerously-skip-permissions`).
 
-**Revised decision:** Hybrid — `--allowed-tools` whitelist + observe-and-intervene for whitelisted tools + approval gate for non-whitelisted.
+**Revised decision (planned, not yet shipped — see gdn-kugeto):** Hybrid — `--allowed-tools` whitelist + observe-and-intervene for whitelisted tools + approval gate for non-whitelisted.
 
 The key insight: `--allowed-tools` is **additive, not restrictive**. All standard tools remain visible to the model; the flag controls which are auto-approved. Non-whitelisted tools trigger `permission_denials` in the result event with full tool input — the bridge can surface these for user approval without re-running.
 

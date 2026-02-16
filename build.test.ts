@@ -1,10 +1,23 @@
 import { describe, it } from "vitest";
 import { execSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("production build", () => {
   it("npm run build succeeds", () => {
-    // Catches transitive dependency failures (e.g. @smithy from session 3)
-    // that only surface during Rollup bundling, not during dev server.
-    execSync("npm run build", { stdio: "pipe", timeout: 60_000 });
+    // Build to a temp directory so vitest's environment doesn't contaminate
+    // the real dist/ (vitest sets import.meta.env.DEV=true, which Vite
+    // inherits, producing a dev-mode bundle with hardcoded :3001 WS URL).
+    const outDir = mkdtempSync(join(tmpdir(), "gdn-build-test-"));
+    try {
+      execSync(`npx vite build --outDir ${outDir}`, {
+        stdio: "pipe",
+        timeout: 60_000,
+        env: { ...process.env, NODE_ENV: "production" },
+      });
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
   }, 60_000);
 });

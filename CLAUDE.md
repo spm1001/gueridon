@@ -10,15 +10,34 @@ Mobile browser → WebSocket → Node.js bridge → claude -p (stream-json) → 
 
 Process-per-session with `--session-id <uuid>`. Resume via `--resume` after process kill.
 
+## Deployment
+
+Runs on **kube** (Debian Linux on Tailscale). Single systemd service.
+
+```bash
+sudo systemctl restart gueridon    # Build + restart (ExecStartPre runs npm run build)
+sudo systemctl status gueridon     # Check health
+journalctl -u gueridon -f          # Tail logs
+```
+
+The service uses `KillMode=process` so restarting the bridge does NOT kill running CC child processes. They become orphaned but resumable — the next client connection picks them up via disk-based session resolution.
+
+HTTPS is terminated by `tailscale serve` — the bridge itself listens on HTTP :3001.
+
+See `docs/deploy.md` for VAPID key setup, Tailscale plumbing, and first-time install.
+
 ## Key Docs
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/architecture-and-review.md` | **Full architecture map + three-lens code review (2026-02-09).** File map, element nesting, dep table, build pipeline, 23 findings ranked by severity. |
+| `docs/deploy.md` | **Deployment guide.** systemd service, Tailscale, VAPID keys, first-time setup. |
+| `docs/architecture-and-review.md` | Full architecture map + three-lens code review (2026-02-09). File map, element nesting, dep table, build pipeline, 23 findings ranked by severity. |
 | `docs/empirical-verification.md` | Verified JSONL schemas for CC 2.1.37. Every event type, edge case, abort mechanism. |
 | `docs/event-mapping.md` | CC events → pi-web-ui AgentEvents translation table. The adapter blueprint. |
 | `docs/bridge-protocol.md` | WebSocket protocol between browser and bridge. Message types, session lifecycle, reliability. |
-| `docs/decisions.md` | Architecture decisions with rationale. Permissions, session model, UI choices. |
+| `docs/decisions.md` | Architecture decisions with rationale. **Note:** the `--allowed-tools` migration (gdn-kugeto) is planned but not yet shipped — code still uses `--dangerously-skip-permissions`. |
+| `docs/kube-brain-mac-body.md` | Two-machine architecture: Kube runs CC, Mac is the viewport. |
+| `docs/lifecycle-map.md` | Behavioral lifecycle map — session states, transitions, edge cases. |
 
 ## Fixed Bugs (from code review 2026-02-09)
 
@@ -74,7 +93,7 @@ npm run dev                # Vite dev server with HMR
 npm run bridge             # Bridge in separate terminal
 
 # Testing
-npm test                   # Run all tests (411 tests, ~1.5s)
+npm test                   # Run all tests (400+ tests, ~3s)
 npm run test:watch         # Watch mode for development
 npm run test:mobile        # Launch mobile test harness (Chrome Debug + dev + bridge + CDP viewport)
 npm run test:mobile --prod # Same but using production build on :3001
@@ -92,7 +111,7 @@ npm run test:mobile:stop   # Tear down test harness
 | `@mariozechner/mini-lit` | Design system: MarkdownBlock, CodeBlock, CopyButton, DialogBase, `icon()`, CSS theme | npm (value + types) |
 | `@mariozechner/pi-agent-core` | AgentEvent, AgentMessage, AgentState, AgentTool | npm (types only) |
 | `@mariozechner/pi-ai` | Model, Usage | npm (types only — no `getModel` value import) |
-| `lit`, `lucide` | Lit framework, icon library | npm |
+| `lit` | Lit framework | npm |
 
 **Bundler:** Vite with `@tailwindcss/vite`
 
@@ -166,7 +185,7 @@ Key design decisions:
 - **Lazy spawn:** CC process starts on first prompt, not on WS connect. No wasted processes.
 - **`source` discriminator:** All server messages carry `source: "bridge"` or `source: "cc"` — structural, not string-convention.
 - **`promptReceived` ack:** Confirms prompt hit CC stdin. Hook point for "sending → waiting" UI transition.
-- **Ping/pong:** 30s interval, 10s timeout. Catches silently-dead mobile connections.
+- **Ping/pong:** 30s interval, 30s timeout (generous for DERP relay on cellular). Catches silently-dead mobile connections.
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
 - **Early exit detection:** CC dying within 2s of spawn = flag/version problem, stderr surfaced to client.
 
