@@ -2,8 +2,9 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn, ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
 import { createInterface } from "readline";
-import { readFile, mkdir, rm } from "node:fs/promises";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
+import { readFileSync, readdirSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { basename, join } from "node:path";
@@ -197,6 +198,83 @@ interface Session {
 
 const sessions = new Map<string, Session>();
 
+// --- Session persistence (survives bridge restart) ---
+// Persists session→folder+PID mapping so the bridge can reap orphaned CC
+// processes on startup. Without this, a bridge restart leaves CC processes
+// running and the new bridge might spawn duplicates for the same session.
+
+const SESSION_FILE = join(homedir(), ".config", "gueridon", "sessions.json");
+
+interface SessionRecord {
+  sessionId: string;
+  folder: string;
+  pid: number;
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Debounced write of active sessions to disk. */
+function persistSessions(): void {
+  if (persistTimer) return; // already scheduled
+  persistTimer = setTimeout(async () => {
+    persistTimer = null;
+    const records: SessionRecord[] = [];
+    for (const s of sessions.values()) {
+      if (s.process?.pid) {
+        records.push({ sessionId: s.id, folder: s.folder, pid: s.process.pid });
+      }
+    }
+    try {
+      mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+      await writeFile(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
+    } catch (err) {
+      console.error("[bridge] failed to persist sessions:", err);
+    }
+  }, 500);
+}
+
+/**
+ * Reap orphaned CC processes from a previous bridge instance.
+ * Called once at startup, before the server starts accepting connections.
+ * Sends SIGTERM to any CC processes we previously spawned that are still alive.
+ * They'll flush their state; the next connectFolder will --resume cleanly.
+ */
+function reapOrphans(): void {
+  if (!existsSync(SESSION_FILE)) return;
+
+  let records: SessionRecord[];
+  try {
+    records = JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
+  } catch {
+    return; // corrupt or empty file
+  }
+
+  let reaped = 0;
+  for (const rec of records) {
+    try {
+      // Signal 0 = check if alive without killing
+      process.kill(rec.pid, 0);
+      // Still alive — send SIGTERM so it exits cleanly
+      console.log(
+        `[bridge] reaping orphan CC pid=${rec.pid} session=${rec.sessionId.slice(0, 8)} folder=${basename(rec.folder)}`
+      );
+      process.kill(rec.pid, "SIGTERM");
+      reaped++;
+    } catch {
+      // Process already dead — normal after a crash
+    }
+  }
+
+  // Clean up the file — we've handled all orphans
+  try {
+    unlinkSync(SESSION_FILE);
+  } catch { /* ignore */ }
+
+  if (reaped > 0) {
+    console.log(`[bridge] reaped ${reaped} orphaned CC process(es)`);
+  }
+}
+
 // --- Per-connection state ---
 // Ping/pong is a connection concern (WS health), not a session concern (process lifecycle).
 
@@ -289,6 +367,7 @@ function destroySession(session: Session): void {
     killWithEscalation(session.process, session.id);
   }
   sessions.delete(session.id);
+  persistSessions();
 }
 
 function sendToClient(ws: WebSocket | null, msg: ServerMessage): void {
@@ -575,6 +654,7 @@ function wireProcessToSession(session: Session): void {
     session.process = null;
     session.spawnedAt = null;
     session.turnInProgress = false;
+    persistSessions();
     // Discard queued prompts — CC is dead, context is gone.
     // User will see the processExit banner and can re-send.
     if (session.promptQueue.length > 0) {
@@ -594,6 +674,7 @@ function wireProcessToSession(session: Session): void {
     session.spawnedAt = null;
     session.turnInProgress = false;
     session.promptQueue = [];
+    persistSessions();
   });
 }
 
@@ -604,6 +685,7 @@ function ensureProcess(session: Session, resume: boolean): boolean {
   try {
     session.process = spawnCC(session.id, resume, session.folder);
     wireProcessToSession(session);
+    persistSessions();
     return true;
   } catch (err) {
     console.error(
@@ -732,6 +814,8 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse) {
 }
 
 // --- HTTP + WebSocket server ---
+
+reapOrphans();
 
 const httpServer = createServer(serveStatic);
 const wss = new WebSocketServer({ server: httpServer });
