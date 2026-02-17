@@ -676,9 +676,9 @@ export class GueridonInterface extends LitElement {
         ${this._errorText
           ? html`<div class="gdn-error-banner fixed left-0 right-0 z-30
                              flex items-center justify-center px-4"
-                      style="bottom: calc(4.5rem + var(--kb-offset, 0px)); padding-bottom: env(safe-area-inset-bottom, 0)">
+                      style="bottom: calc(6rem + var(--kb-offset, 0px)); padding-bottom: env(safe-area-inset-bottom, 0)">
               <div class="max-w-3xl w-full flex items-center gap-2 px-3 py-2
-                          rounded-xl bg-red-500/10 border border-red-500/30
+                          rounded-xl bg-red-500/15 border border-red-500/30
                           text-sm text-red-700 dark:text-red-300">
                 <span class="flex-1">${this._errorText}</span>
                 ${this._errorAction
@@ -690,9 +690,9 @@ export class GueridonInterface extends LitElement {
                     >${this._errorAction}</button>`
                   : ""}
                 <button
-                  class="shrink-0 w-5 h-5 flex items-center justify-center
+                  class="shrink-0 w-8 h-8 flex items-center justify-center
                          rounded-full text-red-500/60 hover:text-red-500
-                         transition-colors text-xs"
+                         transition-colors text-base"
                   @click=${() => this.dismissError()}
                   title="Dismiss"
                 >&times;</button>

@@ -67,6 +67,11 @@ body {
 .markdown-content h2 { @apply mt-3 mb-1; }
 .markdown-content h3 { @apply mt-2 mb-1; }
 
+/* Tables: allow horizontal scroll on mobile instead of clipping */
+.markdown-content table {
+  @apply block overflow-x-auto;
+}
+
 /* Prevent vertical scroll capture on code/console blocks.
    Horizontal scroll (long lines) is fine — it doesn't intercept page scroll. */
 code-block pre,
