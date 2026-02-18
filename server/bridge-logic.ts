@@ -550,6 +550,38 @@ export function extractDeltaInfo(event: Record<string, unknown>): DeltaInfo | nu
   return { key: `${index}:${delta.type}`, index, deltaType: delta.type, field, payload };
 }
 
+// --- Local command recovery ---
+
+/** Max lines from end of JSONL to search for local command output. */
+export const LOCAL_CMD_TAIL_LINES = 5;
+
+/**
+ * Extract local command output from JSONL content.
+ *
+ * Searches the last LOCAL_CMD_TAIL_LINES lines for a user message containing
+ * <local-command-stdout>. Returns the serialized bridge event, or null.
+ *
+ * Pure function — no IO. Caller reads the file and broadcasts the result.
+ */
+export function extractLocalCommandOutput(jsonlContent: string): string | null {
+  const lines = jsonlContent.trimEnd().split("\n");
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - LOCAL_CMD_TAIL_LINES); i--) {
+    try {
+      const parsed = JSON.parse(lines[i]);
+      if (parsed.type !== "user") continue;
+      const mc = parsed.message?.content;
+      if (typeof mc !== "string" || !mc.includes("<local-command-stdout>")) continue;
+      return JSON.stringify({
+        source: "cc",
+        event: { type: "user", message: parsed.message },
+      });
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 /** Accumulated delta state for one content block index + delta type. */
 export interface PendingDelta {
   index: number;

@@ -22,6 +22,8 @@ import {
   buildMergedDelta,
   isUserTextEcho,
   isExitCommand,
+  extractLocalCommandOutput,
+  LOCAL_CMD_TAIL_LINES,
   CONFLATION_INTERVAL_MS,
   MESSAGE_BUFFER_CAP,
   BACKPRESSURE_THRESHOLD,
@@ -1494,5 +1496,146 @@ describe("resolveSessionForFolder reuse", () => {
     );
     expect(result.isReconnect).toBe(true);
     expect(uuidCalled).toBe(false);
+  });
+});
+
+// --- extractLocalCommandOutput ---
+// Recovery function for local commands (/context, /cost, /compact) that produce
+// no stdout in CC pipe mode. The output IS in the session JSONL — this function
+// finds it in the tail.
+
+describe("extractLocalCommandOutput", () => {
+  /** Helper: make a JSONL user line with string content. */
+  function userLine(content: string): string {
+    return JSON.stringify({
+      type: "user",
+      message: { role: "user", content },
+    });
+  }
+
+  /** Helper: make a JSONL assistant line. */
+  function assistantLine(text: string): string {
+    return JSON.stringify({
+      type: "assistant",
+      message: { id: "msg_1", role: "assistant", content: [{ type: "text", text }] },
+    });
+  }
+
+  it("recovers local-command-stdout from last line", () => {
+    const content = [
+      userLine("/context"),
+      userLine("<local-command-stdout>Tokens: 73.3k / 200k (37%)</local-command-stdout>"),
+    ].join("\n");
+
+    const result = extractLocalCommandOutput(content);
+    expect(result).not.toBeNull();
+
+    const parsed = JSON.parse(result!);
+    expect(parsed.source).toBe("cc");
+    expect(parsed.event.type).toBe("user");
+    expect(parsed.event.message.content).toContain("<local-command-stdout>");
+    expect(parsed.event.message.content).toContain("73.3k");
+  });
+
+  it("recovers when stdout is within last 5 lines but not the last", () => {
+    const content = [
+      userLine("<local-command-stdout>Cost: $0.42</local-command-stdout>"),
+      assistantLine("some response"),
+      userLine("follow up question"),
+    ].join("\n");
+
+    const result = extractLocalCommandOutput(content);
+    expect(result).not.toBeNull();
+
+    const parsed = JSON.parse(result!);
+    expect(parsed.event.message.content).toContain("$0.42");
+  });
+
+  it("returns null when no local-command-stdout in tail", () => {
+    const content = [
+      userLine("hello"),
+      assistantLine("world"),
+      userLine("how are you"),
+    ].join("\n");
+
+    expect(extractLocalCommandOutput(content)).toBeNull();
+  });
+
+  it("returns null for empty string", () => {
+    expect(extractLocalCommandOutput("")).toBeNull();
+  });
+
+  it("returns null for whitespace-only content", () => {
+    expect(extractLocalCommandOutput("  \n  \n  ")).toBeNull();
+  });
+
+  it("ignores local-command-stdout beyond the tail window", () => {
+    // Put stdout at position 0, then pad with more than LOCAL_CMD_TAIL_LINES lines
+    const lines = [
+      userLine("<local-command-stdout>old output</local-command-stdout>"),
+    ];
+    for (let i = 0; i < LOCAL_CMD_TAIL_LINES + 1; i++) {
+      lines.push(userLine(`message ${i}`));
+    }
+    const content = lines.join("\n");
+
+    expect(extractLocalCommandOutput(content)).toBeNull();
+  });
+
+  it("skips non-user entries when searching", () => {
+    const content = [
+      assistantLine("thinking..."),
+      JSON.stringify({ type: "system", subtype: "init", cwd: "/test" }),
+      userLine("<local-command-stdout>Model: opus-4-6</local-command-stdout>"),
+    ].join("\n");
+
+    const result = extractLocalCommandOutput(content);
+    expect(result).not.toBeNull();
+    const parsed = JSON.parse(result!);
+    expect(parsed.event.message.content).toContain("opus-4-6");
+  });
+
+  it("skips corrupted JSON lines without throwing", () => {
+    const content = [
+      "this is not valid json",
+      "{broken",
+      userLine("<local-command-stdout>recovered despite corruption</local-command-stdout>"),
+    ].join("\n");
+
+    const result = extractLocalCommandOutput(content);
+    expect(result).not.toBeNull();
+    const parsed = JSON.parse(result!);
+    expect(parsed.event.message.content).toContain("recovered despite corruption");
+  });
+
+  it("ignores user messages without local-command-stdout", () => {
+    const content = [
+      userLine("normal message"),
+      userLine("<command-name>/context</command-name>"),
+      userLine("<local-command-caveat>Local commands may not work</local-command-caveat>"),
+    ].join("\n");
+
+    expect(extractLocalCommandOutput(content)).toBeNull();
+  });
+
+  it("returns the LAST match when multiple stdout entries exist in tail", () => {
+    // Searches backwards, so returns the last one found
+    const content = [
+      userLine("<local-command-stdout>first: context</local-command-stdout>"),
+      userLine("<local-command-stdout>second: cost</local-command-stdout>"),
+    ].join("\n");
+
+    const result = extractLocalCommandOutput(content);
+    expect(result).not.toBeNull();
+    const parsed = JSON.parse(result!);
+    // Walking backwards → finds "second" first
+    expect(parsed.event.message.content).toContain("second: cost");
+  });
+
+  it("handles JSONL with trailing newlines", () => {
+    const content = userLine("<local-command-stdout>output</local-command-stdout>") + "\n\n\n";
+
+    const result = extractLocalCommandOutput(content);
+    expect(result).not.toBeNull();
   });
 });

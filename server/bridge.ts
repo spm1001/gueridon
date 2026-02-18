@@ -33,6 +33,7 @@ import {
   buildMergedDelta,
   isUserTextEcho,
   isExitCommand,
+  extractLocalCommandOutput,
   type IdleSessionState,
   type PendingDelta,
 } from "./bridge-logic.js";
@@ -554,27 +555,13 @@ async function recoverLocalCommandOutput(session: Session): Promise<void> {
   try {
     const jsonlPath = getSessionJSONLPath(session.folder, session.id);
     const content = await readFile(jsonlPath, "utf-8");
-    // Read from the end — local command output is the last few lines
-    const lines = content.trimEnd().split("\n");
-    // Walk backwards to find <local-command-stdout> (within last 5 lines)
-    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 5); i--) {
-      try {
-        const parsed = JSON.parse(lines[i]);
-        if (parsed.type !== "user") continue;
-        const mc = parsed.message?.content;
-        if (typeof mc !== "string" || !mc.includes("<local-command-stdout>")) continue;
-        // Found it — broadcast as a CC user event (same format as JSONL replay)
-        const serialized = JSON.stringify({
-          source: "cc",
-          event: { type: "user", message: parsed.message },
-        });
-        console.log(`[bridge] recovered local command output (${mc.length} chars) session=${session.id}`);
-        broadcastSerialized(session, serialized, false);
-        pushToBuffer(session, serialized);
-        return;
-      } catch {
-        continue;
-      }
+    const serialized = extractLocalCommandOutput(content);
+    if (serialized) {
+      const parsed = JSON.parse(serialized);
+      const charCount = parsed.event?.message?.content?.length || 0;
+      console.log(`[bridge] recovered local command output (${charCount} chars) session=${session.id}`);
+      broadcastSerialized(session, serialized, false);
+      pushToBuffer(session, serialized);
     }
   } catch {
     // JSONL not found or unreadable — nothing to recover
