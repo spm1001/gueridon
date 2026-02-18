@@ -18,6 +18,7 @@ export interface FolderInfo {
   sessionId: string | null; // most recent CC session UUID (for --resume)
   lastActive: string | null; // ISO timestamp from session file mtime
   handoffPurpose: string | null; // from latest handoff .md
+  contextPct: number | null; // last-known context usage % (from result event)
 }
 
 
@@ -255,6 +256,7 @@ export async function scanFolders(
         sessionId: activeInfo.sessionId,
         lastActive: new Date().toISOString(),
         handoffPurpose: handoff?.purpose ?? null,
+        contextPct: activeInfo.contextPct,
       });
       continue;
     }
@@ -277,6 +279,7 @@ export async function scanFolders(
         sessionId: session!.id,
         lastActive: session!.lastActive.toISOString(),
         handoffPurpose: handoff?.purpose ?? null,
+        contextPct: null,
       });
     } else if (handoff && (!session || handoff.sessionId === session.id)) {
       // Handoff matches latest session (or no session) → intentionally closed.
@@ -289,6 +292,7 @@ export async function scanFolders(
         sessionId: session?.id ?? null,
         lastActive: (session?.lastActive ?? handoff.mtime).toISOString(),
         handoffPurpose: handoff.purpose,
+        contextPct: null,
       });
     } else if (session) {
       // Session files but no handoff — abandoned without /close (truly paused)
@@ -300,6 +304,7 @@ export async function scanFolders(
         sessionId: session.id,
         lastActive: session.lastActive.toISOString(),
         handoffPurpose: null,
+        contextPct: null,
       });
     } else {
       folders.push({
@@ -310,6 +315,7 @@ export async function scanFolders(
         sessionId: null,
         lastActive: null,
         handoffPurpose: null,
+        contextPct: null,
       });
     }
   }

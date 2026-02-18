@@ -306,12 +306,14 @@ export interface SessionProcessInfo {
   process: { exitCode: number | null } | null;
   turnInProgress: boolean;
   clientCount: number;
+  contextPct: number | null;
 }
 
 /** Runtime session info for folder scanner. */
 export interface ActiveSessionInfo {
   sessionId: string;
   activity: "working" | "waiting";
+  contextPct: number | null;
 }
 
 /**
@@ -329,6 +331,7 @@ export function getActiveSessions(
       active.set(session.folder, {
         sessionId: id,
         activity: hasProcess && session.turnInProgress ? "working" : "waiting",
+        contextPct: session.contextPct,
       });
     }
   }

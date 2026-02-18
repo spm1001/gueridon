@@ -196,6 +196,8 @@ interface Session {
   flushTimer: ReturnType<typeof setTimeout> | null;
   // Message queueing: prompts sent while CC is mid-turn
   promptQueue: ClientPrompt[];
+  // Last-known context usage percentage (from result event)
+  contextPct: number | null;
 }
 
 const sessions = new Map<string, Session>();
@@ -592,6 +594,12 @@ function wireProcessToSession(session: Session): void {
 
       // Detect turn completion: result event means CC finished its turn
       if (event.type === "result") {
+        // Capture context usage for lobby switcher
+        if (event.usage) {
+          const used = (event.usage.input_tokens || 0) + (event.usage.output_tokens || 0);
+          const limit = event.usage.context_window || 200000;
+          session.contextPct = Math.round((used / limit) * 100);
+        }
         // Local commands (/context, /cost, /help) produce no stdout in -p mode.
         // CC writes <local-command-stdout> to the session JSONL but not the pipe.
         // If this turn had no content blocks, check the JSONL for local command output.
@@ -919,6 +927,7 @@ async function handleCreateFolder(ws: WebSocket): Promise<void> {
       sessionId: null,
       lastActive: null,
       handoffPurpose: null,
+      contextPct: null,
     };
     sendToClient(ws, { source: "bridge", type: "folderCreated", folder });
   } catch (err) {
@@ -1146,6 +1155,7 @@ async function handleLobbyMessage(
           pendingDeltas: new Map(),
           flushTimer: null,
           promptQueue: [],
+          contextPct: null,
         };
 
         // Pre-populate message buffer from JSONL for paused sessions
