@@ -49,6 +49,7 @@ import {
 } from "./folders.js";
 
 import { StateBuilder } from "./state-builder.js";
+import { getVapidPublicKey, pushTurnComplete, addSubscription, removeSubscription } from "./push.js";
 
 // -- Types --
 
@@ -234,7 +235,8 @@ function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): 
   allClients.add(client);
   clientsById.set(clientId, client);
 
-  sendSSE(client, "hello", { version: 1, clientId, reconnect });
+  const vapidPublicKey = getVapidPublicKey();
+  sendSSE(client, "hello", { version: 1, clientId, reconnect, ...(vapidPublicKey ? { vapidPublicKey } : {}) });
 
   // Send folders asynchronously
   scanFolders(buildActiveSessionsMap()).then((folders) =>
@@ -478,6 +480,13 @@ function onTurnComplete(session: Session): void {
   broadcastToSession(session, "state", {
     ...session.stateBuilder.getState(),
   });
+
+  // Push notification when no SSE clients are watching (phone-in-pocket)
+  if (session.clients.size === 0) {
+    pushTurnComplete(session.folderName).catch((err) =>
+      console.warn("[bridge-sse] push failed:", err),
+    );
+  }
 
   // Flush prompt queue
   if (session.promptQueue.length > 0) {
@@ -816,6 +825,42 @@ const server = createServer(async (req, res) => {
       }
       return;
     }
+  }
+
+  // POST /push/subscribe — store push subscription
+  if (req.method === "POST" && url.pathname === "/push/subscribe") {
+    try {
+      const body = await readBody(req);
+      const sub = JSON.parse(body);
+      if (!sub.endpoint) {
+        res.writeHead(400).end(JSON.stringify({ error: "Missing endpoint" }));
+        return;
+      }
+      addSubscription(sub);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ subscribed: true }));
+    } catch {
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid subscription" }));
+    }
+    return;
+  }
+
+  // POST /push/unsubscribe — remove push subscription
+  if (req.method === "POST" && url.pathname === "/push/unsubscribe") {
+    try {
+      const body = await readBody(req);
+      const { endpoint } = JSON.parse(body);
+      if (!endpoint) {
+        res.writeHead(400).end(JSON.stringify({ error: "Missing endpoint" }));
+        return;
+      }
+      removeSubscription(endpoint);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ unsubscribed: true }));
+    } catch {
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid body" }));
+    }
+    return;
   }
 
   res.writeHead(404).end("Not found");
