@@ -185,6 +185,7 @@ interface Session {
   spawnedAt: number | null; // Timestamp of last spawn, for early-exit detection
   // Idle guard state
   turnInProgress: boolean; // True between user prompt and result event
+  _hadContentThisTurn: boolean; // True if any content_block_start seen this turn
   lastOutputTime: number | null; // Updated on every parsed stdout line
   idleStart: number | null; // When last client disconnected (null = clients connected)
   idleCheckTimer: ReturnType<typeof setTimeout> | null; // Replaces old idleTimer
@@ -541,6 +542,45 @@ function flushPromptQueue(session: Session): void {
   deliverPrompt(null, session, next);
 }
 
+/**
+ * Recover local command output from the session JSONL.
+ *
+ * CC's local slash commands (/context, /cost, /compact) produce no stdout in
+ * -p mode, but CC writes <local-command-stdout> entries to the session JSONL.
+ * When a turn completes with no content blocks, read the JSONL tail to find
+ * and broadcast the missing output.
+ */
+async function recoverLocalCommandOutput(session: Session): Promise<void> {
+  try {
+    const jsonlPath = getSessionJSONLPath(session.folder, session.id);
+    const content = await readFile(jsonlPath, "utf-8");
+    // Read from the end — local command output is the last few lines
+    const lines = content.trimEnd().split("\n");
+    // Walk backwards to find <local-command-stdout> (within last 5 lines)
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 5); i--) {
+      try {
+        const parsed = JSON.parse(lines[i]);
+        if (parsed.type !== "user") continue;
+        const mc = parsed.message?.content;
+        if (typeof mc !== "string" || !mc.includes("<local-command-stdout>")) continue;
+        // Found it — broadcast as a CC user event (same format as JSONL replay)
+        const serialized = JSON.stringify({
+          source: "cc",
+          event: { type: "user", message: parsed.message },
+        });
+        console.log(`[bridge] recovered local command output (${mc.length} chars) session=${session.id}`);
+        broadcastSerialized(session, serialized, false);
+        pushToBuffer(session, serialized);
+        return;
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    // JSONL not found or unreadable — nothing to recover
+  }
+}
+
 function wireProcessToSession(session: Session): void {
   const proc = session.process;
   if (!proc || !proc.stdout) return;
@@ -558,8 +598,22 @@ function wireProcessToSession(session: Session): void {
       const event = JSON.parse(trimmed);
       // Track output time for idle guard staleness detection
       session.lastOutputTime = Date.now();
+      // Track whether CC streamed any content blocks this turn
+      if (event.type === "content_block_start") {
+        session._hadContentThisTurn = true;
+      }
+
       // Detect turn completion: result event means CC finished its turn
       if (event.type === "result") {
+        // Local commands (/context, /cost, /help) produce no stdout in -p mode.
+        // CC writes <local-command-stdout> to the session JSONL but not the pipe.
+        // If this turn had no content blocks, check the JSONL for local command output.
+        if (!session._hadContentThisTurn) {
+          recoverLocalCommandOutput(session).catch((err) =>
+            console.error(`[bridge] local command recovery failed:`, err),
+          );
+        }
+        session._hadContentThisTurn = false;
         session.turnInProgress = false;
         // Flush next queued prompt (if any) now that CC is idle
         flushPromptQueue(session);
@@ -1097,6 +1151,7 @@ async function handleLobbyMessage(
           stderrBuffer: [],
           spawnedAt: null,
           turnInProgress: false,
+          _hadContentThisTurn: false,
           lastOutputTime: null,
           idleStart: null,
           idleCheckTimer: null,

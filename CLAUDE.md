@@ -71,6 +71,12 @@ claude -p --verbose \
 ```
 
 - `--verbose` is mandatory for stream-json mode. Without it you get an unhelpful error.
+- **Local commands (`/context`, `/cost`, `/compact`) produce NO stdout in `-p` mode.** CC writes `<local-command-stdout>` events to the session JSONL, but the stream-json pipe is silent — no content blocks, no user events, just an empty `result`. The bridge never sees this output and clients never receive it. Confirmed 2026-02-17.
+  - **JSONL pattern**: three entries per local command: `<local-command-caveat>`, `<command-name>/cmd</command-name>`, `<local-command-stdout>output</local-command-stdout>`
+  - **Only 3 built-in commands are local**: `/context` (~1.9k chars markdown), `/cost` (~73 chars), `/compact` (~10 chars)
+  - **Other slash commands** (`/init`, `/pr-comments`, `/release-notes`, `/review`, `/security-review`, `/insights`) trigger normal Claude turns and work fine through the pipe
+  - **Discovery**: the `init` system event includes `slash_commands: [...]` — the full list, programmatically
+  - **Fix**: bridge reads JSONL tail on empty-result turns to recover local command output
 - `--dangerously-skip-permissions` is still in use. The `--allowed-tools` migration (gdn-kugeto) is **planned but not shipped**. `docs/decisions.md` describes it as if done — it's aspirational.
 - `--append-system-prompt` coaches CC about AskUserQuestion error behavior on mobile.
 
