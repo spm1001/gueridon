@@ -52,9 +52,34 @@ import { StateBuilder } from "./state-builder.js";
 
 // -- Types --
 
+/**
+ * SSE Reconnect Contract
+ *
+ * EventSource auto-reconnects on transport failure. The bridge treats each
+ * GET /events as a fresh connection (lobby mode, no session). The client
+ * must restore session binding after reconnect:
+ *
+ * 1. Client opens EventSource with stable clientId: /events?clientId=X
+ * 2. Bridge sends: hello (with clientId echo) → folders
+ * 3. Client re-POSTs /session/:folder (from location.hash or JS state)
+ * 4. Bridge sends: full state snapshot for that session
+ * 5. Client is caught up — no gap, no replay needed
+ *
+ * Stale delta protection:
+ * - Every broadcast event carries `session: folderName`
+ * - Client MUST discard events where session !== current folder
+ * - Session switch: old deltas may be in-flight; session field is the guard
+ *
+ * Manual reconnect fallback:
+ * - If no events (including pings) for 60s, client should tear down
+ *   EventSource and create a new one. Pings fire every 30s, so 60s
+ *   silence means the connection is dead but TCP hasn't noticed.
+ */
+
 interface SSEClient {
   res: ServerResponse;
   folder: string | null; // null = lobby mode
+  eventSeq: number;      // monotonic event counter for Last-Event-ID
 }
 
 interface Session {
@@ -164,7 +189,10 @@ function reapOrphans(): void {
 
 function sendSSE(client: SSEClient, event: string, data: unknown): boolean {
   try {
-    return client.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    client.eventSeq++;
+    return client.res.write(
+      `id: ${client.eventSeq}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+    );
   } catch {
     cleanupClient(client);
     return false;
@@ -189,7 +217,7 @@ function broadcastToSession(session: Session, event: string, data: unknown): voi
 
 // -- SSE connection --
 
-function setupSSE(res: ServerResponse, clientId: string): SSEClient {
+function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): SSEClient {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -198,11 +226,15 @@ function setupSSE(res: ServerResponse, clientId: string): SSEClient {
   });
   res.socket?.setKeepAlive(true, 10_000);
 
-  const client: SSEClient = { res, folder: null };
+  // Last-Event-ID: sent by EventSource on auto-reconnect (SSE spec)
+  const lastEventId = req.headers["last-event-id"] as string | undefined;
+  const reconnect = !!lastEventId;
+
+  const client: SSEClient = { res, folder: null, eventSeq: 0 };
   allClients.add(client);
   clientsById.set(clientId, client);
 
-  sendSSE(client, "hello", { version: 1 });
+  sendSSE(client, "hello", { version: 1, clientId, reconnect });
 
   // Send folders asynchronously
   scanFolders(buildActiveSessionsMap()).then((folders) =>
@@ -734,7 +766,7 @@ const server = createServer(async (req, res) => {
   // GET /events — SSE connection
   if (req.method === "GET" && url.pathname === "/events") {
     const clientId = url.searchParams.get("clientId") || randomUUID();
-    setupSSE(res, clientId);
+    setupSSE(req, res, clientId);
     return;
   }
 
