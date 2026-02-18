@@ -5,6 +5,7 @@ import { FolderSelector } from "./folder-selector.js";
 import { showAskUserOverlay, dismissAskUserOverlay } from "./ask-user-overlay.js";
 import { GueridonInterface } from "./gueridon-interface.js";
 import { registerServiceWorker, requestPermission, subscribeToPush, notifyTurnComplete, notifyAskUser } from "./notifications.js";
+import { loadFixture } from "./fixture-harness.js";
 import "./app.css";
 
 // --- Persistent folder (survives page refresh) ---
@@ -316,9 +317,17 @@ navigator.serviceWorker?.addEventListener("message", (event) => {
   }
 });
 
+// --- Fixture mode (visual testing, no transport) ---
+
+const fixtureName = new URL(location.href).searchParams.get("fixture");
+if (fixtureName) {
+  gi.setCwd(`fixture: ${fixtureName}`);
+  loadFixture(agent, fixtureName);
+}
+
 // --- Connect and render ---
 
-transport.connect();
+if (!fixtureName) transport.connect();
 
 const app = document.getElementById("app");
 if (!app) throw new Error("App container not found");

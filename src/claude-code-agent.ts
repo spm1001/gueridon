@@ -309,7 +309,9 @@ export class ClaudeCodeAgent {
   }
 
   abort(): void {
-    // Soft abort: stop updating UI. Bridge can optionally kill the CC process.
+    // Hard abort: tell bridge to kill CC process, then clear local UI state.
+    // Next prompt resumes via --resume (8s penalty, but user asked to stop).
+    this.transport?.abort();
     this._state.isStreaming = false;
     this._state.streamMessage = null;
     this.emit({ type: "agent_end", messages: this._state.messages });
@@ -784,6 +786,15 @@ export class ClaudeCodeAgent {
       toolName: block.name,
       args: block.arguments,
     });
+  }
+
+  /** Inject pre-built messages for visual fixture testing. Bypasses transport. */
+  injectFixture(messages: AgentMessage[]): void {
+    this._state.messages = messages;
+    this._state.isStreaming = false;
+    this._state.streamMessage = null;
+    this.emit({ type: "agent_start" });
+    this.emit({ type: "agent_end", messages });
   }
 
   // --- Helpers ---

@@ -1,0 +1,13 @@
+{
+  "messages": [
+    { "role": "user", "text": "Find all TypeScript files and show me the main one." },
+    { "role": "tool", "name": "Bash", "input": "find src -name '*.ts' | head -10", "output": "src/main.ts\nsrc/claude-code-agent.ts\nsrc/ws-transport.ts\nsrc/gueridon-interface.ts\nsrc/folder-selector.ts\nsrc/notifications.ts\nsrc/ask-user-overlay.ts\nsrc/message-components.ts\nsrc/fixture-harness.ts\nsrc/app.css" },
+    { "role": "tool", "name": "Read", "input": "src/main.ts", "output": "import { html, render } from \"lit\";\nimport { ClaudeCodeAgent } from \"./claude-code-agent.js\";\nimport { WSTransport } from \"./ws-transport.js\";\n\nconst agent = new ClaudeCodeAgent();\nconst transport = new WSTransport({ url: BRIDGE_URL });\nagent.connectTransport(transport);\ntransport.connect();" },
+    { "role": "assistant", "text": "Found 9 TypeScript files. The main entry point is `src/main.ts` — it creates the agent, transport, and wires them together." },
+    { "role": "user", "text": "Now grep for all emit calls." },
+    { "role": "tool", "name": "Grep", "input": "emit\\(", "output": "src/claude-code-agent.ts:216:    this.emit({ type: \"agent_end\", messages: [] });\nsrc/claude-code-agent.ts:305:    this.emit({ type: \"agent_start\" });\nsrc/claude-code-agent.ts:306:    this.emit({ type: \"turn_start\" });\nsrc/claude-code-agent.ts:317:    this.emit({ type: \"agent_end\", messages: this._state.messages });" },
+    { "role": "assistant", "text": "Four `emit()` calls, all in `claude-code-agent.ts`. The lifecycle events are:\n\n1. `agent_end` (empty) — on reset\n2. `agent_start` — when prompt sent\n3. `turn_start` — immediately after\n4. `agent_end` (with messages) — on abort" },
+    { "role": "tool", "name": "Edit", "input": "src/main.ts line 42", "output": "Applied edit: added fixture detection before transport.connect()" },
+    { "role": "assistant", "text": "Edit applied. The fixture param is now checked before connecting transport." }
+  ]
+}

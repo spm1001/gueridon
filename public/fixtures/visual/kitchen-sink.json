@@ -1,0 +1,8 @@
+{
+  "messages": [
+    { "role": "user", "text": "Show me everything — tables, code, lists, the lot." },
+    { "role": "assistant", "text": "Here's a **comprehensive** demo of all markdown elements.\n\n## Table\n\n| Name | Role | Location | Status |\n|------|------|----------|--------|\n| Alice | Engineer | London | Active |\n| Bob | Designer | Berlin | On leave |\n| Carol | PM | Tokyo | Active |\n\n## Code Block\n\n```typescript\nfunction fibonacci(n: number): number {\n  if (n <= 1) return n;\n  return fibonacci(n - 1) + fibonacci(n - 2);\n}\n\nconsole.log(fibonacci(10)); // 55\n```\n\n## Lists\n\n**Ordered:**\n1. First item with `inline code`\n2. Second item with **bold** and *italic*\n3. Third item with a [link](https://example.com)\n\n**Unordered:**\n- Bullet one\n- Bullet two\n  - Nested bullet\n  - Another nested\n- Bullet three\n\n## Inline Elements\n\nHere's some `inline code`, **bold text**, *italic text*, and ***bold italic***. Also a horizontal rule:\n\n---\n\n> This is a blockquote. It can span multiple lines\n> and should render with a left border.\n\nFinal paragraph with mixed formatting: the function `calculateTotal()` returns a `number` and accepts an `Array<Item>` parameter." },
+    { "role": "user", "text": "What about headings?" },
+    { "role": "assistant", "text": "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n\nEach heading level should have distinct sizing and weight." }
+  ]
+}
