@@ -15,9 +15,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { readFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -73,6 +74,7 @@ interface Session {
   pendingDeltas: Map<string, PendingDelta>;
   flushTimer: ReturnType<typeof setTimeout> | null;
   graceTimer: ReturnType<typeof setTimeout> | null;
+  initTimer: ReturnType<typeof setTimeout> | null;
   contextPct: number | null;
 }
 
@@ -84,6 +86,79 @@ const clientsById = new Map<string, SSEClient>();
 
 const PORT = parseInt(process.env.BRIDGE_SSE_PORT || "3002", 10);
 const GRACE_MS = 60_000;
+const INIT_TIMEOUT_MS = 30_000;
+
+// -- Orphan reaping --
+
+const SESSION_FILE = join(homedir(), ".config", "gueridon", "sse-sessions.json");
+
+interface SessionRecord {
+  sessionId: string;
+  folder: string;
+  pid: number;
+  spawnedAt: number;
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Debounced write of active sessions to disk. */
+function persistSessions(): void {
+  if (persistTimer) return;
+  persistTimer = setTimeout(async () => {
+    persistTimer = null;
+    const records: SessionRecord[] = [];
+    for (const s of sessions.values()) {
+      if (s.process?.pid) {
+        records.push({
+          sessionId: s.id,
+          folder: s.folder,
+          pid: s.process.pid,
+          spawnedAt: s.spawnedAt ?? Date.now(),
+        });
+      }
+    }
+    try {
+      mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+      await writeFile(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
+    } catch (err) {
+      console.error("[bridge-sse] failed to persist sessions:", err);
+    }
+  }, 500);
+}
+
+/** Reap orphaned CC processes from a previous bridge instance. */
+function reapOrphans(): void {
+  if (!existsSync(SESSION_FILE)) return;
+
+  let records: SessionRecord[];
+  try {
+    records = JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
+  } catch {
+    return;
+  }
+
+  const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+  let reaped = 0;
+  for (const rec of records) {
+    if (rec.spawnedAt && Date.now() - rec.spawnedAt > MAX_AGE_MS) {
+      console.log(`[bridge-sse] skipping stale orphan pid=${rec.pid} (spawned ${Math.round((Date.now() - rec.spawnedAt) / 3600000)}h ago)`);
+      continue;
+    }
+    try {
+      process.kill(rec.pid, 0); // check alive
+      console.log(`[bridge-sse] reaping orphan CC pid=${rec.pid} session=${rec.sessionId.slice(0, 8)} folder=${basename(rec.folder)}`);
+      process.kill(rec.pid, "SIGTERM");
+      reaped++;
+    } catch {
+      // already dead
+    }
+  }
+
+  try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
+  if (reaped > 0) {
+    console.log(`[bridge-sse] reaped ${reaped} orphaned CC process(es)`);
+  }
+}
 
 // -- SSE helpers --
 
@@ -205,6 +280,22 @@ function spawnCC(session: Session): void {
   session.stderrBuffer = [];
   wireProcess(session);
   console.log(`[bridge-sse] spawned CC for ${session.folderName} (session ${session.id}, pid ${session.process.pid})`);
+  persistSessions();
+
+  // Init timeout: if CC doesn't emit an init event within 30s, kill it.
+  // This catches hung resumes (observed: 90s stall on third concurrent resume).
+  session.initTimer = setTimeout(() => {
+    session.initTimer = null;
+    if (session.process) {
+      console.error(`[bridge-sse] init timeout for ${session.folderName} (pid ${session.process.pid}) — killing`);
+      killWithEscalation(session.process);
+      broadcastToSession(session, "delta", {
+        type: "status",
+        status: "error",
+        error: "CC failed to initialise within 30s",
+      });
+    }
+  }, INIT_TIMEOUT_MS);
 }
 
 function wireProcess(session: Session): void {
@@ -233,6 +324,7 @@ function wireProcess(session: Session): void {
 
   proc.on("exit", (code, signal) => {
     console.log(`[bridge-sse] CC exited for ${session.folderName}: code=${code} signal=${signal}`);
+    if (session.initTimer) { clearTimeout(session.initTimer); session.initTimer = null; }
     const wasMidTurn = session.turnInProgress;
     session.process = null;
     session.spawnedAt = null;
@@ -253,12 +345,19 @@ function wireProcess(session: Session): void {
     broadcastToSession(session, "state", {
       ...session.stateBuilder.getState(),
     });
+    persistSessions();
   });
 }
 
 // -- Event handling + delta conflation --
 
 function handleCCEvent(session: Session, event: Record<string, unknown>): void {
+  // Clear init timeout on first system init event
+  if (event.type === "system" && event.subtype === "init" && session.initTimer) {
+    clearTimeout(session.initTimer);
+    session.initTimer = null;
+  }
+
   // Track content for local command recovery
   if (event.type === "stream_event") {
     const inner = event.event as Record<string, unknown> | undefined;
@@ -384,7 +483,16 @@ function deliverPrompt(
     session.process!.stdin!.write(envelope + "\n");
     session.turnInProgress = true;
     session.hadContentThisTurn = false;
-    console.log(`[bridge-sse] prompt delivered to ${session.folderName}`);
+
+    // Cold path: no SSE clients watching → close stdin after writing.
+    // CC will process the prompt, emit events, and exit when stdin closes.
+    // The process exit handler will broadcast state to any clients that reconnect.
+    if (session.clients.size === 0) {
+      session.process!.stdin!.end();
+      console.log(`[bridge-sse] cold prompt delivered to ${session.folderName} (stdin closed)`);
+    } else {
+      console.log(`[bridge-sse] prompt delivered to ${session.folderName}`);
+    }
   } catch (err) {
     console.error(`[bridge-sse] stdin write failed:`, err);
     broadcastToSession(session, "delta", {
@@ -445,6 +553,7 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
     pendingDeltas: new Map(),
     flushTimer: null,
     graceTimer: null,
+    initTimer: null,
     contextPct: null,
   };
 
@@ -522,10 +631,9 @@ async function handleSession(
     });
   }
 
-  // Eagerly spawn CC (warm model)
-  if (!session.process) {
-    spawnCC(session);
-  }
+  // Lazy spawn: CC starts on first prompt, not on session connect.
+  // This avoids cold starts when the user browses folders without sending.
+  // deliverPrompt() handles spawn-if-needed.
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
@@ -540,11 +648,8 @@ async function handlePrompt(
   body: string,
   res: ServerResponse,
 ): Promise<void> {
-  const session = sessions.get(folderPath);
-  if (!session) {
-    res.writeHead(404).end(JSON.stringify({ error: "No session for this folder" }));
-    return;
-  }
+  // Auto-create session if needed (cold path: prompt without prior POST /session)
+  const session = sessions.get(folderPath) || await resolveOrCreateSession(folderPath);
 
   let parsed: { text?: string; content?: unknown[] };
   try {
@@ -693,7 +798,49 @@ const pingTimer = setInterval(() => {
 }, 30_000);
 pingTimer.unref(); // don't prevent clean shutdown
 
+// -- Graceful shutdown --
+
+function shutdown(signal: string): void {
+  console.log(`[bridge-sse] ${signal} received, shutting down...`);
+
+  // Stop accepting new connections
+  server.close();
+
+  // Stop pinging
+  clearInterval(pingTimer);
+
+  // Kill all child CC processes
+  for (const session of sessions.values()) {
+    if (session.flushTimer) clearTimeout(session.flushTimer);
+    if (session.graceTimer) clearTimeout(session.graceTimer);
+    if (session.initTimer) clearTimeout(session.initTimer);
+    if (session.process) {
+      console.log(`[bridge-sse] killing CC pid ${session.process.pid} (${session.folderName})`);
+      killWithEscalation(session.process);
+    }
+  }
+
+  // Close all SSE connections
+  for (const client of allClients) {
+    client.res.end();
+  }
+  allClients.clear();
+  clientsById.clear();
+  sessions.clear();
+
+  // Clean session file — graceful shutdown means no orphans
+  try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
+
+  // Give kill escalation time to fire if needed, then exit
+  setTimeout(() => process.exit(0), KILL_ESCALATION_MS + 500).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
 // -- Start --
+
+reapOrphans();
 
 server.listen(PORT, () => {
   console.log(`[bridge-sse] listening on port ${PORT}`);
