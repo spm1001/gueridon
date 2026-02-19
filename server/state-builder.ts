@@ -44,6 +44,7 @@ export type SSEDelta =
   | { type: "content"; index: number; text: string }
   | { type: "tool_start"; index: number; name: string; input: string }
   | { type: "tool_complete"; index: number; status: "completed" | "error"; output?: string }
+  | { type: "message_start" }
   | null;
 
 // -- Constants --
@@ -190,7 +191,7 @@ export class StateBuilder {
     this.pendingToolJson.clear();
     this.blockTypes.clear();
     this.toolBlockToCallIndex.clear();
-    return null;
+    return { type: "message_start" };
   }
 
   private onContentBlockStart(inner: Record<string, unknown>): SSEDelta {
