@@ -462,6 +462,57 @@ describe("StateBuilder", () => {
       expect(sb.getState().messages).toHaveLength(1);
     });
 
+    it("multi-turn replay: second assistant message does not inherit first turn's tool calls", () => {
+      const sb = makeBuilder();
+      const events = [
+        // Turn 1: assistant uses a tool
+        JSON.stringify({ source: "cc", event: {
+          type: "assistant",
+          message: {
+            id: "msg_turn1",
+            role: "assistant",
+            content: [
+              { type: "text", text: "Let me check that." },
+              { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/a.ts" } },
+            ],
+            usage: { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          },
+        }}),
+        // Tool result
+        JSON.stringify({ source: "cc", event: {
+          type: "user",
+          message: { role: "user", content: [
+            { type: "tool_result", tool_use_id: "toolu_1", content: "file contents", is_error: false },
+          ]},
+        }}),
+        // Turn 2: pure text follow-up, no tools
+        JSON.stringify({ source: "cc", event: {
+          type: "assistant",
+          message: {
+            id: "msg_turn2",
+            role: "assistant",
+            content: [{ type: "text", text: "Here is the result." }],
+            usage: { input_tokens: 200, output_tokens: 20, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          },
+        }}),
+      ];
+
+      sb.replayFromJSONL(events);
+      const state = sb.getState();
+
+      // Should have user message + 2 assistant messages
+      const assistantMsgs = state.messages.filter(m => m.role === "assistant");
+      expect(assistantMsgs).toHaveLength(2);
+
+      // First assistant message has the tool call with output attached
+      expect(assistantMsgs[0].tool_calls).toHaveLength(1);
+      expect(assistantMsgs[0].tool_calls![0].output).toBe("file contents");
+
+      // Second assistant message must NOT inherit turn 1's tool calls
+      expect(assistantMsgs[1].tool_calls).toBeUndefined();
+      expect(assistantMsgs[1].content).toBe("Here is the result.");
+    });
+
     it("skips malformed JSONL lines", () => {
       const sb = makeBuilder();
       sb.replayFromJSONL(["not json", "{}", '{"source":"cc"}']);

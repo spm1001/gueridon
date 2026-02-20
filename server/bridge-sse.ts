@@ -210,7 +210,7 @@ function cleanupClient(client: SSEClient): void {
 }
 
 function broadcastToSession(session: Session, event: string, data: unknown): void {
-  const payload = { session: session.folderName, ...(data as Record<string, unknown>) };
+  const payload = { folder: session.folderName, ...(data as Record<string, unknown>) };
   for (const client of session.clients) {
     sendSSE(client, event, payload);
   }
@@ -667,7 +667,7 @@ async function handleSession(
     attachToSession(client, session);
     // Send current state snapshot
     sendSSE(client, "state", {
-      session: session.folderName,
+      folder: session.folderName,
       ...session.stateBuilder.getState(),
     });
   }

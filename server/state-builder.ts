@@ -83,6 +83,11 @@ export class StateBuilder {
   private blockTypes = new Map<number, string>();          // block index → "text" | "tool_use" | "thinking"
   private toolBlockToCallIndex = new Map<number, number>(); // block index → index in currentToolCalls
 
+  // The tool calls from the last committed assistant message — used by handleUser
+  // to attach tool results. Separate from currentToolCalls so replay of a second
+  // assistant message doesn't inherit the first message's tool calls.
+  private lastCommittedToolCalls: BBToolCall[] = [];
+
   // Dedup & context
   private seenMessageIds = new Set<string>();
   private contextWindow = DEFAULT_CONTEXT_WINDOW;
@@ -343,6 +348,15 @@ export class StateBuilder {
     };
     this.state.messages.push(msg);
 
+    // Save this message's tool calls so handleUser can attach results to them.
+    // Reset currentToolCalls and currentText so a subsequent assistant message
+    // in replay (where message_start never fires) doesn't inherit these.
+    // toolIdToIndex is intentionally NOT cleared here — handleUser needs it next,
+    // and tool_use_ids are unique per session so stale entries don't collide.
+    this.lastCommittedToolCalls = msg.tool_calls || [];
+    this.currentText = "";
+    this.currentToolCalls = [];
+
     return null; // full state sent on result
   }
 
@@ -372,7 +386,7 @@ export class StateBuilder {
         const idx = this.toolIdToIndex.get(toolUseId);
         if (idx === undefined) continue;
 
-        const call = this.currentToolCalls[idx];
+        const call = this.lastCommittedToolCalls[idx];
         if (!call) continue;
 
         // Extract result text — can be string or array of {type:"text", text:"..."}
