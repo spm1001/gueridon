@@ -14,9 +14,9 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "jsdom": "^28.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "ws": "^8.18.0"
   }
 }

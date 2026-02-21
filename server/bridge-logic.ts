@@ -1,23 +1,15 @@
 /**
  * Pure functions extracted from bridge.ts for testability.
  *
- * Bridge.ts is hard to unit test because it creates a WebSocketServer at
- * module scope. This module contains the decision logic that doesn't need
- * IO — session resolution, path validation, arg construction.
+ * This module contains the decision logic that doesn't need IO —
+ * session resolution, path validation, arg construction, delta conflation.
  */
 
-import { resolve, join, extname, sep } from "node:path";
+import { resolve, join } from "node:path";
 
 // --- Configuration constants ---
 
-export const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || "", 10) || 5 * 60 * 1000; // 5 minutes
-export const MAX_IDLE_MS = parseInt(process.env.MAX_IDLE_MS || "", 10) || 30 * 60 * 1000; // 30 minutes — absolute cap
-export const STALE_OUTPUT_MS = parseInt(process.env.STALE_OUTPUT_MS || "", 10) || 10 * 60 * 1000; // 10 minutes — stdout silence → stuck
-export const IDLE_RECHECK_MS = 30_000; // 30 seconds between guard rechecks
-export const PING_INTERVAL_MS = 30_000; // 30 seconds
-export const PONG_TIMEOUT_MS = 30_000; // 30 seconds — generous for DERP relay on cellular
 export const KILL_ESCALATION_MS = 3_000; // SIGTERM → SIGKILL after 3 seconds
-export const EARLY_EXIT_MS = 2_000; // Process dying within 2s = flag/version problem
 
 export const CC_FLAGS = [
   "-p",
@@ -37,58 +29,6 @@ export const CC_FLAGS = [
     "in their next message. Do not apologize for the error or retry the tool. " +
     "End your turn and wait for the user's response.",
 ];
-
-// --- Static file serving ---
-
-export const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".json": "application/json",
-  ".map": "application/json",
-};
-
-/** Result of resolving a static file request. */
-export type StaticFileResult =
-  | { ok: true; filePath: string; mime: string; cache: boolean }
-  | { ok: false; status: 403 | 404 };
-
-/**
- * Resolve a URL pathname to a static file path with security checks.
- *
- * Pure function — no IO. Caller handles readFile and HTTP response.
- *
- * - SPA fallback: extensionless paths (including "/") → index.html
- * - Path traversal guard: resolved path must be within distDir
- * - MIME lookup with fallback to application/octet-stream
- * - Cache flag for /assets/ paths (Vite hashed, immutable)
- */
-export function resolveStaticFile(
-  pathname: string,
-  distDir: string,
-): StaticFileResult {
-  // SPA fallback: extensionless paths serve index.html
-  if (pathname === "/" || !pathname.includes(".")) {
-    pathname = "/index.html";
-  }
-
-  const filePath = join(distDir, pathname);
-  // Path traversal guard (use sep-terminated root to prevent prefix collisions)
-  const root = distDir.endsWith(sep) ? distDir : distDir + sep;
-  if (!filePath.startsWith(root) && filePath !== distDir) {
-    return { ok: false, status: 403 };
-  }
-
-  const mime = MIME_TYPES[extname(filePath)] || "application/octet-stream";
-  const cache = pathname.startsWith("/assets/");
-  return { ok: true, filePath, mime, cache };
-}
 
 // --- Session resolution ---
 
@@ -338,130 +278,6 @@ export function getActiveSessions(
   return active;
 }
 
-// --- Idle guards ---
-
-/** Session state visible to idle guards. */
-export interface IdleSessionState {
-  turnInProgress: boolean;
-  lastOutputTime: number | null;
-}
-
-/** A guard that can keep a session alive during idle checks. */
-export interface IdleGuard {
-  name: string;
-  shouldKeepAlive(
-    state: IdleSessionState,
-    now?: number,
-  ): { keep: boolean; reason?: string; recheckMs?: number };
-}
-
-/** Action returned by checkIdle — pure, no side effects. */
-export type IdleAction =
-  | { action: "kill"; reason: string }
-  | {
-      action: "recheck";
-      delayMs: number;
-      guardDeferred: boolean;
-      reason: string;
-    };
-
-/**
- * Decide whether to kill an idle session or recheck later.
- *
- * Pure function — takes state, returns an action. Caller handles side effects.
- *
- * Flow:
- * 1. Safety cap exceeded → kill (inviolable)
- * 2. Any guard says keepAlive → recheck (guard is deferred)
- * 3. Guard WAS deferred last check but isn't now → grace period (CC just finished)
- * 4. Nothing keeping alive, grace elapsed → kill
- */
-export function checkIdle(
-  idleStart: number,
-  guardWasDeferred: boolean,
-  guards: IdleGuard[],
-  sessionState: IdleSessionState,
-  now: number = Date.now(),
-): IdleAction {
-  // Safety cap — absolute maximum since client disconnect
-  if (now - idleStart > MAX_IDLE_MS) {
-    return { action: "kill", reason: "safety cap exceeded" };
-  }
-
-  // Consult guards
-  for (const guard of guards) {
-    const result = guard.shouldKeepAlive(sessionState, now);
-    if (result.keep) {
-      return {
-        action: "recheck",
-        delayMs: result.recheckMs ?? IDLE_RECHECK_MS,
-        guardDeferred: true,
-        reason: `kept alive by ${guard.name}: ${result.reason}`,
-      };
-    }
-  }
-
-  // No guard keeping alive. Did a guard JUST stop deferring?
-  // If so, CC transitioned from working → idle. Grant a grace period
-  // (full idle countdown) before killing.
-  if (guardWasDeferred) {
-    return {
-      action: "recheck",
-      delayMs: IDLE_TIMEOUT_MS,
-      guardDeferred: false,
-      reason: "grace period — CC finished working, restarting idle countdown",
-    };
-  }
-
-  // Nothing keeping alive, no grace period pending — kill
-  return { action: "kill", reason: "idle timeout" };
-}
-
-/**
- * Create an ActiveTurnGuard that keeps sessions alive when CC is mid-turn.
- *
- * Two signals:
- * - Protocol state: turnInProgress (prompt sent, no result yet)
- * - Staleness: stdout has produced output within staleThresholdMs
- *
- * If mid-turn but no output for staleThresholdMs, declines to keep alive
- * (CC is likely stuck). Safety cap provides the backstop.
- */
-export function createActiveTurnGuard(
-  staleThresholdMs: number = STALE_OUTPUT_MS,
-): IdleGuard {
-  return {
-    name: "active-turn",
-    shouldKeepAlive(
-      state: IdleSessionState,
-      now: number = Date.now(),
-    ) {
-      if (!state.turnInProgress) {
-        return { keep: false };
-      }
-
-      // Mid-turn — but is CC actually making progress?
-      if (
-        state.lastOutputTime !== null &&
-        now - state.lastOutputTime > staleThresholdMs
-      ) {
-        return { keep: false, reason: "mid-turn but stale — likely stuck" };
-      }
-
-      return {
-        keep: true,
-        reason: "CC is mid-turn",
-        recheckMs: IDLE_RECHECK_MS,
-      };
-    },
-  };
-}
-
-/** Default guard set. Extensible — add guards to this array. */
-export const DEFAULT_IDLE_GUARDS: IdleGuard[] = [
-  createActiveTurnGuard(),
-];
-
 // --- Conflation (tick-based coalescing of CC partial events) ---
 //
 // IMPORTANT ASSUMPTION: All three delta types (text_delta, input_json_delta,
@@ -472,8 +288,6 @@ export const DEFAULT_IDLE_GUARDS: IdleGuard[] = [
 // all content_block_delta payloads are strictly additive.
 
 export const CONFLATION_INTERVAL_MS = 250; // Flush merged deltas every 250ms (~4/sec)
-export const MESSAGE_BUFFER_CAP = 10_000; // Max events in replay buffer
-export const BACKPRESSURE_THRESHOLD = 64 * 1024; // Skip delta sends when ws.bufferedAmount exceeds 64KB
 
 /** Delta accumulation field mapping: CC delta type → which field holds the text. */
 const DELTA_FIELDS: Record<string, string> = {
@@ -492,19 +306,6 @@ export interface DeltaInfo {
   field: string;
   /** The actual text/json payload from this delta. */
   payload: string;
-}
-
-/** Exit commands that the bridge intercepts before forwarding to CC. */
-const EXIT_COMMANDS = new Set(["/exit", "/quit"]);
-
-/**
- * Check if a prompt is an exit command (/exit or /quit).
- * CC's /exit is REPL-only — in -p --stream-json mode it returns
- * "Unknown skill: exit". The bridge intercepts these and handles
- * session close at the protocol level.
- */
-export function isExitCommand(text: string): boolean {
-  return EXIT_COMMANDS.has(text.trim().toLowerCase());
 }
 
 /**

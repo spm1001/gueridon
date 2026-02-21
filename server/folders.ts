@@ -389,6 +389,7 @@ export async function scanFolders(
         name,
         path: fullPath,
         state: "closed",
+        activity: null,
         sessionId: session!.id,
         lastActive: session!.lastActive.toISOString(),
         handoffPurpose: handoff?.purpose ?? null,

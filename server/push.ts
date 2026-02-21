@@ -82,7 +82,7 @@ export function removeSubscription(endpoint: string): void {
 
 /**
  * Send a push notification to all subscribers.
- * Called when CC finishes a turn or needs input and no WS clients are connected.
+ * Called when CC finishes a turn or needs input and no SSE clients are connected.
  */
 export async function sendPush(payload: {
   title: string;

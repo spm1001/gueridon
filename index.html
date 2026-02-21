@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Brisk Bear</title>
+<title>Guéridon</title>
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon-192.svg" type="image/svg+xml">
 <meta name="theme-color" content="#1a1a1a">
@@ -350,60 +350,6 @@
     font-weight: 600;
   }
 
-  /* === Todos === */
-  .todos {
-    margin: 0 14px 8px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 12px;
-  }
-
-  .todos-title {
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 4px;
-  }
-
-  .todo-item {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 3px 0;
-    font-size: 0.82rem;
-  }
-
-  .todo-check {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 1.5px solid var(--border);
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.6rem;
-  }
-
-  .todo-item[data-status="completed"] .todo-check {
-    background: var(--green);
-    border-color: var(--green);
-    color: #000;
-  }
-
-  .todo-item[data-status="in_progress"] .todo-check {
-    border-color: var(--amber);
-    animation: pulse 2s infinite;
-  }
-
-  .todo-item[data-status="completed"] .todo-text {
-    color: var(--text-dim);
-    text-decoration: line-through;
-  }
-
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
@@ -505,7 +451,7 @@
   }
   .slash-btn { display: none; } /* Hidden until slash_commands arrive from init */
   .slash-btn.visible { display: flex; }
-  .slash-btn:active { background: var(--surface-hover); }
+  .slash-btn:active { background: var(--surface-raised); }
   body[data-connection="disconnected"] .slash-btn { opacity: 0.3; pointer-events: none; }
 
   /* Slash command sheet */
@@ -550,7 +496,7 @@
     padding: 11px 16px;
     cursor: pointer;
   }
-  .slash-cmd:active { background: var(--surface-hover); }
+  .slash-cmd:active { background: var(--surface-raised); }
   .slash-cmd-name {
     font-family: var(--mono);
     font-size: 0.9rem;
@@ -645,10 +591,6 @@
   body[data-connection="disconnected"] .send-btn {
     opacity: 0.3;
     pointer-events: none;
-  }
-
-  body[data-connection="disconnected"] .todos {
-    opacity: 0.5;
   }
 
   /* Activity indicator — shown when connected + busy */
@@ -858,7 +800,6 @@
   }
 
   .switcher-dot[data-status="active"] { background: var(--green); }
-  .switcher-dot[data-status="ended"] { background: none; border: 1.5px solid var(--text-dim); }
   .switcher-dot[data-status="dormant"] { background: var(--amber); opacity: 0.5; }
   .switcher-dot[data-status="old"] { background: var(--text-dim); opacity: 0.3; }
 
@@ -870,10 +811,6 @@
   .switcher-project {
     font-weight: 600;
     font-size: 0.93rem;
-  }
-
-  .switcher-item[data-status="ended"] .switcher-project {
-    color: var(--text-mid);
   }
 
   .switcher-item[data-status="old"] .switcher-project {
@@ -1030,11 +967,6 @@
 
   <div id="errorToast" class="error-toast"></div>
 
-  <div class="todos" id="todos" hidden>
-    <div class="todos-title">Progress</div>
-    <div id="todoList"></div>
-  </div>
-
   <div class="slash-sheet-overlay" id="slashSheet">
     <div class="slash-sheet">
       <div class="slash-sheet-handle"></div>
@@ -1063,7 +995,6 @@
 <script>
 let cachedState = null;
 let switcherOpen = false;
-let switcherSeeded = false;
 let switcherExpandedFolder = null; // folder name currently expanded in switcher
 
 // === Mode detection ===
@@ -1296,8 +1227,6 @@ function handleSSEState(data) {
   if (data.status) liveState.status = data.status;
   if (data.error !== undefined) liveState.error = data.error;
   if (data.slashCommands !== undefined) liveState.slashCommands = data.slashCommands;
-  liveState.todos = data.todos || null; // full snapshot — clear stale file-mode todos
-
   if (data.status === 'idle') {
     liveState._activity = null;
     // Local notification when Claude finishes (page unfocused)
@@ -1438,7 +1367,6 @@ function sseRender() {
     cachedState = liveState;
     renderStatusBar(liveState);
     renderMessages(liveState.messages);
-    renderTodos(liveState.todos);
     renderSwitcher(liveState);
     document.getElementById('slashBtn').classList.toggle('visible', !!liveState.slashCommands?.length);
   });
@@ -1457,17 +1385,14 @@ function initSSE() {
 
 if (bridgeUrl) {
   initSSE();
-} else if (!params.get('state')) {
-  // Auto-discover: probe same-origin /folders before falling back to file mode.
-  // Skip if ?state= is set — explicit file mode for dev/testing.
-  window.__bridgeProbe = fetch('/folders').then((res) => {
+} else {
+  // Auto-discover: probe same-origin /folders (when served by the bridge itself).
+  fetch('/folders').then((res) => {
     if (res.ok) {
       bridgeUrl = location.origin;
       initSSE();
-      return true;
     }
-    return false;
-  }).catch(() => false);
+  }).catch(() => {});
 }
 
 // === Rendering helpers ===
@@ -1608,34 +1533,6 @@ function trimToolOutput(output, maxLines) {
   return lines.slice(0, headCount).join('\n')
     + `\n… ${hidden} lines hidden …\n`
     + lines.slice(-tailCount).join('\n');
-}
-
-// Extract display-friendly preview from tool input JSON
-function toolInputPreview(name, rawInput) {
-  if (!rawInput) return '';
-  try {
-    const parsed = JSON.parse(rawInput);
-    // Map tool names to their primary display field
-    const fieldMap = {
-      Bash: parsed.cmd || parsed.command,
-      Read: parsed.path,
-      Write: parsed.path,
-      Edit: parsed.path,
-      edit_file: parsed.path,
-      create_file: parsed.path,
-      Grep: parsed.pattern,
-      Glob: parsed.glob || parsed.pattern,
-      glob: parsed.filePattern,
-      finder: parsed.query,
-      Task: parsed.description,
-      web_search: parsed.query || parsed.objective,
-      read_web_page: parsed.url,
-      oracle: parsed.task,
-    };
-    return fieldMap[name] || Object.values(parsed)[0] || rawInput;
-  } catch {
-    return rawInput;
-  }
 }
 
 function renderLocalCommand(content) {
@@ -1829,31 +1726,6 @@ function renderMessages(messages) {
   el.scrollTop = el.scrollHeight;
 }
 
-function renderTodos(todos) {
-  const section = document.getElementById('todos');
-  const list = document.getElementById('todoList');
-
-  if (!todos || todos.length === 0) {
-    section.hidden = true;
-    return;
-  }
-
-  section.hidden = false;
-  list.innerHTML = '';
-
-  for (const t of todos) {
-    const item = document.createElement('div');
-    item.className = 'todo-item';
-    item.dataset.status = t.status;
-    const checkContent = t.status === 'completed' ? '&#x2713;' : '';
-    item.innerHTML = `
-      <div class="todo-check">${checkContent}</div>
-      <span class="todo-text">${esc(t.content)}</span>
-    `;
-    list.appendChild(item);
-  }
-}
-
 function renderStatusBar(state) {
   const sess = state.session || {};
   document.getElementById('model').textContent = sess.model || '';
@@ -1912,21 +1784,6 @@ function renderStatusBar(state) {
     sendBtn.dataset.active = hasText ? 'true' : 'false';
     sendBtn.innerHTML = '&#x2191;';
   }
-}
-
-async function render() {
-  const state = await loadState();
-
-  renderStatusBar(state);
-  renderMessages(state.messages);
-  renderTodos(state.todos);
-
-  // Seed switcher open state from state.json on first load only
-  if (state.switcher && state.switcher.open && !switcherSeeded) {
-    switcherOpen = true;
-    switcherSeeded = true;
-  }
-  renderSwitcher(state);
 }
 
 function renderSwitcher(state) {
@@ -2100,16 +1957,6 @@ function renderSwitcher(state) {
   }
 }
 
-// Explicit ?state= param = file mode, skip auto-discovery
-if (params.get('state')) {
-  render();
-} else if (window.__bridgeProbe) {
-  // Wait for bridge auto-discovery before falling back to file-mode render.
-  // If bridge found, initSSE() handles rendering. If not, render from state.json.
-  window.__bridgeProbe.then((found) => { if (!found) render(); });
-} else if (!bridgeUrl) {
-  render();
-}
 // Bridge mode renders via its own event handlers — no render() call needed.
 
 function closeSwitcher() {
@@ -2231,12 +2078,9 @@ sendBtn.addEventListener('click', () => {
     const text = ta.value.trim();
     const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
 
-    // Send via SSE bridge or file-mode no-op
+    // Send via SSE bridge
     if (bridgeUrl && sseCurrentFolder) {
       ssePostPrompt(sseCurrentFolder, text);
-    } else {
-      // File mode — no-op send
-      fetch('/send', { method: 'POST', body: text }).catch(() => {});
     }
     const pending = false;
 
