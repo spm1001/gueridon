@@ -1248,6 +1248,12 @@ function sseResetWatchdog() {
   }, SSE_WATCHDOG_MS);
 }
 
+function mapFolderState(state) {
+  if (state === 'active') return 'active';
+  if (state === 'fresh' || state === 'idle') return 'dormant';
+  return 'old';
+}
+
 function handleSSEFolders(folders) {
   liveState.switcher = {
     sessions: folders.map(f => ({
