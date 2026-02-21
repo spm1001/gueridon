@@ -9,6 +9,7 @@ WorkingDirectory=/home/modha/Repos/gueridon
 Environment=HOME=/home/modha
 Environment=PATH=/home/modha/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/modha/Repos/gueridon/node_modules/.bin/tsx server/bridge.ts
+KillMode=process
 Restart=always
 RestartSec=3
 
