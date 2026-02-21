@@ -649,19 +649,126 @@ function resolveFolder(folderParam: string): string | null {
   return validateFolderPath(fullPath, SCAN_ROOT) ? fullPath : null;
 }
 
+// -- Session tear-down and creation --
+
+/**
+ * Tear down an existing session: kill CC process, notify clients, remove from map.
+ * Used when switching to a different session within the same folder.
+ */
+async function tearDownSession(session: Session): Promise<void> {
+  console.log(`[bridge-sse] tearing down session ${session.id.slice(0, 8)} for ${session.folderName}`);
+
+  if (session.flushTimer) { clearTimeout(session.flushTimer); session.flushTimer = null; }
+  if (session.graceTimer) { clearTimeout(session.graceTimer); session.graceTimer = null; }
+  if (session.initTimer) { clearTimeout(session.initTimer); session.initTimer = null; }
+
+  if (session.process) {
+    killWithEscalation(session.process);
+    // Give it a moment to die so the exit handler fires
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  // Detach all clients (they'll be re-attached to the new session)
+  for (const client of session.clients) {
+    client.folder = null;
+  }
+  session.clients.clear();
+  sessions.delete(session.folder);
+  persistSessions();
+}
+
+/**
+ * Create a session with a specific ID and replay JSONL if resumable.
+ */
+async function createSessionWithId(
+  folderPath: string,
+  sessionId: string,
+  resumable: boolean,
+): Promise<Session> {
+  const folderName = basename(folderPath);
+  const session: Session = {
+    id: sessionId,
+    folder: folderPath,
+    folderName,
+    stateBuilder: new StateBuilder(sessionId, folderName),
+    process: null,
+    clients: new Set(),
+    resumable,
+    stderrBuffer: [],
+    spawnedAt: null,
+    turnInProgress: false,
+    hadContentThisTurn: false,
+    lastOutputTime: null,
+    promptQueue: [],
+    pendingDeltas: new Map(),
+    flushTimer: null,
+    graceTimer: null,
+    initTimer: null,
+    contextPct: null,
+  };
+
+  if (resumable) {
+    try {
+      const jsonlPath = getSessionJSONLPath(folderPath, sessionId);
+      const content = await readFile(jsonlPath, "utf-8");
+      const events = parseSessionJSONL(content);
+      session.stateBuilder.replayFromJSONL(events);
+      console.log(`[bridge-sse] replayed ${events.length} events for ${folderName} (session ${sessionId.slice(0, 8)})`);
+    } catch (err) {
+      console.log(`[bridge-sse] JSONL replay failed for ${folderName}:`, err);
+    }
+  }
+
+  sessions.set(folderPath, session);
+  return session;
+}
+
 // -- Route handlers --
 
 async function handleSession(
   folderPath: string,
   client: SSEClient | undefined,
   res: ServerResponse,
+  requestedSessionId?: string,
 ): Promise<void> {
   // Detach from current session if switching
   if (client?.folder && client.folder !== folderPath) {
     detachFromSession(client);
   }
 
-  const session = await resolveOrCreateSession(folderPath);
+  // Three modes based on requestedSessionId:
+  //   undefined → current behavior (resolve latest)
+  //   "new"    → fresh session (no --resume)
+  //   "<uuid>" → resume that specific session
+  let session: Session;
+
+  if (!requestedSessionId) {
+    // Default: resolve latest session for folder
+    session = await resolveOrCreateSession(folderPath);
+  } else {
+    const existing = sessions.get(folderPath);
+
+    if (requestedSessionId === "new") {
+      // Tear down existing session for this folder if present
+      if (existing) {
+        await tearDownSession(existing);
+      }
+      const newId = randomUUID();
+      session = await createSessionWithId(folderPath, newId, false);
+    } else {
+      // Specific session UUID requested
+      if (existing && existing.id === requestedSessionId) {
+        // Already the active session — reuse
+        session = existing;
+      } else {
+        // Different session — tear down existing, create for the requested UUID
+        if (existing) {
+          await tearDownSession(existing);
+        }
+        session = await createSessionWithId(folderPath, requestedSessionId, true);
+      }
+    }
+  }
 
   if (client) {
     attachToSession(client, session);
@@ -803,9 +910,18 @@ const server = createServer(async (req, res) => {
 
     try {
       switch (action) {
-        case "session":
-          await handleSession(folderPath, client, res);
+        case "session": {
+          const sessionBody = await readBody(req);
+          let requestedSessionId: string | undefined;
+          if (sessionBody) {
+            try {
+              const parsed = JSON.parse(sessionBody);
+              if (parsed.sessionId) requestedSessionId = parsed.sessionId;
+            } catch { /* empty body or invalid JSON — use default */ }
+          }
+          await handleSession(folderPath, client, res, requestedSessionId);
           return;
+        }
         case "prompt": {
           const body = await readBody(req);
           await handlePrompt(folderPath, body, res);
