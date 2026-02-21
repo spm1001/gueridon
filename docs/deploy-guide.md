@@ -226,3 +226,18 @@ Fix (persistent, for `/etc/network/interfaces` with DHCP):
 iface enp1s0f1 inet dhcp
     dns-nameservers 8.8.8.8 1.1.1.1
 ```
+
+### Reboot verification
+
+After install, reboot the machine and verify everything comes back:
+```bash
+sudo systemctl status gueridon          # should be active (running)
+sudo tailscale serve status             # should show HTTPS proxy
+curl -s http://localhost:3001/folders    # should return JSON
+```
+
+If DNS broke again, the persistent fix in `/etc/network/interfaces` may not
+have taken effect. Check with `resolvectl status` and re-apply if needed.
+
+> **Not yet verified** — tube reboot was initiated but machine had not come
+> back at time of writing. Remove this note once confirmed.
