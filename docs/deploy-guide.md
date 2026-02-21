@@ -215,16 +215,14 @@ resolves tailnet names.
 
 Check: `resolvectl status` — look for a physical interface with DNS servers.
 
-Fix (runtime):
+The proper fix is upstream: configure your Tailscale DNS settings or router
+DHCP to hand out public DNS servers (e.g. 8.8.8.8, 1.1.1.1). This ensures
+all tailnet machines get working DNS without per-machine hacks.
+
+Quick runtime workaround (doesn't survive reboot):
 ```bash
 sudo resolvectl dns enp1s0f1 8.8.8.8 1.1.1.1
 sudo resolvectl domain enp1s0f1 '~.'
-```
-
-Fix (persistent, for `/etc/network/interfaces` with DHCP):
-```
-iface enp1s0f1 inet dhcp
-    dns-nameservers 8.8.8.8 1.1.1.1
 ```
 
 ### Reboot verification
