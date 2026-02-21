@@ -6,7 +6,7 @@
 
 **Robustness:** Beta — actively developed, architecture stable
 **Works with:** Claude Code (as backend), any browser (as client)
-**Install:** `npm install && npm run start`
+**Install:** `npm install && npm start`
 **Requires:** Node.js 20+, Claude Code CLI, MAX subscription
 
 A mobile web UI for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Open your phone, pick a project folder, and start a session — Claude Code runs on your server, you interact from wherever you are.
@@ -18,14 +18,25 @@ Claude Code is a terminal application. That's great at a desk, less great from a
 ## Architecture
 
 ```
-Phone/Browser → WebSocket → Node.js bridge (:3001) → claude -p (stream-json)
+Phone (HTTPS) → tailscale serve (TLS termination)
+                    → Node.js bridge (HTTP :3001)
+                        → claude -p (stdio, per-folder)
 ```
 
-Two processes. The **bridge** (`server/bridge.ts`) serves the web UI and proxies WebSocket connections to Claude Code processes. One CC process per session, spawned lazily on first prompt.
+Two processes. The **bridge** serves the web UI over HTTP and communicates with the browser via SSE (server→client) and POST (client→server). One CC process per folder, spawned lazily on first prompt.
 
-The **web client** is a Lit-based SPA that translates CC's stream-json events into a chat UI with streaming responses, tool call display, thinking blocks, and a context gauge.
+The **web client** is a single HTML file — CSS, JS, and markup in one place. No framework, no build step, no dependencies. It translates CC's stream-json events into a chat UI with streaming responses, tool call display, thinking blocks, and a context gauge.
 
-There's also a **CLI client** (`cli/gdn.ts`) that connects to the same bridge from a terminal — same protocol, different renderer. Useful for working from a Mac while CC runs on a remote server.
+### Server modules
+
+| File | Responsibility |
+|------|---------------|
+| `server/bridge.ts` | HTTP server, SSE transport, process lifecycle |
+| `server/bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
+| `server/state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape |
+| `server/folders.ts` | Folder scanning, session discovery, handoff reading |
+| `server/push.ts` | Web Push (VAPID) notification delivery |
+| `server/fun-names.ts` | Alliterative folder name generator |
 
 ## Quick start
 
@@ -33,40 +44,52 @@ There's also a **CLI client** (`cli/gdn.ts`) that connects to the same bridge fr
 git clone https://github.com/spm1001/gueridon
 cd gueridon
 npm install
-npm run start        # Build + launch bridge on :3001
+npm start            # Bridge on :3001
 ```
 
 Open `http://localhost:3001` in a browser. Pick a folder. Start prompting.
 
-### Development
-
 ```bash
-npm run dev          # Vite HMR on :5173
-npm run bridge       # Bridge on :3001 (separate terminal)
-npm test             # 322 tests, ~1.5s
+npm test             # 152 tests, <500ms
+npm run test:watch   # Watch mode
 ```
 
-### Remote access (Kube + phone)
+### Remote access
 
-Guéridon is designed for a setup where Claude Code runs on a server (e.g., a Debian box) and you connect from a phone or another machine. See `docs/kube-brain-mac-body.md` for the full Tailscale-based architecture.
+Guéridon is designed for a setup where Claude Code runs on a server and you connect from a phone over Tailscale. `tailscale serve` terminates TLS; the bridge never touches HTTPS.
+
+See [`docs/deploy-guide.md`](docs/deploy-guide.md) for the full walkthrough: Node install, Claude Code configuration, VAPID keys, systemd service, and phone verification.
+
+## Features
+
+- **Dark theme** — designed for late-night phone use
+- **Streaming markdown** — hand-rolled block-level parser, chunk updates (not token-level)
+- **Collapsible tool calls** — consecutive successful calls coalesce into a single header
+- **Push notifications** — know when Claude finishes while your phone is locked
+- **Session switcher** — per-folder session list, resume previous sessions
+- **Slash command sheet** — send CC commands (`/compact`, `/cost`, `/context`) from the UI
+- **AskUserQuestion buttons** — tap to answer when CC asks a question
+- **Context gauge** — see how much context window remains
 
 ## Key design decisions
 
 - **Lazy spawn** — CC process starts on first prompt, not on connect. No wasted processes.
-- **Idle timeout** — 5 min idle → kill process → `--resume` on reconnect. Cheap session parking.
+- **Idle guards** — graduated response to idle sessions: warn, then kill, then resume on reconnect. Prevents orphaned processes consuming MAX seats.
+- **SSE + POST** — EventSource for server→client, fetch POST for client→server. Auto-reconnects, stateless transport, no WebSocket complexity.
+- **Single HTML file** — no build step, no framework, no vendored components. Edit and reload.
 - **No auth** — designed for localhost or Tailscale mesh. Not for the open internet.
-- **Vendored UI components** — 6 components from [pi-mono](https://github.com/nicohman/pi-mono) for message display. Our own leaf renderers. No heavy transitive deps.
-- **Client-agnostic protocol** — the bridge doesn't know or care what's consuming its WebSocket. Web UI, CLI client, or something else — same wire format.
 
 ## Docs
 
 | Doc | What's in it |
 |-----|-------------|
-| `docs/architecture-and-review.md` | Full file map, component nesting, dep table, build pipeline, 23-finding code review |
-| `docs/bridge-protocol.md` | WebSocket message types, session lifecycle, reliability |
-| `docs/decisions.md` | Architecture decisions with rationale |
-| `docs/kube-brain-mac-body.md` | Multi-machine setup with Tailscale |
-| `docs/empirical-verification.md` | CC stream-json event schemas, verified against CC 2.1.37 |
+| [`docs/deploy-guide.md`](docs/deploy-guide.md) | First-time install: Node, CC config, VAPID, systemd, Tailscale, phone setup |
+| [`docs/decisions.md`](docs/decisions.md) | Architecture decisions with rationale |
+| [`docs/kube-brain-mac-body.md`](docs/kube-brain-mac-body.md) | Multi-machine setup with Tailscale |
+| [`docs/empirical-verification.md`](docs/empirical-verification.md) | CC stream-json event schemas, verified behaviour |
+| [`docs/idle-guards-design.md`](docs/idle-guards-design.md) | Idle guard escalation design |
+| [`docs/lifecycle-map.md`](docs/lifecycle-map.md) | Session lifecycle state machine |
+| [`server/CC-EVENTS.md`](server/CC-EVENTS.md) | CC event reference for state-builder development |
 
 ## Part of the brigade
 
