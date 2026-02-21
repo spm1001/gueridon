@@ -78,6 +78,21 @@ Create `~/.claude/settings.local.json`:
 
 Or set them interactively: `claude` → `/settings` → toggle each one.
 
+### Remove the default marketplace plugins
+
+The installer auto-installs the Anthropic plugin marketplace. The bridge
+doesn't use plugins and they add startup overhead.
+
+```bash
+rm -rf ~/.claude/plugins
+```
+
+To prevent re-installation, ensure `~/.claude.json` has:
+```json
+"officialMarketplaceAutoInstalled": false,
+"officialMarketplaceAutoInstallAttempted": true
+```
+
 > **Why disable auto-compact?** The bridge tracks context usage via the
 > `/context` endpoint and surfaces it in the UI. Auto-compaction happening
 > silently behind the bridge's back confuses the context gauge.
@@ -159,7 +174,36 @@ sudo journalctl -u gueridon --no-pager -n 30
 
 ## 7. Verify from phone
 
-<!-- TODO: fill in with exact steps and expected results -->
+1. Open `https://<hostname>.<tailnet>.ts.net/` on your phone
+2. You should see the folder switcher with project folders listed
+3. Tap a folder → send a test prompt → verify you get a response
+4. When prompted, allow notifications
+5. Send another prompt, then lock your phone — you should get a push notification when Claude finishes
+
+### Add to Home Screen (iOS)
+
+For the full app experience: Share → Add to Home Screen → open from there.
+This gives you standalone mode (no Safari chrome) and persistent push notifications.
+
+## Updating
+
+```bash
+cd ~/Repos/gueridon
+git pull
+npm install
+sudo systemctl restart gueridon
+```
+
+## Architecture
+
+```
+Phone (HTTPS) → tailscale serve (TLS termination, :443)
+                    → bridge (HTTP, :3001)
+                        → claude -p (stdio, per-folder)
+```
+
+`tailscale serve` handles certs and renewal. The bridge never touches TLS.
+Push subscriptions are stored in `~/.config/gueridon/push-subscriptions.json`.
 
 ## Troubleshooting
 
