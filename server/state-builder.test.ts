@@ -30,6 +30,18 @@ function textBlockStart(index = 0): Record<string, unknown> {
   return blockStart(index, { type: "text", text: "" });
 }
 
+function thinkingBlockStart(index = 0): Record<string, unknown> {
+  return blockStart(index, { type: "thinking", thinking: "" });
+}
+
+function thinkingDelta(index: number, thinking: string): Record<string, unknown> {
+  return streamEvent({
+    type: "content_block_delta",
+    index,
+    delta: { type: "thinking_delta", thinking },
+  });
+}
+
 function toolBlockStart(index: number, name: string, id: string): Record<string, unknown> {
   return blockStart(index, { type: "tool_use", id, name });
 }
@@ -664,6 +676,130 @@ describe("StateBuilder", () => {
         role: "user",
         content: "Hello Claude",
       });
+    });
+  });
+
+  describe("live event ordering: assistant before content_block_stop (bb-lonego)", () => {
+    it("content delta has real text when assistant fires before content_block_stop", () => {
+      const sb = makeBuilder();
+
+      // --- Turn 1: normal ordering (works fine) ---
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "First response"));
+      sb.handleEvent(blockStop(0));
+      // assistant AFTER content_block_stop on first turn
+      sb.handleEvent(
+        assistantMessage("msg_t1", [{ type: "text", text: "First response" }]),
+      );
+      sb.handleEvent(resultEvent());
+
+      expect(sb.getState().messages).toHaveLength(1);
+      expect(sb.getState().messages[0].content).toBe("First response");
+
+      // --- Turn 2: user prompt replayed, then CC responds ---
+      // The user event from the prompt
+      sb.handleEvent({
+        type: "user",
+        message: { role: "user", content: "Follow up question" },
+      });
+
+      // New turn starts
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Second response"));
+
+      // BUG TRIGGER: assistant fires BEFORE content_block_stop on 2nd+ turns
+      // (CC sends assistant before block_stop when user replay shifts ordering)
+      sb.handleEvent(
+        assistantMessage("msg_t2", [{ type: "text", text: "Second response" }]),
+      );
+
+      // content_block_stop fires AFTER assistant — must still emit real text
+      const delta = sb.handleEvent(blockStop(0));
+      expect(delta).toEqual({ type: "content", index: 0, text: "Second response" });
+
+      // State must have the message with real content
+      const state = sb.getState();
+      const assistantMsgs = state.messages.filter(m => m.role === "assistant");
+      expect(assistantMsgs).toHaveLength(2);
+      expect(assistantMsgs[1].content).toBe("Second response");
+    });
+
+    it("extended thinking: assistant fires after thinking block, text block patched by content_block_stop", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      // Thinking block (index 0)
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "Let me think about this..."));
+      // First assistant event fires AFTER thinking, BEFORE text block
+      sb.handleEvent(
+        assistantMessage("msg_think", [
+          { type: "thinking", thinking: "Let me think about this..." },
+          { type: "text", text: "Hello!" }, // CC includes full content, but streaming isn't done
+        ]),
+      );
+      sb.handleEvent(blockStop(0)); // thinking block stop
+
+      // Text block (index 1) starts after thinking completes
+      sb.handleEvent(textBlockStart(1));
+      sb.handleEvent(textDelta(1, "Hello!"));
+
+      // Second assistant event — SAME ID, deduped
+      sb.handleEvent(
+        assistantMessage("msg_think", [
+          { type: "thinking", thinking: "Let me think about this..." },
+          { type: "text", text: "Hello!" },
+        ]),
+      );
+
+      // Text block stop — must patch the committed message
+      const delta = sb.handleEvent(blockStop(1));
+      expect(delta).toEqual({ type: "content", index: 1, text: "Hello!" });
+
+      // The critical check: state.messages must have content, not null
+      sb.handleEvent(resultEvent());
+      const state = sb.getState();
+      const msg = state.messages[0];
+      expect(msg.role).toBe("assistant");
+      expect(msg.content).toBe("Hello!");
+    });
+
+    it("replay still works: consecutive assistant messages without message_start", () => {
+      // Verify the replaying flag doesn't break the replay path
+      const sb = makeBuilder();
+
+      const events = [
+        JSON.stringify({ source: "cc", event: {
+          type: "assistant",
+          message: {
+            id: "msg_r1", role: "assistant",
+            content: [{ type: "text", text: "First" }],
+            usage: { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          },
+        }}),
+        // Second assistant message — no message_start between them in replay
+        JSON.stringify({ source: "cc", event: {
+          type: "assistant",
+          message: {
+            id: "msg_r2", role: "assistant",
+            content: [{ type: "text", text: "Second" }],
+            usage: { input_tokens: 200, output_tokens: 20, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          },
+        }}),
+      ];
+
+      sb.replayFromJSONL(events);
+      const assistantMsgs = sb.getState().messages.filter(m => m.role === "assistant");
+      expect(assistantMsgs).toHaveLength(2);
+      expect(assistantMsgs[0].content).toBe("First");
+      expect(assistantMsgs[1].content).toBe("Second");
+      // Second message must NOT inherit first's text
+      expect(assistantMsgs[1].content).not.toBe("FirstSecond");
     });
   });
 

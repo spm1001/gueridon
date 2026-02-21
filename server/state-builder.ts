@@ -88,6 +88,11 @@ export class StateBuilder {
   // assistant message doesn't inherit the first message's tool calls.
   private lastCommittedToolCalls: BBToolCall[] = [];
 
+  // True during replayFromJSONL — controls whether handleAssistant resets
+  // currentText/currentToolCalls. During live streaming, onMessageStart handles
+  // the reset; during replay, message_start never fires so handleAssistant must.
+  private replaying = false;
+
   // Dedup & context
   private seenMessageIds = new Set<string>();
   private contextWindow = DEFAULT_CONTEXT_WINDOW;
@@ -128,6 +133,7 @@ export class StateBuilder {
 
   /** Replay JSONL events (from parseSessionJSONL). Builds state silently — no deltas. */
   replayFromJSONL(events: string[]): void {
+    this.replaying = true;
     for (const str of events) {
       let wrapper: { event?: Record<string, unknown> };
       try {
@@ -140,6 +146,7 @@ export class StateBuilder {
         this.handleEvent(ccEvent);
       }
     }
+    this.replaying = false;
   }
 
   // -- Event handlers --
@@ -260,6 +267,15 @@ export class StateBuilder {
     const blockType = this.blockTypes.get(index);
 
     if (blockType === "text") {
+      // Also patch the committed assistant message in state.messages.
+      // With extended thinking, handleAssistant fires (and commits) after the
+      // thinking block but BEFORE the text block completes. The second assistant
+      // event is deduped. Without this patch, the state snapshot at turn end
+      // has content: null and overwrites the client's delta-updated view.
+      const lastMsg = this.state.messages[this.state.messages.length - 1];
+      if (lastMsg?.role === "assistant") {
+        lastMsg.content = this.currentText || lastMsg.content;
+      }
       return { type: "content", index, text: this.currentText };
     }
 
@@ -349,13 +365,19 @@ export class StateBuilder {
     this.state.messages.push(msg);
 
     // Save this message's tool calls so handleUser can attach results to them.
-    // Reset currentToolCalls and currentText so a subsequent assistant message
-    // in replay (where message_start never fires) doesn't inherit these.
     // toolIdToIndex is intentionally NOT cleared here — handleUser needs it next,
     // and tool_use_ids are unique per session so stale entries don't collide.
     this.lastCommittedToolCalls = msg.tool_calls || [];
-    this.currentText = "";
-    this.currentToolCalls = [];
+
+    // Only reset during replay (where message_start never fires between
+    // consecutive assistant messages). During live streaming, onMessageStart
+    // handles the reset — and resetting here would clobber currentText before
+    // content_block_stop can emit it (CC sends assistant BEFORE content_block_stop
+    // on 2nd+ turns due to user replay event shifting ordering).
+    if (this.replaying) {
+      this.currentText = "";
+      this.currentToolCalls = [];
+    }
 
     return null; // full state sent on result
   }
