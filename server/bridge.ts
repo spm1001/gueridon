@@ -1,232 +1,143 @@
-import { WebSocketServer, WebSocket } from "ws";
-import { spawn, ChildProcess } from "child_process";
-import { randomUUID } from "crypto";
-import { createInterface } from "readline";
-import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
-import { readFileSync, readdirSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+/**
+ * Guéridon bridge — SSE + POST HTTP server serving the BB frontend.
+ *
+ * Static files: GET / (index.html), /sw.js, /manifest.json, /icon-*.svg
+ * SSE stream:   GET /events
+ * Commands:     POST /session/:folder, /prompt/:folder, /abort/:folder, /exit/:folder
+ * Queries:      GET /folders
+ * Push:         POST /push/subscribe, /push/unsubscribe
+ */
+
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { spawn, type ChildProcess } from "node:child_process";
+import { createInterface } from "node:readline";
+import { readFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { execFile } from "node:child_process";
-import { createServer, IncomingMessage, ServerResponse } from "node:http";
-import { basename, join } from "node:path";
-import { scanFolders, getLatestSession, getLatestHandoff, getSessionJSONLPath, hasExitMarker, writeExitMarker, FolderInfo, SCAN_ROOT } from "./folders.js";
-import { generateFolderName } from "./fun-names.js";
-import { getVapidPublicKey, addSubscription, removeSubscription, pushTurnComplete, pushAskUser } from "./push.js";
+import { randomUUID } from "node:crypto";
+
 import {
-  IDLE_TIMEOUT_MS,
-  PING_INTERVAL_MS,
-  PONG_TIMEOUT_MS,
-  KILL_ESCALATION_MS,
-  EARLY_EXIT_MS,
   buildCCArgs,
-  getActiveSessions as getActiveSessionsFromSessions,
-  resolveSessionForFolder,
-  validateFolderPath,
-  parseSessionJSONL,
-  resolveStaticFile,
-  checkIdle,
-  DEFAULT_IDLE_GUARDS,
+  KILL_ESCALATION_MS,
   CONFLATION_INTERVAL_MS,
-  MESSAGE_BUFFER_CAP,
-  BACKPRESSURE_THRESHOLD,
+  isUserTextEcho,
   isStreamDelta,
   extractDeltaInfo,
   buildMergedDelta,
-  isUserTextEcho,
-  isExitCommand,
   extractLocalCommandOutput,
-  type IdleSessionState,
+  validateFolderPath,
+  parseSessionJSONL,
+  getActiveSessions,
+  resolveSessionForFolder,
   type PendingDelta,
+  type SessionProcessInfo,
 } from "./bridge-logic.js";
 
-// --- Configuration ---
+import {
+  scanFolders,
+  getLatestSession,
+  getLatestHandoff,
+  hasExitMarker,
+  writeExitMarker,
+  getSessionJSONLPath,
+  SCAN_ROOT,
+} from "./folders.js";
 
-const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
+import { StateBuilder } from "./state-builder.js";
+import { getVapidPublicKey, pushTurnComplete, addSubscription, removeSubscription } from "./push.js";
 
-// --- Protocol types ---
+// -- Types --
 
-// Browser → Bridge
-interface ClientPrompt {
-  type: "prompt";
-  text?: string;
-  content?: Array<{ type: string; [key: string]: unknown }>;
-}
-interface ClientAbort {
-  type: "abort";
-}
-interface ClientListFolders {
-  type: "listFolders";
-}
-interface ClientConnectFolder {
-  type: "connectFolder";
-  path: string;
-}
-interface ClientCreateFolder {
-  type: "createFolder";
-}
-interface ClientDeleteFolder {
-  type: "deleteFolder";
-  path: string;
-}
-interface ClientPushSubscribe {
-  type: "pushSubscribe";
-  subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
-}
-interface ClientPushUnsubscribe {
-  type: "pushUnsubscribe";
-  endpoint: string;
-}
-type ClientMessage =
-  | ClientPrompt
-  | ClientAbort
-  | ClientListFolders
-  | ClientConnectFolder
-  | ClientCreateFolder
-  | ClientDeleteFolder
-  | ClientPushSubscribe
-  | ClientPushUnsubscribe;
+/**
+ * SSE Reconnect Contract
+ *
+ * EventSource auto-reconnects on transport failure. The bridge treats each
+ * GET /events as a fresh connection (lobby mode, no session). The client
+ * must restore session binding after reconnect:
+ *
+ * 1. Client opens EventSource with stable clientId: /events?clientId=X
+ * 2. Bridge sends: hello (with clientId echo) → folders
+ * 3. Client re-POSTs /session/:folder (from location.hash or JS state)
+ * 4. Bridge sends: full state snapshot for that session
+ * 5. Client is caught up — no gap, no replay needed
+ *
+ * Stale delta protection:
+ * - Every broadcast event carries `session: folderName`
+ * - Client MUST discard events where session !== current folder
+ * - Session switch: old deltas may be in-flight; session field is the guard
+ *
+ * Manual reconnect fallback:
+ * - If no events (including pings) for 60s, client should tear down
+ *   EventSource and create a new one. Pings fire every 30s, so 60s
+ *   silence means the connection is dead but TCP hasn't noticed.
+ */
 
-// Bridge → Browser
-interface BridgeConnected {
-  source: "bridge";
-  type: "connected";
-  sessionId: string;
-  resumed: boolean;
+interface SSEClient {
+  res: ServerResponse;
+  folder: string | null; // null = lobby mode
+  eventSeq: number;      // monotonic event counter for Last-Event-ID
 }
-interface BridgePromptReceived {
-  source: "bridge";
-  type: "promptReceived";
-}
-interface BridgePromptQueued {
-  source: "bridge";
-  type: "promptQueued";
-  position: number; // 1-based position in queue
-}
-interface BridgeError {
-  source: "bridge";
-  type: "error";
-  error: string;
-}
-interface BridgeProcessExit {
-  source: "bridge";
-  type: "processExit";
-  code: number | null;
-  signal: string | null;
-}
-interface BridgeLobbyConnected {
-  source: "bridge";
-  type: "lobbyConnected";
-  vapidPublicKey: string | null;
-}
-interface BridgeFolderList {
-  source: "bridge";
-  type: "folderList";
-  folders: FolderInfo[];
-}
-interface BridgeHistoryStart {
-  source: "bridge";
-  type: "historyStart";
-}
-interface BridgeHistoryEnd {
-  source: "bridge";
-  type: "historyEnd";
-}
-interface BridgeFolderCreated {
-  source: "bridge";
-  type: "folderCreated";
-  folder: FolderInfo;
-}
-interface BridgeCCEvent {
-  source: "cc";
-  event: Record<string, unknown>;
-}
-interface BridgeSessionClosed {
-  source: "bridge";
-  type: "sessionClosed";
-  deliberate: boolean;
-}
-interface BridgeFolderDeleted {
-  source: "bridge";
-  type: "folderDeleted";
-  path: string;
-}
-interface BridgePushSubscribed {
-  source: "bridge";
-  type: "pushSubscribed";
-}
-type ServerMessage =
-  | BridgeConnected
-  | BridgePromptReceived
-  | BridgePromptQueued
-  | BridgeError
-  | BridgeProcessExit
-  | BridgeLobbyConnected
-  | BridgeFolderList
-  | BridgeFolderCreated
-  | BridgeHistoryStart
-  | BridgeHistoryEnd
-  | BridgeCCEvent
-  | BridgeSessionClosed
-  | BridgeFolderDeleted
-  | BridgePushSubscribed;
-
-// --- Session state ---
 
 interface Session {
   id: string;
-  folder: string; // Folder path — always set via connectFolder
-  resumable: boolean; // True when CC has state for this session ID.
-  // Used for both spawn strategy (--resume vs --session-id) and the `resumed`
-  // field on the `connected` message to the client. These overlap today but are
-  // conceptually distinct — if we need to distinguish "fresh WS to existing CC
-  // session" from "WS reconnecting to active bridge session", split this field.
+  folder: string;
+  folderName: string;
+  stateBuilder: StateBuilder;
   process: ChildProcess | null;
-  clients: Set<WebSocket>; // All browser tabs connected to this session
-  messageBuffer: string[]; // Serialized CC events for replay on reconnect
-  stderrBuffer: string[]; // Capture stderr for early-exit diagnostics
-  spawnedAt: number | null; // Timestamp of last spawn, for early-exit detection
-  // Idle guard state
-  turnInProgress: boolean; // True between user prompt and result event
-  _hadContentThisTurn: boolean; // True if any content_block_start seen this turn
-  lastOutputTime: number | null; // Updated on every parsed stdout line
-  idleStart: number | null; // When last client disconnected (null = clients connected)
-  idleCheckTimer: ReturnType<typeof setTimeout> | null; // Replaces old idleTimer
-  guardWasDeferred: boolean; // For grace period detection
-  // Conflation: batch content_block_delta events for fewer ws.send() calls
-  pendingDeltas: Map<string, PendingDelta>; // Keyed by `${index}:${deltaType}`
+  clients: Set<SSEClient>;
+  resumable: boolean;
+  stderrBuffer: string[];
+  spawnedAt: number | null;
+  turnInProgress: boolean;
+  hadContentThisTurn: boolean;
+  lastOutputTime: number | null;
+  promptQueue: { text?: string; content?: unknown[] }[];
+  pendingDeltas: Map<string, PendingDelta>;
   flushTimer: ReturnType<typeof setTimeout> | null;
-  // Message queueing: prompts sent while CC is mid-turn
-  promptQueue: ClientPrompt[];
-  // Last-known context usage percentage (from result event)
+  graceTimer: ReturnType<typeof setTimeout> | null;
+  initTimer: ReturnType<typeof setTimeout> | null;
   contextPct: number | null;
 }
 
-const sessions = new Map<string, Session>();
+// -- State --
 
-// --- Session persistence (survives bridge restart) ---
-// Persists session→folder+PID mapping so the bridge can reap orphaned CC
-// processes on startup. Without this, a bridge restart leaves CC processes
-// running and the new bridge might spawn duplicates for the same session.
+const sessions = new Map<string, Session>();       // keyed by folder path
+const allClients = new Set<SSEClient>();
+const clientsById = new Map<string, SSEClient>();
 
-const SESSION_FILE = join(homedir(), ".config", "gueridon", "sessions.json");
+const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
+const GRACE_MS = 60_000;
+const INIT_TIMEOUT_MS = 30_000;
+
+// -- Orphan reaping --
+
+const SESSION_FILE = join(homedir(), ".config", "gueridon", "sse-sessions.json");
 
 interface SessionRecord {
   sessionId: string;
   folder: string;
   pid: number;
-  spawnedAt: number; // Date.now() — guards against PID recycling
+  spawnedAt: number;
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Debounced write of active sessions to disk. */
 function persistSessions(): void {
-  if (persistTimer) return; // already scheduled
+  if (persistTimer) return;
   persistTimer = setTimeout(async () => {
     persistTimer = null;
     const records: SessionRecord[] = [];
     for (const s of sessions.values()) {
       if (s.process?.pid) {
-        records.push({ sessionId: s.id, folder: s.folder, pid: s.process.pid, spawnedAt: s.spawnedAt ?? Date.now() });
+        records.push({
+          sessionId: s.id,
+          folder: s.folder,
+          pid: s.process.pid,
+          spawnedAt: s.spawnedAt ?? Date.now(),
+        });
       }
     }
     try {
@@ -238,12 +149,7 @@ function persistSessions(): void {
   }, 500);
 }
 
-/**
- * Reap orphaned CC processes from a previous bridge instance.
- * Called once at startup, before the server starts accepting connections.
- * Sends SIGTERM to any CC processes we previously spawned that are still alive.
- * They'll flush their state; the next connectFolder will --resume cleanly.
- */
+/** Reap orphaned CC processes from a previous bridge instance. */
 function reapOrphans(): void {
   if (!existsSync(SESSION_FILE)) return;
 
@@ -251,1091 +157,914 @@ function reapOrphans(): void {
   try {
     records = JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
   } catch {
-    return; // corrupt or empty file
+    return;
   }
 
-  const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h — beyond this, PID may have recycled
+  const MAX_AGE_MS = 24 * 60 * 60 * 1000;
   let reaped = 0;
   for (const rec of records) {
-    // Guard against PID recycling: skip records older than 24h
     if (rec.spawnedAt && Date.now() - rec.spawnedAt > MAX_AGE_MS) {
-      console.log(`[bridge] skipping stale orphan record pid=${rec.pid} (spawned ${Math.round((Date.now() - rec.spawnedAt) / 3600000)}h ago)`);
+      console.log(`[bridge] skipping stale orphan pid=${rec.pid} (spawned ${Math.round((Date.now() - rec.spawnedAt) / 3600000)}h ago)`);
       continue;
     }
     try {
-      // Signal 0 = check if alive without killing
-      process.kill(rec.pid, 0);
-      // Still alive — send SIGTERM so it exits cleanly
-      console.log(
-        `[bridge] reaping orphan CC pid=${rec.pid} session=${rec.sessionId.slice(0, 8)} folder=${basename(rec.folder)}`
-      );
+      process.kill(rec.pid, 0); // check alive
+      console.log(`[bridge] reaping orphan CC pid=${rec.pid} session=${rec.sessionId.slice(0, 8)} folder=${basename(rec.folder)}`);
       process.kill(rec.pid, "SIGTERM");
       reaped++;
     } catch {
-      // Process already dead — normal after a crash
+      // already dead
     }
   }
 
-  // Clean up the file — we've handled all orphans
-  try {
-    unlinkSync(SESSION_FILE);
-  } catch { /* ignore */ }
-
+  try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
   if (reaped > 0) {
     console.log(`[bridge] reaped ${reaped} orphaned CC process(es)`);
   }
 }
 
-// --- Per-connection state ---
-// Ping/pong is a connection concern (WS health), not a session concern (process lifecycle).
+// -- SSE helpers --
 
-interface PingPongState {
-  pingTimer: ReturnType<typeof setInterval> | null;
-  pongTimer: ReturnType<typeof setTimeout> | null;
-  pongHandler: (() => void) | null;
-}
-
-interface Connection {
-  ping: PingPongState;
-  state:
-    | { mode: "lobby" }
-    | { mode: "session"; session: Session };
-}
-
-const connections = new Map<WebSocket, Connection>();
-
-/** Build activeProcesses map from sessions for scanFolders. */
-function getActiveSessions(): Map<string, import("./bridge-logic.js").ActiveSessionInfo> {
-  const infos = new Map<string, import("./bridge-logic.js").SessionProcessInfo>();
-  for (const [id, s] of sessions) {
-    infos.set(id, {
-      folder: s.folder,
-      process: s.process,
-      turnInProgress: s.turnInProgress,
-      clientCount: s.clients.size,
-    });
-  }
-  return getActiveSessionsFromSessions(infos);
-}
-
-// --- CC process management ---
-
-function spawnCC(sessionId: string, resume: boolean, cwd: string): ChildProcess {
-  const args = buildCCArgs(sessionId, resume);
-
-  const proc = spawn("claude", args, {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env },
-    cwd,
-  });
-
-  console.log(
-    `[bridge] spawned CC pid=${proc.pid} session=${sessionId}${resume ? " (resume)" : ""} cwd=${cwd}`
-  );
-  return proc;
-}
-
-/** Kill a process with SIGTERM, escalate to SIGKILL after timeout */
-function killWithEscalation(proc: ChildProcess, sessionId: string): void {
-  if (!proc.pid) return;
-  proc.kill("SIGTERM");
-  const escalation = setTimeout(() => {
-    try {
-      // Check if process is still alive
-      process.kill(proc.pid!, 0);
-      console.log(
-        `[bridge] SIGTERM didn't stop CC session=${sessionId}, escalating to SIGKILL`
-      );
-      proc.kill("SIGKILL");
-    } catch {
-      // Process already gone — good
-    }
-  }, KILL_ESCALATION_MS);
-  // Don't let the timer keep the Node process alive
-  escalation.unref();
-}
-
-/**
- * Destroy a session: flush deltas, cancel idle, kill process, remove from map.
- * Does NOT notify clients — caller handles that (different messages for
- * different contexts: sessionClosed for /exit, nothing for idle kill).
- */
-function destroySession(session: Session): void {
-  // Transition all connected clients back to lobby mode.
-  // Prevents zombie: conn.state referencing a dead session would let
-  // a late-arriving message spawn a new CC process for a /exit'd session.
-  for (const client of session.clients) {
-    const c = connections.get(client);
-    if (c) c.state = { mode: "lobby" };
-  }
-  cancelIdleCheck(session);
-  if (session.flushTimer) {
-    clearTimeout(session.flushTimer);
-    session.flushTimer = null;
-  }
-  session.pendingDeltas.clear();
-  if (session.process) {
-    killWithEscalation(session.process, session.id);
-  }
-  sessions.delete(session.id);
-  persistSessions();
-}
-
-function sendToClient(ws: WebSocket | null, msg: ServerMessage): void {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(msg));
-  }
-}
-
-/** Send a message to all connected clients for a session. */
-function broadcast(session: Session, msg: ServerMessage): void {
-  broadcastSerialized(session, JSON.stringify(msg), false);
-}
-
-/**
- * Send pre-serialized data to all connected clients.
- * When respectBackpressure is true, skips clients whose write buffer is saturated —
- * safe for delta events (client gets the next batch), unsafe for structural events.
- */
-function broadcastSerialized(session: Session, data: string, respectBackpressure: boolean): void {
-  for (const client of session.clients) {
-    if (client.readyState !== WebSocket.OPEN) continue;
-    if (respectBackpressure && client.bufferedAmount >= BACKPRESSURE_THRESHOLD) continue;
-    client.send(data);
-  }
-}
-
-/**
- * Flush all pending content_block_delta events as merged deltas.
- * Called on timer tick (250ms) and before any non-delta event (to preserve ordering).
- */
-function flushPendingDeltas(session: Session): void {
-  if (session.flushTimer) {
-    clearTimeout(session.flushTimer);
-    session.flushTimer = null;
-  }
-
-  for (const pending of session.pendingDeltas.values()) {
-    const merged = buildMergedDelta(pending);
-    const serialized = JSON.stringify({ source: "cc", event: merged });
-    broadcastSerialized(session, serialized, true);
-    pushToBuffer(session, serialized);
-  }
-  session.pendingDeltas.clear();
-}
-
-/** Push to messageBuffer with cap to prevent unbounded memory on long sessions. */
-function pushToBuffer(session: Session, serialized: string): void {
-  session.messageBuffer.push(serialized);
-  if (session.messageBuffer.length > MESSAGE_BUFFER_CAP) {
-    // Drop oldest 10% to avoid doing this every push
-    const dropCount = Math.floor(MESSAGE_BUFFER_CAP * 0.1);
-    session.messageBuffer.splice(0, dropCount);
-  }
-}
-
-// --- Idle check lifecycle ---
-
-function startIdleCheck(session: Session): void {
-  cancelIdleCheck(session);
-  session.idleStart = Date.now();
-  session.guardWasDeferred = false;
-  scheduleIdleCheck(session, IDLE_TIMEOUT_MS);
-}
-
-function cancelIdleCheck(session: Session): void {
-  if (session.idleCheckTimer) {
-    clearTimeout(session.idleCheckTimer);
-    session.idleCheckTimer = null;
-  }
-  session.idleStart = null;
-  session.guardWasDeferred = false;
-}
-
-function scheduleIdleCheck(session: Session, delayMs: number): void {
-  session.idleCheckTimer = setTimeout(() => {
-    if (session.idleStart === null) return; // client reconnected — cancelled
-
-    const state: IdleSessionState = {
-      turnInProgress: session.turnInProgress,
-      lastOutputTime: session.lastOutputTime,
-    };
-
-    const action = checkIdle(
-      session.idleStart,
-      session.guardWasDeferred,
-      DEFAULT_IDLE_GUARDS,
-      state,
-    );
-
-    if (action.action === "kill") {
-      console.log(
-        `[bridge] idle check: killing CC session=${session.id} (${action.reason})`,
-      );
-      destroySession(session);
-    } else {
-      console.log(`[bridge] idle check: session=${session.id} — ${action.reason}`);
-      session.guardWasDeferred = action.guardDeferred;
-      scheduleIdleCheck(session, action.delayMs);
-    }
-  }, delayMs);
-}
-
-/** Write to CC stdin with error handling (fixes TOCTOU race) */
-function writeToStdin(session: Session, data: string): boolean {
-  const stdin = session.process?.stdin;
-  if (!stdin) return false;
+function sendSSE(client: SSEClient, event: string, data: unknown): boolean {
   try {
-    stdin.write(data);
-    return true;
-  } catch (err) {
-    console.error(
-      `[bridge] stdin write failed session=${session.id}:`,
-      (err as Error).message
+    client.eventSeq++;
+    return client.res.write(
+      `id: ${client.eventSeq}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
     );
-    broadcast(session, {
-      source: "bridge",
-      type: "error",
-      error: "CC process stdin closed unexpectedly",
-    });
+  } catch {
+    cleanupClient(client);
     return false;
   }
 }
 
-/**
- * Deliver a prompt to CC stdin — handles lazy spawn, buffering, and broadcast.
- * Used for both immediate sends and queue flushes.
- */
-function deliverPrompt(ws: WebSocket | null, session: Session, msg: ClientPrompt): void {
-  // Lazy spawn: start CC process on first prompt (or respawn if dead)
-  const needsResume = session.process === null && session.resumable;
-  if (!ensureProcess(session, needsResume)) return;
+function cleanupClient(client: SSEClient): void {
+  allClients.delete(client);
+  // Remove from clientsById (iterate — no reverse map)
+  for (const [id, c] of clientsById) {
+    if (c === client) { clientsById.delete(id); break; }
+  }
+  if (client.folder) detachFromSession(client);
+}
 
-  // Buffer the user message for replay BEFORE writing to stdin.
-  const ccContent = msg.content ?? msg.text;
-  const userEvent = JSON.stringify({
-    source: "cc",
-    event: { type: "user", message: { role: "user", content: ccContent } },
-  });
-  pushToBuffer(session, userEvent);
-  // Broadcast to other tabs so they see the user message immediately
+function broadcastToSession(session: Session, event: string, data: unknown): void {
+  const payload = { folder: session.folderName, ...(data as Record<string, unknown>) };
   for (const client of session.clients) {
-    if (client !== ws && client.readyState === WebSocket.OPEN) {
-      client.send(userEvent);
-    }
+    sendSSE(client, event, payload);
   }
+}
 
-  // Write prompt to CC stdin
-  const envelope = JSON.stringify({
-    type: "user",
-    message: { role: "user", content: ccContent },
+// -- SSE connection --
+
+function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): SSEClient {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
   });
-  if (writeToStdin(session, envelope + "\n")) {
-    session.turnInProgress = true;
-    if (ws) sendToClient(ws, { source: "bridge", type: "promptReceived" });
+  res.socket?.setKeepAlive(true, 10_000);
+
+  // Last-Event-ID: sent by EventSource on auto-reconnect (SSE spec)
+  const lastEventId = req.headers["last-event-id"] as string | undefined;
+  const reconnect = !!lastEventId;
+
+  const client: SSEClient = { res, folder: null, eventSeq: 0 };
+  allClients.add(client);
+  clientsById.set(clientId, client);
+
+  const vapidPublicKey = getVapidPublicKey();
+  sendSSE(client, "hello", { version: 1, clientId, reconnect, ...(vapidPublicKey ? { vapidPublicKey } : {}) });
+
+  // Send folders asynchronously
+  scanFolders(buildActiveSessionsMap()).then((folders) =>
+    sendSSE(client, "folders", { folders }),
+  );
+
+  res.on("close", () => {
+    allClients.delete(client);
+    clientsById.delete(clientId);
+    if (client.folder) detachFromSession(client);
+  });
+
+  return client;
+}
+
+// -- Session attach/detach --
+
+function attachToSession(client: SSEClient, session: Session): void {
+  if (session.graceTimer) {
+    clearTimeout(session.graceTimer);
+    session.graceTimer = null;
+  }
+  client.folder = session.folder;
+  session.clients.add(client);
+}
+
+function detachFromSession(client: SSEClient): void {
+  const session = sessions.get(client.folder!);
+  if (!session) return;
+  session.clients.delete(client);
+  client.folder = null;
+
+  if (session.clients.size === 0 && session.process) {
+    session.graceTimer = setTimeout(() => {
+      if (session.process) {
+        killWithEscalation(session.process);
+      }
+      sessions.delete(session.folder);
+    }, GRACE_MS);
   }
 }
 
-/** Flush the next queued prompt after a turn completes. */
-function flushPromptQueue(session: Session): void {
-  const next = session.promptQueue.shift();
-  if (!next) return;
-  console.log(`[bridge] flushing queued prompt session=${session.id} (${session.promptQueue.length} remaining)`);
-  // ws=null: queued prompt has no specific originator — ack was already sent as promptQueued
-  deliverPrompt(null, session, next);
-}
+// -- Active sessions map for folder scanner --
 
-/**
- * Recover local command output from the session JSONL.
- *
- * CC's local slash commands (/context, /cost, /compact) produce no stdout in
- * -p mode, but CC writes <local-command-stdout> entries to the session JSONL.
- * When a turn completes with no content blocks, read the JSONL tail to find
- * and broadcast the missing output.
- */
-async function recoverLocalCommandOutput(session: Session): Promise<void> {
-  try {
-    const jsonlPath = getSessionJSONLPath(session.folder, session.id);
-    const content = await readFile(jsonlPath, "utf-8");
-    const serialized = extractLocalCommandOutput(content);
-    if (serialized) {
-      const parsed = JSON.parse(serialized);
-      const charCount = parsed.event?.message?.content?.length || 0;
-      console.log(`[bridge] recovered local command output (${charCount} chars) session=${session.id}`);
-      broadcastSerialized(session, serialized, false);
-      pushToBuffer(session, serialized);
-    }
-  } catch {
-    // JSONL not found or unreadable — nothing to recover
+function buildActiveSessionsMap(): Map<string, { sessionId: string; activity: "working" | "waiting"; contextPct: number | null }> {
+  const infos = new Map<string, SessionProcessInfo>();
+  for (const [folder, session] of sessions) {
+    infos.set(session.id, {
+      folder,
+      process: session.process ? { exitCode: session.process.exitCode } : null,
+      turnInProgress: session.turnInProgress,
+      clientCount: session.clients.size,
+      contextPct: session.contextPct,
+    });
   }
+  return getActiveSessions(infos);
 }
 
-function wireProcessToSession(session: Session): void {
-  const proc = session.process;
-  if (!proc || !proc.stdout) return;
+// -- CC process lifecycle --
 
-  session.resumable = true; // CC now has state for this session ID
-  session.stderrBuffer = [];
+function spawnCC(session: Session): void {
+  const args = buildCCArgs(session.id, session.resumable);
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([k]) => k !== "CLAUDECODE" && k !== "CLAUDE_CODE_ENTRYPOINT",
+    ),
+  );
+  session.process = spawn("claude", args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    env,
+    cwd: session.folder,
+  });
+  session.resumable = true;
   session.spawnedAt = Date.now();
+  session.stderrBuffer = [];
+  wireProcess(session);
+  console.log(`[bridge] spawned CC for ${session.folderName} (session ${session.id}, pid ${session.process.pid})`);
+  persistSessions();
 
-  // Parse CC stdout line-by-line as JSONL
-  const rl = createInterface({ input: proc.stdout });
+  // Init timeout: if CC doesn't emit an init event within 30s, kill it.
+  // This catches hung resumes (observed: 90s stall on third concurrent resume).
+  session.initTimer = setTimeout(() => {
+    session.initTimer = null;
+    if (session.process) {
+      console.error(`[bridge] init timeout for ${session.folderName} (pid ${session.process.pid}) — killing`);
+      killWithEscalation(session.process);
+      broadcastToSession(session, "delta", {
+        type: "status",
+        status: "error",
+        error: "CC failed to initialise within 30s",
+      });
+    }
+  }, INIT_TIMEOUT_MS);
+}
+
+function wireProcess(session: Session): void {
+  const proc = session.process!;
+  const rl = createInterface({ input: proc.stdout! });
+
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
     try {
       const event = JSON.parse(trimmed);
-      // Track output time for idle guard staleness detection
       session.lastOutputTime = Date.now();
-      // Track whether CC streamed any content blocks this turn
-      if (event.type === "content_block_start") {
-        session._hadContentThisTurn = true;
-      }
-
-      // Detect turn completion: result event means CC finished its turn
-      if (event.type === "result") {
-        // Capture context usage for lobby switcher
-        if (event.usage) {
-          const used = (event.usage.input_tokens || 0) + (event.usage.output_tokens || 0);
-          const limit = event.usage.context_window || 200000;
-          session.contextPct = Math.round((used / limit) * 100);
-        }
-        // Local commands (/context, /cost, /help) produce no stdout in -p mode.
-        // CC writes <local-command-stdout> to the session JSONL but not the pipe.
-        // If this turn had no content blocks, check the JSONL for local command output.
-        if (!session._hadContentThisTurn) {
-          recoverLocalCommandOutput(session).catch((err) =>
-            console.error(`[bridge] local command recovery failed:`, err),
-          );
-        }
-        session._hadContentThisTurn = false;
-        session.turnInProgress = false;
-        // Flush next queued prompt (if any) now that CC is idle
-        flushPromptQueue(session);
-        // Push notification if no clients connected (phone-in-pocket)
-        if (session.clients.size === 0) {
-          pushTurnComplete(session.folder).catch(() => {});
-        }
-      }
-
-      // Detect AskUserQuestion tool use — Claude needs input
-      if (event.type === "content_block_start" &&
-          event.content_block?.type === "tool_use" &&
-          event.content_block?.name === "AskUserQuestion" &&
-          session.clients.size === 0) {
-        pushAskUser(session.folder).catch(() => {});
-      }
-
-      // Conflation: content_block_delta events are merged and flushed on a timer.
-      // Everything else flushes pending deltas first (ordering) then sends immediately.
-      const deltaInfo = extractDeltaInfo(event);
-      if (deltaInfo) {
-        const existing = session.pendingDeltas.get(deltaInfo.key);
-        if (existing) {
-          existing.accumulated += deltaInfo.payload;
-        } else {
-          session.pendingDeltas.set(deltaInfo.key, {
-            index: deltaInfo.index,
-            deltaType: deltaInfo.deltaType,
-            field: deltaInfo.field,
-            accumulated: deltaInfo.payload,
-          });
-        }
-        if (!session.flushTimer) {
-          session.flushTimer = setTimeout(() => flushPendingDeltas(session), CONFLATION_INTERVAL_MS);
-        }
-      } else {
-        // Non-delta: flush pending deltas first to preserve event ordering
-        flushPendingDeltas(session);
-        const serialized = JSON.stringify({ source: "cc", event });
-        broadcastSerialized(session, serialized, false);
-        // Skip CC user text echoes from buffer — bridge already injected user
-        // messages when receiving the prompt (handleSessionMessage). CC echoes
-        // (from --replay-user-messages) are redundant in the buffer and would
-        // cause duplicate user messages during replay. Tool results (array
-        // content) are NOT echoes — they're CC's own output and must be buffered.
-        if (!isUserTextEcho(event)) {
-          pushToBuffer(session, serialized);
-        }
-      }
+      if (isUserTextEcho(event)) return;
+      handleCCEvent(session, event);
     } catch {
-      // Non-JSON output from CC (startup banners, warnings)
-      console.log(`[bridge] non-json stdout: ${trimmed.slice(0, 200)}`);
+      console.log(`[bridge] non-json: ${trimmed.slice(0, 200)}`);
     }
   });
 
-  // Capture stderr for diagnostics
-  if (proc.stderr) {
-    const stderrRl = createInterface({ input: proc.stderr });
-    stderrRl.on("line", (line) => {
-      console.log(`[bridge] stderr: ${line}`);
-      // Keep last 20 lines for early-exit diagnostics
-      session.stderrBuffer.push(line);
-      if (session.stderrBuffer.length > 20) session.stderrBuffer.shift();
-    });
-  }
+  // Stderr: keep last 20 lines for diagnostics
+  const stderrRl = createInterface({ input: proc.stderr! });
+  stderrRl.on("line", (line) => {
+    session.stderrBuffer.push(line);
+    if (session.stderrBuffer.length > 20) session.stderrBuffer.shift();
+  });
 
-  // Process exit
   proc.on("exit", (code, signal) => {
-    const uptime = session.spawnedAt ? Date.now() - session.spawnedAt : null;
-    console.log(
-      `[bridge] CC exited session=${session.id} code=${code} signal=${signal} uptime=${uptime}ms`
-    );
-
-    // Flush any buffered deltas before exit events — clients see the last chunk
-    flushPendingDeltas(session);
-
-    // Early exit with non-zero code = likely flag/version problem
-    if (
-      code !== 0 &&
-      signal === null &&
-      uptime !== null &&
-      uptime < EARLY_EXIT_MS
-    ) {
-      const stderr = session.stderrBuffer.join("\n");
-      const hint = stderr || "No stderr output captured";
-      broadcast(session, {
-        source: "bridge",
-        type: "error",
-        error: `CC process failed immediately (${uptime}ms). Likely a flag or version problem.\n${hint}`,
-      });
-    }
-
-    broadcast(session, {
-      source: "bridge",
-      type: "processExit",
-      code,
-      signal: signal ?? null,
-    });
-    session.process = null;
-    session.spawnedAt = null;
-    session.turnInProgress = false;
-    persistSessions();
-    // Discard queued prompts — CC is dead, context is gone.
-    // User will see the processExit banner and can re-send.
-    if (session.promptQueue.length > 0) {
-      console.log(`[bridge] discarding ${session.promptQueue.length} queued prompt(s) after process exit`);
-      session.promptQueue = [];
-    }
-  });
-
-  proc.on("error", (err) => {
-    console.error(`[bridge] CC spawn error session=${session.id}:`, err);
-    broadcast(session, {
-      source: "bridge",
-      type: "error",
-      error: `Process error: ${err.message}`,
-    });
+    console.log(`[bridge] CC exited for ${session.folderName}: code=${code} signal=${signal}`);
+    if (session.initTimer) { clearTimeout(session.initTimer); session.initTimer = null; }
+    const wasMidTurn = session.turnInProgress;
     session.process = null;
     session.spawnedAt = null;
     session.turnInProgress = false;
     session.promptQueue = [];
+    flushPendingDeltas(session);
+
+    // Only synthesise result if CC died mid-turn (no result event was emitted).
+    // Clean exit after a completed turn already broadcast state via onTurnComplete.
+    if (wasMidTurn) {
+      session.stateBuilder.handleEvent({
+        type: "result",
+        subtype: signal ? "aborted" : "success",
+        is_error: !!signal,
+        result: signal ? `Process killed (${signal})` : "",
+      });
+    }
+    broadcastToSession(session, "state", {
+      ...session.stateBuilder.getState(),
+    });
     persistSessions();
   });
 }
 
-/** Ensure CC process is running for this session, spawning if needed. Returns true if ready. */
-function ensureProcess(session: Session, resume: boolean): boolean {
-  if (session.process && session.process.exitCode === null) return true;
+// -- Event handling + delta conflation --
+
+function handleCCEvent(session: Session, event: Record<string, unknown>): void {
+  // Clear init timeout on first system init event
+  if (event.type === "system" && event.subtype === "init" && session.initTimer) {
+    clearTimeout(session.initTimer);
+    session.initTimer = null;
+  }
+
+  // Track content for local command recovery
+  if (event.type === "stream_event") {
+    const inner = event.event as Record<string, unknown> | undefined;
+    if (inner?.type === "content_block_start") {
+      session.hadContentThisTurn = true;
+    }
+  }
+
+  // Content_block_delta → accumulate for conflation
+  if (isStreamDelta(event)) {
+    const info = extractDeltaInfo(event);
+    if (info) {
+      const existing = session.pendingDeltas.get(info.key);
+      if (existing) {
+        existing.accumulated += info.payload;
+      } else {
+        session.pendingDeltas.set(info.key, {
+          index: info.index,
+          deltaType: info.deltaType,
+          field: info.field,
+          accumulated: info.payload,
+        });
+      }
+      if (!session.flushTimer) {
+        session.flushTimer = setTimeout(
+          () => flushPendingDeltas(session),
+          CONFLATION_INTERVAL_MS,
+        );
+      }
+      // Do NOT pass original deltas to state builder — the merged delta
+      // from flushPendingDeltas handles it. Passing both would double the text.
+      return;
+    }
+  }
+
+  // Non-delta: flush pending deltas FIRST (ordering guarantee)
+  flushPendingDeltas(session);
+
+  // Route through state builder
+  const delta = session.stateBuilder.handleEvent(event);
+  if (delta) {
+    broadcastToSession(session, "delta", delta);
+  }
+
+  // Update context % on state builder
+  if (event.type === "result") {
+    const state = session.stateBuilder.getState();
+    session.contextPct = state.session.context_pct;
+    onTurnComplete(session);
+  }
+}
+
+function flushPendingDeltas(session: Session): void {
+  if (session.flushTimer) {
+    clearTimeout(session.flushTimer);
+    session.flushTimer = null;
+  }
+  for (const pending of session.pendingDeltas.values()) {
+    const merged = buildMergedDelta(pending);
+    const delta = session.stateBuilder.handleEvent(merged);
+    if (delta) broadcastToSession(session, "delta", delta);
+  }
+  session.pendingDeltas.clear();
+}
+
+// -- Turn completion --
+
+function onTurnComplete(session: Session): void {
+  session.turnInProgress = false;
+
+  // Recover local command output (CC writes to JSONL, not stdout)
+  if (!session.hadContentThisTurn) {
+    try {
+      const jsonlPath = getSessionJSONLPath(session.folder, session.id);
+      const content = readFileSync(jsonlPath, "utf-8");
+      const localOutput = extractLocalCommandOutput(content);
+      if (localOutput) {
+        const wrapper = JSON.parse(localOutput);
+        session.stateBuilder.handleEvent(wrapper.event);
+      }
+    } catch { /* JSONL may not exist yet */ }
+  }
+  session.hadContentThisTurn = false;
+
+  // Broadcast full state snapshot
+  broadcastToSession(session, "state", {
+    ...session.stateBuilder.getState(),
+  });
+
+  // Push notification when no SSE clients are watching (phone-in-pocket)
+  if (session.clients.size === 0) {
+    pushTurnComplete(session.folderName).catch((err) =>
+      console.warn("[bridge] push failed:", err),
+    );
+  }
+
+  // Flush prompt queue
+  if (session.promptQueue.length > 0) {
+    const next = session.promptQueue.shift()!;
+    deliverPrompt(session, next);
+  }
+}
+
+// -- Prompt delivery --
+
+function deliverPrompt(
+  session: Session,
+  msg: { text?: string; content?: unknown[] },
+): void {
+  if (!session.process || session.process.exitCode !== null) {
+    spawnCC(session);
+  }
+
+  // Add user message to state immediately
+  if (msg.text) {
+    session.stateBuilder.handleEvent({
+      type: "user",
+      message: { role: "user", content: msg.text },
+    });
+  }
+
+  // Write to CC stdin
+  const ccContent = msg.content || msg.text || "";
+  const envelope = JSON.stringify({
+    type: "user",
+    message: { role: "user", content: ccContent },
+  });
 
   try {
-    session.process = spawnCC(session.id, resume, session.folder);
-    wireProcessToSession(session);
-    persistSessions();
-    return true;
+    session.process!.stdin!.write(envelope + "\n");
+    session.turnInProgress = true;
+    session.hadContentThisTurn = false;
+
+    // Cold path: no SSE clients watching → close stdin after writing.
+    // CC will process the prompt, emit events, and exit when stdin closes.
+    // The process exit handler will broadcast state to any clients that reconnect.
+    if (session.clients.size === 0) {
+      session.process!.stdin!.end();
+      console.log(`[bridge] cold prompt delivered to ${session.folderName} (stdin closed)`);
+    } else {
+      console.log(`[bridge] prompt delivered to ${session.folderName}`);
+    }
   } catch (err) {
-    console.error(
-      `[bridge] failed to spawn CC session=${session.id}:`,
-      (err as Error).message
-    );
-    broadcast(session, {
-      source: "bridge",
-      type: "error",
-      error: `Failed to spawn CC: ${(err as Error).message}`,
+    console.error(`[bridge] stdin write failed:`, err);
+    broadcastToSession(session, "delta", {
+      type: "status",
+      status: "error",
+      error: "Failed to write to CC stdin",
     });
+  }
+}
+
+// -- Kill with escalation --
+
+function killWithEscalation(proc: ChildProcess): void {
+  if (!proc.pid) return;
+  proc.kill("SIGTERM");
+  const timer = setTimeout(() => {
+    try {
+      process.kill(proc.pid!, 0); // check alive
+      proc.kill("SIGKILL");
+    } catch { /* already gone */ }
+  }, KILL_ESCALATION_MS);
+  timer.unref();
+}
+
+// -- Session resolution --
+
+async function resolveOrCreateSession(folderPath: string): Promise<Session> {
+  const existing = sessions.get(folderPath);
+  if (existing) return existing;
+
+  const folderName = basename(folderPath);
+  const latestSession = await getLatestSession(folderPath);
+  const handoff = await getLatestHandoff(folderPath);
+  const exited = latestSession ? await hasExitMarker(folderPath, latestSession.id) : false;
+
+  const resolution = resolveSessionForFolder(
+    null, // no existing bridge session for this folder
+    latestSession,
+    handoff?.sessionId ?? null,
+    exited,
+    randomUUID,
+  );
+
+  const session: Session = {
+    id: resolution.sessionId,
+    folder: folderPath,
+    folderName,
+    stateBuilder: new StateBuilder(resolution.sessionId, folderName),
+    process: null,
+    clients: new Set(),
+    resumable: resolution.resumable,
+    stderrBuffer: [],
+    spawnedAt: null,
+    turnInProgress: false,
+    hadContentThisTurn: false,
+    lastOutputTime: null,
+    promptQueue: [],
+    pendingDeltas: new Map(),
+    flushTimer: null,
+    graceTimer: null,
+    initTimer: null,
+    contextPct: null,
+  };
+
+  // Replay JSONL if resuming (async to avoid blocking on large files)
+  if (resolution.resumable) {
+    try {
+      const jsonlPath = getSessionJSONLPath(folderPath, resolution.sessionId);
+      const content = await readFile(jsonlPath, "utf-8");
+      const events = parseSessionJSONL(content);
+      session.stateBuilder.replayFromJSONL(events);
+      console.log(`[bridge] replayed ${events.length} events for ${folderName}`);
+    } catch (err) {
+      console.log(`[bridge] JSONL replay failed for ${folderName}:`, err);
+    }
+  }
+
+  sessions.set(folderPath, session);
+  return session;
+}
+
+// -- HTTP body reader --
+
+const MAX_BODY_BYTES = 1024 * 1024; // 1MB — plenty for prompts with images
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new Error("Body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString()));
+    req.on("error", reject);
+  });
+}
+
+// -- Folder path resolution --
+
+function resolveFolder(folderParam: string): string | null {
+  // Accept both full paths and folder names
+  if (folderParam.startsWith("/")) {
+    return validateFolderPath(folderParam, SCAN_ROOT) ? folderParam : null;
+  }
+  // Treat as basename under SCAN_ROOT
+  const fullPath = `${SCAN_ROOT}/${folderParam}`;
+  return validateFolderPath(fullPath, SCAN_ROOT) ? fullPath : null;
+}
+
+// -- Session tear-down and creation --
+
+/**
+ * Tear down an existing session: kill CC process, notify clients, remove from map.
+ * Used when switching to a different session within the same folder.
+ */
+async function tearDownSession(session: Session): Promise<void> {
+  console.log(`[bridge] tearing down session ${session.id.slice(0, 8)} for ${session.folderName}`);
+
+  if (session.flushTimer) { clearTimeout(session.flushTimer); session.flushTimer = null; }
+  if (session.graceTimer) { clearTimeout(session.graceTimer); session.graceTimer = null; }
+  if (session.initTimer) { clearTimeout(session.initTimer); session.initTimer = null; }
+
+  if (session.process) {
+    killWithEscalation(session.process);
+    // Give it a moment to die so the exit handler fires
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  // Detach all clients (they'll be re-attached to the new session)
+  for (const client of session.clients) {
+    client.folder = null;
+  }
+  session.clients.clear();
+  sessions.delete(session.folder);
+  persistSessions();
+}
+
+/**
+ * Create a session with a specific ID and replay JSONL if resumable.
+ */
+async function createSessionWithId(
+  folderPath: string,
+  sessionId: string,
+  resumable: boolean,
+): Promise<Session> {
+  const folderName = basename(folderPath);
+  const session: Session = {
+    id: sessionId,
+    folder: folderPath,
+    folderName,
+    stateBuilder: new StateBuilder(sessionId, folderName),
+    process: null,
+    clients: new Set(),
+    resumable,
+    stderrBuffer: [],
+    spawnedAt: null,
+    turnInProgress: false,
+    hadContentThisTurn: false,
+    lastOutputTime: null,
+    promptQueue: [],
+    pendingDeltas: new Map(),
+    flushTimer: null,
+    graceTimer: null,
+    initTimer: null,
+    contextPct: null,
+  };
+
+  if (resumable) {
+    try {
+      const jsonlPath = getSessionJSONLPath(folderPath, sessionId);
+      const content = await readFile(jsonlPath, "utf-8");
+      const events = parseSessionJSONL(content);
+      session.stateBuilder.replayFromJSONL(events);
+      console.log(`[bridge] replayed ${events.length} events for ${folderName} (session ${sessionId.slice(0, 8)})`);
+    } catch (err) {
+      console.log(`[bridge] JSONL replay failed for ${folderName}:`, err);
+    }
+  }
+
+  sessions.set(folderPath, session);
+  return session;
+}
+
+// -- Route handlers --
+
+async function handleSession(
+  folderPath: string,
+  client: SSEClient | undefined,
+  res: ServerResponse,
+  requestedSessionId?: string,
+): Promise<void> {
+  // Detach from current session if switching
+  if (client?.folder && client.folder !== folderPath) {
+    detachFromSession(client);
+  }
+
+  // Three modes based on requestedSessionId:
+  //   undefined → current behavior (resolve latest)
+  //   "new"    → fresh session (no --resume)
+  //   "<uuid>" → resume that specific session
+  let session: Session;
+
+  if (!requestedSessionId) {
+    // Default: resolve latest session for folder
+    session = await resolveOrCreateSession(folderPath);
+  } else {
+    const existing = sessions.get(folderPath);
+
+    if (requestedSessionId === "new") {
+      // Tear down existing session for this folder if present
+      if (existing) {
+        await tearDownSession(existing);
+      }
+      const newId = randomUUID();
+      session = await createSessionWithId(folderPath, newId, false);
+    } else {
+      // Specific session UUID requested
+      if (existing && existing.id === requestedSessionId) {
+        // Already the active session — reuse
+        session = existing;
+      } else {
+        // Different session — tear down existing, create for the requested UUID
+        if (existing) {
+          await tearDownSession(existing);
+        }
+        session = await createSessionWithId(folderPath, requestedSessionId, true);
+      }
+    }
+  }
+
+  if (client) {
+    attachToSession(client, session);
+    // Send current state snapshot
+    sendSSE(client, "state", {
+      folder: session.folderName,
+      ...session.stateBuilder.getState(),
+    });
+  }
+
+  // Lazy spawn: CC starts on first prompt, not on session connect.
+  // This avoids cold starts when the user browses folders without sending.
+  // deliverPrompt() handles spawn-if-needed.
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({
+    sessionId: session.id,
+    folder: session.folderName,
+    resumable: session.resumable,
+  }));
+}
+
+async function handlePrompt(
+  folderPath: string,
+  body: string,
+  res: ServerResponse,
+): Promise<void> {
+  // Auto-create session if needed (cold path: prompt without prior POST /session)
+  const session = sessions.get(folderPath) || await resolveOrCreateSession(folderPath);
+
+  let parsed: { text?: string; content?: unknown[] };
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    res.writeHead(400).end(JSON.stringify({ error: "Invalid JSON" }));
+    return;
+  }
+
+  if (session.turnInProgress) {
+    // Queue the prompt
+    session.promptQueue.push(parsed);
+    res.writeHead(202, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ queued: true, position: session.promptQueue.length }));
+    return;
+  }
+
+  deliverPrompt(session, parsed);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ delivered: true }));
+}
+
+async function handleAbort(folderPath: string, res: ServerResponse): Promise<void> {
+  const session = sessions.get(folderPath);
+  if (!session?.process) {
+    res.writeHead(404).end(JSON.stringify({ error: "No running process" }));
+    return;
+  }
+
+  killWithEscalation(session.process);
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ aborted: true }));
+}
+
+async function handleExit(folderPath: string, res: ServerResponse): Promise<void> {
+  const session = sessions.get(folderPath);
+  if (!session) {
+    res.writeHead(404).end(JSON.stringify({ error: "No session for this folder" }));
+    return;
+  }
+
+  // Write exit marker
+  await writeExitMarker(session.folder, session.id);
+
+  // Kill process if running
+  if (session.process) {
+    killWithEscalation(session.process);
+  }
+
+  // Notify clients
+  broadcastToSession(session, "state", {
+    ...session.stateBuilder.getState(),
+    status: "idle",
+  });
+
+  // Clean up
+  for (const client of session.clients) {
+    client.folder = null;
+  }
+  session.clients.clear();
+  sessions.delete(folderPath);
+
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ exited: true }));
+}
+
+// -- Static file serving --
+
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+const STATIC_FILES: Record<string, { file: string; mime: string }> = {
+  "/": { file: "index.html", mime: "text/html; charset=utf-8" },
+  "/index.html": { file: "index.html", mime: "text/html; charset=utf-8" },
+  "/sw.js": { file: "sw.js", mime: "application/javascript" },
+  "/manifest.json": { file: "manifest.json", mime: "application/json" },
+  "/icon-192.svg": { file: "icon-192.svg", mime: "image/svg+xml" },
+  "/icon-512.svg": { file: "icon-512.svg", mime: "image/svg+xml" },
+};
+
+function serveStatic(pathname: string, res: ServerResponse): boolean {
+  const entry = STATIC_FILES[pathname];
+  if (!entry) return false;
+  try {
+    const content = readFileSync(join(PROJECT_ROOT, entry.file), "utf-8");
+    res.writeHead(200, {
+      "Content-Type": entry.mime,
+      "Cache-Control": "no-cache",
+    });
+    res.end(content);
+    return true;
+  } catch {
     return false;
   }
 }
 
-// --- Ping/pong ---
+// -- HTTP server --
 
-function startPingPong(ws: WebSocket, ping: PingPongState): void {
-  stopPingPong(ws, ping);
+const server = createServer(async (req, res) => {
+  // CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Client-ID");
 
-  ping.pingTimer = setInterval(() => {
-    if (ws.readyState !== WebSocket.OPEN) {
-      stopPingPong(ws, ping);
+  if (req.method === "OPTIONS") {
+    res.writeHead(204).end();
+    return;
+  }
+
+  const url = new URL(req.url!, `http://localhost`);
+
+  // GET /events — SSE connection
+  if (req.method === "GET" && url.pathname === "/events") {
+    const clientId = url.searchParams.get("clientId") || randomUUID();
+    setupSSE(req, res, clientId);
+    return;
+  }
+
+  // GET /folders — list folders
+  if (req.method === "GET" && url.pathname === "/folders") {
+    const folders = await scanFolders(buildActiveSessionsMap());
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ folders }));
+    return;
+  }
+
+  // POST routes: /session/:folder, /prompt/:folder, /abort/:folder, /exit/:folder
+  const match = url.pathname.match(/^\/(session|prompt|abort|exit)\/(.+)$/);
+  if (match && req.method === "POST") {
+    const [, action, folderParam] = match;
+    const folderPath = resolveFolder(decodeURIComponent(folderParam));
+
+    if (!folderPath) {
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid folder path" }));
       return;
     }
-    ws.ping();
-    ping.pongTimer = setTimeout(() => {
-      // Resolve label at timeout time so it reflects current mode
-      const conn = connections.get(ws);
-      const label =
-        conn?.state.mode === "session"
-          ? `session=${conn.state.session.id}`
-          : "lobby";
-      console.log(`[bridge] pong timeout, terminating connection (${label})`);
-      ws.terminate(); // Hard close — triggers 'close' event
-    }, PONG_TIMEOUT_MS);
-  }, PING_INTERVAL_MS);
 
-  const pongHandler = () => {
-    if (ping.pongTimer) {
-      clearTimeout(ping.pongTimer);
-      ping.pongTimer = null;
-    }
-  };
-  ping.pongHandler = pongHandler;
-  ws.on("pong", pongHandler);
-}
-
-function stopPingPong(ws: WebSocket, ping: PingPongState): void {
-  if (ping.pingTimer) {
-    clearInterval(ping.pingTimer);
-    ping.pingTimer = null;
-  }
-  if (ping.pongTimer) {
-    clearTimeout(ping.pongTimer);
-    ping.pongTimer = null;
-  }
-  if (ping.pongHandler) {
-    ws.removeListener("pong", ping.pongHandler);
-    ping.pongHandler = null;
-  }
-}
-
-// --- Static file serving ---
-
-const DIST_DIR = join(import.meta.dirname, "..", "dist");
-
-(function checkDistBuild() {
-  try {
-    let versionJson: { short?: string; time?: string } | null = null;
-    try {
-      versionJson = JSON.parse(readFileSync(join(DIST_DIR, "version.json"), "utf-8"));
-    } catch {
-      console.log("[bridge] ⚠ No dist/version.json — run 'npm run build'");
-    }
+    const clientId = req.headers["x-client-id"] as string;
+    const client = clientId ? clientsById.get(clientId) : undefined;
 
     try {
-      const assets = readdirSync(join(DIST_DIR, "assets"));
-      const indexBundle = assets.find((f) => f.startsWith("index-") && f.endsWith(".js"));
-      if (indexBundle) {
-        const content = readFileSync(join(DIST_DIR, "assets", indexBundle), "utf-8");
-        if (content.includes("location.hostname}:3001")) {
-          console.log("[bridge] ⚠ dist/ was built in dev mode — WS URL points to :3001. Rebuild with 'npm run build'");
+      switch (action) {
+        case "session": {
+          const sessionBody = await readBody(req);
+          let requestedSessionId: string | undefined;
+          if (sessionBody) {
+            try {
+              const parsed = JSON.parse(sessionBody);
+              if (parsed.sessionId) requestedSessionId = parsed.sessionId;
+            } catch { /* empty body or invalid JSON — use default */ }
+          }
+          await handleSession(folderPath, client, res, requestedSessionId);
+          return;
         }
+        case "prompt": {
+          const body = await readBody(req);
+          await handlePrompt(folderPath, body, res);
+          return;
+        }
+        case "abort":
+          await handleAbort(folderPath, res);
+          return;
+        case "exit":
+          await handleExit(folderPath, res);
+          return;
       }
-    } catch {}
-
-    if (versionJson) {
-      console.log(`[bridge] serving dist/ built from ${versionJson.short} at ${versionJson.time}`);
+    } catch (err) {
+      console.error(`[bridge] ${action} error:`, err);
+      if (!res.headersSent) {
+        res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
+      }
+      return;
     }
-  } catch {}
-})();
+  }
 
-async function serveStatic(req: IncomingMessage, res: ServerResponse) {
-  const pathname = new URL(req.url || "/", "http://localhost").pathname;
-
-  if (pathname === "/version") {
+  // POST /push/subscribe — store push subscription
+  if (req.method === "POST" && url.pathname === "/push/subscribe") {
     try {
-      const data = readFileSync(join(DIST_DIR, "version.json"), "utf-8");
-      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-cache" }).end(data);
+      const body = await readBody(req);
+      const sub = JSON.parse(body);
+      if (!sub.endpoint) {
+        res.writeHead(400).end(JSON.stringify({ error: "Missing endpoint" }));
+        return;
+      }
+      addSubscription(sub);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ subscribed: true }));
     } catch {
-      res.writeHead(404).end("Not found");
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid subscription" }));
     }
     return;
   }
 
-  const resolved = resolveStaticFile(pathname, DIST_DIR);
-
-  if (!resolved.ok) {
-    res.writeHead(resolved.status).end(resolved.status === 403 ? "" : "Not found");
+  // POST /push/unsubscribe — remove push subscription
+  if (req.method === "POST" && url.pathname === "/push/unsubscribe") {
+    try {
+      const body = await readBody(req);
+      const { endpoint } = JSON.parse(body);
+      if (!endpoint) {
+        res.writeHead(400).end(JSON.stringify({ error: "Missing endpoint" }));
+        return;
+      }
+      removeSubscription(endpoint);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ unsubscribed: true }));
+    } catch {
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid body" }));
+    }
     return;
   }
 
-  try {
-    const data = await readFile(resolved.filePath);
-    if (resolved.cache) {
-      res.setHeader("Cache-Control", "public, max-age=86400");
-    } else {
-      // index.html must not be cached — stale HTML references old asset hashes
-      res.setHeader("Cache-Control", "no-cache");
-    }
-    res.writeHead(200, { "Content-Type": resolved.mime }).end(data);
-  } catch {
-    res.writeHead(404).end("Not found");
+  // Static files — index.html, sw.js, manifest.json, icons
+  if (req.method === "GET" && serveStatic(url.pathname, res)) return;
+
+  res.writeHead(404).end("Not found");
+});
+
+// -- Ping loop --
+
+const pingTimer = setInterval(() => {
+  for (const client of allClients) {
+    sendSSE(client, "ping", {}); // sendSSE handles cleanup on failure
   }
+}, 30_000);
+pingTimer.unref(); // don't prevent clean shutdown
+
+// -- Graceful shutdown --
+
+function shutdown(signal: string): void {
+  console.log(`[bridge] ${signal} received, shutting down...`);
+
+  // Stop accepting new connections
+  server.close();
+
+  // Stop pinging
+  clearInterval(pingTimer);
+
+  // Kill all child CC processes
+  for (const session of sessions.values()) {
+    if (session.flushTimer) clearTimeout(session.flushTimer);
+    if (session.graceTimer) clearTimeout(session.graceTimer);
+    if (session.initTimer) clearTimeout(session.initTimer);
+    if (session.process) {
+      console.log(`[bridge] killing CC pid ${session.process.pid} (${session.folderName})`);
+      killWithEscalation(session.process);
+    }
+  }
+
+  // Close all SSE connections
+  for (const client of allClients) {
+    client.res.end();
+  }
+  allClients.clear();
+  clientsById.clear();
+  sessions.clear();
+
+  // Clean session file — graceful shutdown means no orphans
+  try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
+
+  // Give kill escalation time to fire if needed, then exit
+  setTimeout(() => process.exit(0), KILL_ESCALATION_MS + 500).unref();
 }
 
-// --- HTTP + WebSocket server ---
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// -- Start --
 
 reapOrphans();
 
-const httpServer = createServer(serveStatic);
-const wss = new WebSocketServer({ server: httpServer });
-
-httpServer.listen(PORT, () => {
-  console.log(`[bridge] HTTP + WebSocket server listening on http://localhost:${PORT}`);
+server.listen(PORT, () => {
+  console.log(`[bridge] listening on port ${PORT}`);
+  console.log(`[bridge] SCAN_ROOT: ${SCAN_ROOT}`);
 });
-
-httpServer.on("error", (err: NodeJS.ErrnoException) => {
-  if (err.code === "EADDRINUSE") {
-    console.error(
-      `[bridge] Port ${PORT} is already in use. Is another bridge running?\n` +
-        `  Kill it:  lsof -ti :${PORT} | xargs kill\n` +
-        `  Or use:   BRIDGE_PORT=3002 npm run bridge`
-    );
-    process.exit(1);
-  }
-  throw err;
-});
-
-/** Attach a WebSocket to a session, cancelling any idle check. */
-function attachWsToSession(ws: WebSocket, session: Session): void {
-  cancelIdleCheck(session);
-  // Always send historyStart/historyEnd — even for empty buffers. The client
-  // uses historyStart as a "new session boundary" signal to reset messages and
-  // context gauge. Without it, transparent reconnect to a fresh session leaves
-  // stale UI state from the previous session (gdn-zejeji).
-  sendToClient(ws, { source: "bridge", type: "historyStart" });
-  for (const serialized of session.messageBuffer) {
-    if (ws.readyState === WebSocket.OPEN) ws.send(serialized);
-  }
-  sendToClient(ws, { source: "bridge", type: "historyEnd" });
-  session.clients.add(ws);
-}
-
-/** Create a new folder with a fun name, git init it, return FolderInfo. */
-async function handleCreateFolder(ws: WebSocket): Promise<void> {
-  try {
-    const name = await generateFolderName(SCAN_ROOT);
-    const folderPath = join(SCAN_ROOT, name);
-    await mkdir(folderPath, { recursive: true });
-    await new Promise<void>((resolve, reject) => {
-      execFile("git", ["init"], { cwd: folderPath }, (err) =>
-        err ? reject(err) : resolve(),
-      );
-    });
-    console.log(`[bridge] created folder: ${folderPath}`);
-    const folder: FolderInfo = {
-      name,
-      path: folderPath,
-      state: "fresh",
-      activity: null,
-      sessionId: null,
-      lastActive: null,
-      handoffPurpose: null,
-      contextPct: null,
-    };
-    sendToClient(ws, { source: "bridge", type: "folderCreated", folder });
-  } catch (err) {
-    console.error(`[bridge] createFolder failed:`, err);
-    sendToClient(ws, {
-      source: "bridge",
-      type: "error",
-      error: `Failed to create folder: ${err}`,
-    });
-  }
-}
-
-/** Delete a folder: destroy session, remove directory if it's under SCAN_ROOT. */
-async function handleDeleteFolder(ws: WebSocket, folderPath: string): Promise<void> {
-  if (!folderPath || !validateFolderPath(folderPath, SCAN_ROOT)) {
-    sendToClient(ws, {
-      source: "bridge",
-      type: "error",
-      error: "Invalid folder path",
-    });
-    return;
-  }
-
-  // Destroy any active session for this folder
-  for (const session of sessions.values()) {
-    if (session.folder === folderPath) {
-      // Notify connected clients before destroying
-      broadcast(session, {
-        source: "bridge",
-        type: "sessionClosed",
-        deliberate: true,
-      });
-      destroySession(session);
-      break;
-    }
-  }
-
-  // Delete the directory (recursive — removes CC session files too)
-  try {
-    await rm(folderPath, { recursive: true, force: true });
-    console.log(`[bridge] deleted folder: ${folderPath}`);
-  } catch (err) {
-    console.error(`[bridge] deleteFolder failed:`, err);
-    sendToClient(ws, {
-      source: "bridge",
-      type: "error",
-      error: `Failed to delete folder: ${(err as Error).message}`,
-    });
-    return;
-  }
-
-  sendToClient(ws, { source: "bridge", type: "folderDeleted", path: folderPath });
-
-  // Send updated folder list to all lobby clients
-  const folders = await scanFolders(getActiveSessions());
-  for (const [client, conn] of connections) {
-    if (conn.state.mode === "lobby" && client.readyState === WebSocket.OPEN) {
-      sendToClient(client, { source: "bridge", type: "folderList", folders });
-    }
-  }
-}
-
-/** Handle messages on a session-mode connection. */
-async function handleSessionMessage(
-  ws: WebSocket,
-  session: Session,
-  msg: ClientMessage,
-): Promise<void> {
-  switch (msg.type) {
-    case "prompt": {
-      // Intercept exit commands — CC doesn't handle these in -p mode
-      // (content-array prompts with images have no text field)
-      if (msg.text && isExitCommand(msg.text)) {
-        console.log(`[bridge] exit command intercepted session=${session.id}`);
-        broadcast(session, {
-          source: "bridge",
-          type: "sessionClosed",
-          deliberate: true,
-        });
-        writeExitMarker(session.folder, session.id).catch((err) =>
-          console.error(`[bridge] failed to write .exit marker:`, err),
-        );
-        destroySession(session);
-        return;
-      }
-
-      // Queue if CC is mid-turn — flush when result event arrives
-      if (session.turnInProgress) {
-        session.promptQueue.push(msg);
-        const pos = session.promptQueue.length;
-        console.log(`[bridge] prompt queued (position ${pos}) session=${session.id}`);
-        sendToClient(ws, { source: "bridge", type: "promptQueued", position: pos });
-        break;
-      }
-
-      deliverPrompt(ws, session, msg);
-      break;
-    }
-
-    case "abort": {
-      if (session.process) {
-        console.log(`[bridge] aborting CC session=${session.id}`);
-        killWithEscalation(session.process, session.id);
-      }
-      break;
-    }
-
-    case "listFolders": {
-      // Allow folder listing even in session mode — read-only, needed for
-      // the folder picker to show accurate state (active dots, timestamps)
-      const folders = await scanFolders(getActiveSessions());
-      sendToClient(ws, { source: "bridge", type: "folderList", folders });
-      break;
-    }
-
-    case "createFolder": {
-      await handleCreateFolder(ws);
-      break;
-    }
-
-    case "deleteFolder": {
-      await handleDeleteFolder(ws, msg.path);
-      break;
-    }
-
-    case "connectFolder":
-      sendToClient(ws, {
-        source: "bridge",
-        type: "error",
-        error: `Cannot connectFolder on an active session`,
-      });
-      break;
-
-    default:
-      sendToClient(ws, {
-        source: "bridge",
-        type: "error",
-        error: `Unknown message type: ${(msg as any).type}`,
-      });
-  }
-}
-
-/** Handle messages on a lobby-mode connection. */
-async function handleLobbyMessage(
-  ws: WebSocket,
-  conn: Connection,
-  msg: ClientMessage,
-): Promise<void> {
-  switch (msg.type) {
-    case "listFolders": {
-      const folders = await scanFolders(getActiveSessions());
-      sendToClient(ws, { source: "bridge", type: "folderList", folders });
-      break;
-    }
-
-    case "createFolder": {
-      await handleCreateFolder(ws);
-      break;
-    }
-
-    case "connectFolder": {
-      const folderPath = msg.path;
-      if (!folderPath) {
-        sendToClient(ws, {
-          source: "bridge",
-          type: "error",
-          error: "connectFolder requires a path",
-        });
-        return;
-      }
-
-      if (!validateFolderPath(folderPath, SCAN_ROOT)) {
-        sendToClient(ws, {
-          source: "bridge",
-          type: "error",
-          error: "Folder path must be within scan root",
-        });
-        return;
-      }
-
-      // Find existing bridge session for this folder (multi-WS reconnect)
-      let existingSession: Session | null = null;
-      for (const s of sessions.values()) {
-        if (s.folder === folderPath) {
-          existingSession = s;
-          break;
-        }
-      }
-
-      // Resolve: reconnect, resume, or fresh?
-      const latestSession = await getLatestSession(folderPath);
-      const handoff = await getLatestHandoff(folderPath);
-      const exitMarker = latestSession ? await hasExitMarker(folderPath, latestSession.id) : false;
-      const resolution = resolveSessionForFolder(
-        existingSession ? { id: existingSession.id, resumable: existingSession.resumable } : null,
-        latestSession,
-        handoff?.sessionId ?? null,
-        exitMarker,
-        randomUUID,
-      );
-
-      const action = resolution.isReconnect ? "reconnect" : resolution.resumable ? "resume" : "fresh";
-      console.log(`[bridge] session resolution for ${basename(folderPath)}: ${action} (id=${resolution.sessionId.slice(0, 8)}, handoff=${handoff?.sessionId?.slice(0, 8) ?? "none"}, latestSession=${latestSession?.id.slice(0, 8) ?? "none"}, exit=${exitMarker})`);
-
-      let session: Session;
-      if (resolution.isReconnect) {
-        session = existingSession!;
-        attachWsToSession(ws, session);
-      } else {
-        session = {
-          id: resolution.sessionId,
-          folder: folderPath,
-          resumable: resolution.resumable,
-          process: null,
-          clients: new Set(),
-          messageBuffer: [],
-          stderrBuffer: [],
-          spawnedAt: null,
-          turnInProgress: false,
-          _hadContentThisTurn: false,
-          lastOutputTime: null,
-          idleStart: null,
-          idleCheckTimer: null,
-          guardWasDeferred: false,
-          pendingDeltas: new Map(),
-          flushTimer: null,
-          promptQueue: [],
-          contextPct: null,
-        };
-
-        // Pre-populate message buffer from JSONL for paused sessions
-        // so the existing replay mechanism shows conversation history
-        if (resolution.resumable) {
-          try {
-            const jsonlPath = getSessionJSONLPath(folderPath, resolution.sessionId);
-            const jsonlContent = await readFile(jsonlPath, "utf-8");
-            session.messageBuffer = parseSessionJSONL(jsonlContent);
-            console.log(
-              `[bridge] loaded ${session.messageBuffer.length} events from JSONL for session=${resolution.sessionId}`,
-            );
-          } catch {
-            // No JSONL file or read error — not fatal, just no history
-          }
-        }
-
-        sessions.set(resolution.sessionId, session);
-        // Attach after buffer is populated so attachWsToSession replays history
-        attachWsToSession(ws, session);
-      }
-
-      // Transition: lobby → session (no listener surgery — dispatcher reads mode)
-      conn.state = { mode: "session", session };
-
-      console.log(
-        `[bridge] connectFolder folder=${folderPath} session=${session.id} resumable=${session.resumable}`
-      );
-
-      sendToClient(ws, {
-        source: "bridge",
-        type: "connected",
-        sessionId: session.id,
-        resumed: session.resumable,
-      });
-      break;
-    }
-
-    case "deleteFolder": {
-      await handleDeleteFolder(ws, msg.path);
-      break;
-    }
-
-    case "prompt":
-    case "abort":
-      sendToClient(ws, {
-        source: "bridge",
-        type: "error",
-        error: `Cannot ${msg.type} in lobby — send connectFolder first`,
-      });
-      break;
-
-    default:
-      sendToClient(ws, {
-        source: "bridge",
-        type: "error",
-        error: `Unknown message type: ${(msg as any).type}`,
-      });
-  }
-}
-
-// --- Connection handler ---
-
-wss.on("connection", (ws: WebSocket) => {
-  // Every connection gets its own ping/pong state and a single set of handlers.
-  // All connections start in lobby mode — client sends connectFolder to join a session.
-  const ping: PingPongState = { pingTimer: null, pongTimer: null, pongHandler: null };
-  const conn: Connection = { ping, state: { mode: "lobby" } };
-  connections.set(ws, conn);
-  startPingPong(ws, ping);
-
-  sendToClient(ws, { source: "bridge", type: "lobbyConnected", vapidPublicKey: getVapidPublicKey() });
-  console.log("[bridge] client connected (lobby mode)");
-
-  // Single message handler — dispatches based on current mode.
-  // Both lobby and session messages use a queue chain to prevent interleaving.
-  // Lobby: connectFolder is async (getLatestSession, resolveSession) and mutates state.
-  // Session: listFolders is async (scanFolders). prompt/abort are sync but
-  // queuing them is harmless and keeps error handling consistent.
-  let lobbyQueue = Promise.resolve();
-  let sessionQueue = Promise.resolve();
-
-  ws.on("message", (data) => {
-    let msg: ClientMessage;
-    try {
-      msg = JSON.parse(data.toString());
-    } catch {
-      sendToClient(ws, {
-        source: "bridge",
-        type: "error",
-        error: "Invalid JSON from client",
-      });
-      return;
-    }
-
-    // Push subscription management — works in any mode
-    if (msg.type === "pushSubscribe") {
-      addSubscription(msg.subscription);
-      sendToClient(ws, { source: "bridge", type: "pushSubscribed" });
-      return;
-    }
-    if (msg.type === "pushUnsubscribe") {
-      removeSubscription(msg.endpoint);
-      return;
-    }
-
-    if (conn.state.mode === "session") {
-      // Capture session ref now — conn.state can change (e.g. destroySession
-      // transitions to lobby) before the queued .then() callback fires.
-      const session = conn.state.session;
-      sessionQueue = sessionQueue
-        .then(() => handleSessionMessage(ws, session, msg))
-        .catch((err) => console.error(`[bridge] session message error:`, err));
-    } else {
-      lobbyQueue = lobbyQueue
-        .then(() => handleLobbyMessage(ws, conn, msg))
-        .catch((err) => console.error(`[bridge] lobby message error:`, err));
-    }
-  });
-
-  // Single close handler — cleans up based on current mode.
-  ws.on("close", (code) => {
-    connections.delete(ws);
-    stopPingPong(ws, ping);
-
-    if (conn.state.mode === "session") {
-      const session = conn.state.session;
-      session.clients.delete(ws);
-
-      if (session.clients.size === 0) {
-        console.log(
-          `[bridge] last client disconnected session=${session.id} code=${code}`
-        );
-        startIdleCheck(session);
-      } else {
-        console.log(
-          `[bridge] client disconnected session=${session.id} code=${code} (${session.clients.size} remaining)`
-        );
-      }
-    } else {
-      console.log(`[bridge] lobby client disconnected code=${code}`);
-    }
-  });
-
-  ws.on("error", (err) => {
-    const label =
-      conn.state.mode === "session"
-        ? `session=${conn.state.session.id}`
-        : "lobby";
-    console.error(`[bridge] WS error (${label}):`, err);
-  });
-});
-
-// --- Graceful shutdown ---
-
-function shutdown() {
-  console.log("[bridge] shutting down...");
-
-  // Close all WebSocket connections and stop their ping/pong
-  for (const [ws, conn] of connections) {
-    stopPingPong(ws, conn.ping);
-    ws.close(1000, "Server shutting down");
-  }
-  connections.clear();
-
-  // Kill all CC processes and clear timers.
-  // Snapshot first — destroySession mutates the map.
-  const allSessions = [...sessions.values()];
-  for (const session of allSessions) {
-    destroySession(session);
-  }
-
-  wss.close();
-  httpServer.close(() => {
-    console.log("[bridge] closed");
-    process.exit(0);
-  });
-  // Force exit if graceful close takes too long
-  setTimeout(() => process.exit(1), 5_000).unref();
-}
-
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);

@@ -5,32 +5,18 @@
   "type": "module",
   "description": "Mobile web UI for Claude Code",
   "scripts": {
-    "dev": "vite",
-    "start": "npm run build && tsx server/bridge.ts",
-    "bridge": "tsx server/bridge.ts",
-    "build": "vite build",
-    "preview": "vite preview",
+    "start": "tsx server/bridge.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:mobile": "scripts/test-mobile.sh",
-    "test:mobile:stop": "scripts/test-mobile.sh --stop",
     "gdn": "tsx cli/gdn.ts"
   },
   "dependencies": {
-    "@mariozechner/mini-lit": "^0.2.1",
-    "@mariozechner/pi-agent-core": "^0.52.8",
-    "@mariozechner/pi-ai": "^0.52.8",
-    "lit": "^3.3.2",
-    "web-push": "^3.6.7",
-    "ws": "^8.19.0"
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.1.18",
-    "@types/ws": "^8.18.1",
     "jsdom": "^28.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vite": "^7.3.1",
     "vitest": "^4.0.18"
   }
 }

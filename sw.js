@@ -1,11 +1,14 @@
-// Guéridon service worker — notification handlers.
-// Offline caching (gdn-gabeda) will be added here later.
+// Guéridon service worker — push notification handlers.
+// Deep-link via hash fragments (/#folder-name).
 
-// Activate immediately on install — don't wait for all tabs to close.
-// Safe because we have no fetch handler yet (no cache to invalidate).
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  // Wipe all old caches (Vite PWA precache from Guéridon v1)
+  event.waitUntil(
+    caches.keys().then((names) =>
+      Promise.all(names.map((name) => caches.delete(name)))
+    ).then(() => self.clients.claim())
+  );
 });
 
 self.addEventListener("push", (event) => {
@@ -17,7 +20,7 @@ self.addEventListener("push", (event) => {
     badge: "/icon-192.svg",
     tag: data.tag || "gueridon-default",
     renotify: true,
-    data: { folder: data.folder || "/" },
+    data: { folder: data.folder || "" },
     vibrate: data.vibrate || [200],
   };
   event.waitUntil(self.registration.showNotification(title, options));
@@ -25,21 +28,19 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const folder = event.notification.data?.folder || "/";
+  const folder = event.notification.data?.folder || "";
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      // Focus an existing Guéridon tab if one exists
       for (const client of clients) {
         if (client.url.includes(self.location.origin)) {
           client.focus();
-          // Tell the client which folder triggered the notification
           client.postMessage({ type: "notificationClick", folder });
           return;
         }
       }
-      // No existing tab — open with folder context
-      const url = folder !== "/" ? `/?folder=${encodeURIComponent(folder)}` : "/";
+      // No existing tab — open with hash fragment for deep linking
+      const url = folder ? `/#${encodeURIComponent(folder)}` : "/";
       return self.clients.openWindow(url);
     })
   );

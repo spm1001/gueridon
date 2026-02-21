@@ -1,16 +1,2351 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
-    <title>Guéridon</title>
-    <link rel="manifest" href="/manifest.json" />
-    <link rel="apple-touch-icon" href="/icon-192.svg" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  </head>
-  <body class="bg-background">
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>Brisk Bear</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon-192.svg" type="image/svg+xml">
+<meta name="theme-color" content="#1a1a1a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #1a1a1a;
+    --surface: #242424;
+    --surface-raised: #2a2a2a;
+    --border: #333;
+    --text: #e8e8e8;
+    --text-dim: #777;
+    --text-mid: #aaa;
+    --accent: #c9a0ff;
+    --accent-dim: #6b4d8a;
+    --green: #4ade80;
+    --amber: #fbbf24;
+    --blue: #60a5fa;
+    --red: #f87171;
+    --radius: 10px;
+    --font: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --mono: 'SF Mono', Menlo, Consolas, monospace;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  html { font-size: 15px; }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* === Messages === */
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* User bubble */
+  .msg-user {
+    align-self: flex-end;
+    max-width: 85%;
+    background: var(--accent-dim);
+    color: #fff;
+    padding: 9px 14px;
+    border-radius: 18px 18px 4px 18px;
+    font-size: 0.93rem;
+  }
+
+  /* Assistant text */
+  .msg-assistant {
+    align-self: flex-start;
+    max-width: 92%;
+    font-size: 0.93rem;
+    padding: 2px 0;
+  }
+
+  /* Markdown in assistant messages */
+  .msg-assistant p { margin-bottom: 8px; }
+  .msg-assistant p:last-child { margin-bottom: 0; }
+  .msg-assistant strong { font-weight: 600; }
+  .msg-assistant em { font-style: italic; }
+
+  .msg-assistant code {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    background: var(--surface-raised);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  .msg-assistant pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
+  .msg-assistant pre code {
+    background: none;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+  }
+
+  .msg-assistant ul, .msg-assistant ol {
+    margin: 4px 0 8px 20px;
+  }
+
+  .msg-assistant li { margin-bottom: 2px; }
+
+  .msg-assistant table {
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 0.82rem;
+    width: 100%;
+  }
+
+  .msg-assistant th, .msg-assistant td {
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    text-align: left;
+  }
+
+  .msg-assistant th {
+    background: var(--surface-raised);
+    font-weight: 600;
+  }
+
+  /* === Tool calls === */
+  .tool-call {
+    align-self: flex-start;
+    max-width: 92%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 0.82rem;
+  }
+
+  /* Cluster consecutive tool calls tighter */
+  .tool-call + .tool-call {
+    margin-top: -6px;
+  }
+
+  .tool-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .tool-chevron {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    transition: transform 0.15s;
+    width: 14px;
+    text-align: center;
+  }
+
+  .tool-call[data-expanded="true"] .tool-chevron {
+    transform: rotate(90deg);
+  }
+
+  .tool-status-icon {
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+  }
+
+  .tool-status-icon[data-status="completed"] { color: var(--green); }
+  .tool-status-icon[data-status="running"] { color: var(--amber); }
+  .tool-status-icon[data-status="error"] { color: var(--red); }
+
+  .tool-name {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--text-mid);
+    font-size: 0.8rem;
+  }
+
+  .tool-input-preview {
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    margin-left: auto;
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tool-body {
+    display: none;
+    border-top: 1px solid var(--border);
+    padding: 8px 10px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    max-height: 150px;
+    overflow-y: auto;
+    background: var(--bg);
+  }
+
+  .tool-call[data-expanded="true"] .tool-body {
+    display: block;
+  }
+
+  /* Tool summary (coalesced successful calls) */
+  .tool-summary {
+    align-self: flex-start;
+    max-width: 92%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 0.82rem;
+  }
+
+  .tool-summary-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .tool-summary-text {
+    color: var(--text-dim);
+    font-size: 0.78rem;
+  }
+
+  .tool-summary-detail {
+    display: none;
+    border-top: 1px solid var(--border);
+    padding: 4px 10px;
+  }
+
+  .tool-summary[data-expanded="true"] .tool-summary-detail {
+    display: block;
+  }
+
+  .tool-summary[data-expanded="true"] .tool-chevron {
+    transform: rotate(90deg);
+  }
+
+  .tool-summary-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  .tool-summary-item .tool-name {
+    font-size: 0.75rem;
+  }
+
+  /* Error tool calls after a summary get spacing */
+  .tool-summary + .tool-call {
+    margin-top: 4px;
+  }
+
+  .tool-call + .tool-summary {
+    margin-top: 4px;
+  }
+
+  /* === Local command output (collapsible) === */
+  .local-cmd {
+    align-self: flex-start;
+    max-width: 92%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.82rem;
+    margin: 2px 0;
+    flex-shrink: 0;
+  }
+
+  .local-cmd-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    min-height: 32px;
+  }
+
+  .local-cmd-header .tool-chevron {
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .local-cmd-summary {
+    color: #ddd;
+    font-size: 0.82rem;
+  }
+
+  .local-cmd-body {
+    display: none;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    color: #bbb;
+    border-top: 1px solid var(--border);
+  }
+
+  .local-cmd[data-expanded="true"] .local-cmd-body {
+    display: block;
+  }
+
+  .local-cmd[data-expanded="true"] .tool-chevron {
+    transform: rotate(90deg);
+  }
+
+  /* Tables inside local command output */
+  .local-cmd-body table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+    margin: 6px 0;
+  }
+
+  .local-cmd-body th, .local-cmd-body td {
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+  }
+
+  .local-cmd-body th {
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  /* === Todos === */
+  .todos {
+    margin: 0 14px 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+
+  .todos-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+
+  .todo-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 0;
+    font-size: 0.82rem;
+  }
+
+  .todo-check {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+  }
+
+  .todo-item[data-status="completed"] .todo-check {
+    background: var(--green);
+    border-color: var(--green);
+    color: #000;
+  }
+
+  .todo-item[data-status="in_progress"] .todo-check {
+    border-color: var(--amber);
+    animation: pulse 2s infinite;
+  }
+
+  .todo-item[data-status="completed"] .todo-text {
+    color: var(--text-dim);
+    text-decoration: line-through;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* Running tool call gets a pulsing dot */
+  .tool-status-icon[data-status="running"] {
+    animation: pulse 2s infinite;
+  }
+
+  /* Stop button font size */
+  .send-btn[data-stop="true"] {
+    font-size: 0.7rem;
+  }
+
+  /* === Error toast === */
+  .error-toast {
+    margin: 0 14px 8px;
+    background: rgba(248, 113, 113, 0.15);
+    border: 1px solid var(--red);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 0.82rem;
+    color: var(--red);
+    display: none;
+  }
+
+  .error-toast.visible { display: block; }
+
+  /* === Input area === */
+  .input-area {
+    flex-shrink: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 8px 14px calc(var(--safe-bottom) + 4px);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+
+  .input-field {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 9px 14px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 16px; /* Prevents Safari auto-zoom on focus */
+    resize: none;
+    outline: none;
+    min-height: 38px;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+
+  .input-field:focus { border-color: var(--accent-dim); }
+  .input-field::placeholder { color: var(--text-dim); }
+
+  .send-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    border: none;
+    color: var(--bg);
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .send-btn[data-active="true"] { background: var(--accent); }
+  .send-btn[data-stop="true"] { background: var(--red); }
+
+  /* Slash command button */
+  .slash-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .slash-btn { display: none; } /* Hidden until slash_commands arrive from init */
+  .slash-btn.visible { display: flex; }
+  .slash-btn:active { background: var(--surface-hover); }
+  body[data-connection="disconnected"] .slash-btn { opacity: 0.3; pointer-events: none; }
+
+  /* Slash command sheet */
+  .slash-sheet-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 100;
+  }
+  .slash-sheet-overlay.open { display: block; }
+
+  .slash-sheet {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border-radius: 14px 14px 0 0;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 12px 0 calc(var(--safe-bottom) + 12px);
+  }
+  .slash-sheet-handle {
+    width: 36px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 0 auto 10px;
+  }
+  .slash-sheet-title {
+    padding: 0 16px 8px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .slash-cmd {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 11px 16px;
+    cursor: pointer;
+  }
+  .slash-cmd:active { background: var(--surface-hover); }
+  .slash-cmd-name {
+    font-family: var(--mono);
+    font-size: 0.9rem;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .slash-cmd-desc {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .slash-cmd-local {
+    font-size: 0.65rem;
+    color: var(--amber);
+    background: rgba(245,158,11,0.15);
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  /* Status bar */
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2px;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+
+  .status-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .status-project {
+    font-weight: 500;
+  }
+
+  .status-context {
+    font-family: var(--mono);
+  }
+
+  .status-context[data-level="low"] { color: var(--amber); }
+  .status-context[data-level="critical"] { color: var(--red); }
+
+  .status-model {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--accent-dim);
+  }
+
+  /* Connection indicator dot */
+  .status-connection {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    flex-shrink: 0;
+  }
+
+  .status-connection[data-state="disconnected"] {
+    background: var(--text-dim);
+    animation: pulse 2s infinite;
+  }
+
+  /* Reconnecting label */
+  .status-reconnecting {
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    display: none;
+  }
+
+  .status-reconnecting[data-visible="true"] {
+    display: inline;
+  }
+
+  /* Disconnected state: mute the whole UI */
+  body[data-connection="disconnected"] .messages {
+    opacity: 0.5;
+  }
+
+  body[data-connection="disconnected"] .input-field {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  body[data-connection="disconnected"] .send-btn {
+    opacity: 0.3;
+    pointer-events: none;
+  }
+
+  body[data-connection="disconnected"] .todos {
+    opacity: 0.5;
+  }
+
+  /* Activity indicator — shown when connected + busy */
+  .activity-bar {
+    height: 3px;
+    background: var(--bg);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .activity-bar[data-active="true"] .activity-bar-inner {
+    display: block;
+  }
+
+  .activity-bar-inner {
+    display: none;
+    height: 100%;
+    width: 30%;
+    background: var(--amber);
+    border-radius: 1px;
+    animation: slide 1.5s ease-in-out infinite;
+  }
+
+  .activity-bar[data-activity="thinking"] .activity-bar-inner { background: var(--accent); }
+  .activity-bar[data-activity="tool"] .activity-bar-inner { background: var(--amber); }
+  .activity-bar[data-activity="writing"] .activity-bar-inner { background: var(--green); }
+
+  @keyframes slide {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(250%); }
+    100% { transform: translateX(-100%); }
+  }
+
+  /* Queued message indicator */
+  .msg-user[data-queued="true"] {
+    opacity: 0.6;
+    border: 1px dashed var(--accent-dim);
+  }
+
+  .msg-user[data-queued="true"]::after {
+    content: 'queued';
+    display: block;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    text-align: right;
+    margin-top: 2px;
+  }
+
+  .msg-user[data-pending="true"] {
+    opacity: 0.5;
+    border: 1px dotted var(--text-dim);
+  }
+
+  .msg-user[data-pending="true"]::after {
+    content: 'pending';
+    display: block;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    text-align: right;
+    margin-top: 2px;
+  }
+
+  /* Undo send — tap target on a just-sent message */
+  .msg-undo {
+    display: flex;
+    justify-content: flex-end;
+    padding: 4px 0;
+  }
+
+  .msg-undo button {
+    background: none;
+    border: 1px solid var(--text-dim);
+    border-radius: 12px;
+    color: var(--text-dim);
+    font-family: var(--font);
+    font-size: 0.72rem;
+    padding: 3px 10px;
+    cursor: pointer;
+  }
+
+  .msg-undo button:active {
+    background: var(--surface-raised);
+  }
+
+  .msg-undo[data-fading="true"] {
+    animation: fadeOut 0.3s ease forwards;
+  }
+
+  @keyframes fadeOut {
+    to { opacity: 0; height: 0; padding: 0; overflow: hidden; }
+  }
+
+  /* === Session switcher — bottom sheet === */
+  .switcher-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99;
+    display: none;
+  }
+
+  .switcher-backdrop[data-open="true"] {
+    display: block;
+  }
+
+  .switcher {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 82vh;
+    background: var(--surface);
+    border-radius: 14px 14px 0 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    transform: translateY(100%);
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0s 0.25s;
+  }
+
+  .switcher[data-open="true"] {
+    transform: translateY(0) !important;
+    visibility: visible;
+    transition: transform 0.25s ease, visibility 0s;
+  }
+
+  .switcher-handle {
+    width: 36px;
+    height: 4px;
+    background: var(--text-dim);
+    border-radius: 2px;
+    margin: 8px auto 4px;
+    opacity: 0.4;
+  }
+
+  .switcher-header {
+    padding: 12px 14px 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .switcher-search {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 9px 14px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 0.93rem;
+    outline: none;
+  }
+
+  .switcher-search:focus { border-color: var(--accent-dim); }
+  .switcher-search::placeholder { color: var(--text-dim); }
+
+  .switcher-close {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .switcher-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 14px 20px;
+  }
+
+  .switcher-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0;
+    padding: 12px 10px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+
+  .switcher-item:active {
+    background: var(--surface);
+  }
+
+  .switcher-item[data-current="true"] {
+    background: var(--surface);
+    border-radius: 8px;
+    border-bottom-color: transparent;
+    margin-bottom: 2px;
+  }
+
+  .switcher-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .switcher-dot[data-status="active"] { background: var(--green); }
+  .switcher-dot[data-status="ended"] { background: none; border: 1.5px solid var(--text-dim); }
+  .switcher-dot[data-status="dormant"] { background: var(--amber); opacity: 0.5; }
+  .switcher-dot[data-status="old"] { background: var(--text-dim); opacity: 0.3; }
+
+  .switcher-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .switcher-project {
+    font-weight: 600;
+    font-size: 0.93rem;
+  }
+
+  .switcher-item[data-status="ended"] .switcher-project {
+    color: var(--text-mid);
+  }
+
+  .switcher-item[data-status="old"] .switcher-project {
+    color: var(--text-dim);
+  }
+
+  .switcher-last-msg {
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .switcher-meta {
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .switcher-context {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+
+  .switcher-context[data-level="low"] { color: var(--amber); }
+  .switcher-context[data-level="critical"] { color: var(--red); }
+
+  .switcher-time {
+    font-size: 0.68rem;
+    color: var(--text-dim);
+  }
+
+  .switcher-section {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 12px 10px 4px;
+  }
+
+  /* -- Session expansion within folder row -- */
+  .switcher-item-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 10px;
+  }
+
+  .switcher-item-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    cursor: pointer;
+  }
+
+  .switcher-chevron {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    transition: transform 0.15s ease;
+  }
+
+  .switcher-chevron[data-expanded="true"] {
+    transform: rotate(90deg);
+  }
+
+  .switcher-session-count {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    background: var(--border);
+    border-radius: 8px;
+    padding: 1px 5px;
+    flex-shrink: 0;
+  }
+
+  .switcher-sessions {
+    width: 100%;
+    padding-left: 28px;
+    margin-top: 4px;
+  }
+
+  .switcher-session-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .switcher-session-row:last-child {
+    border-bottom: none;
+  }
+
+  .switcher-session-row:active {
+    background: var(--surface);
+  }
+
+  .switcher-session-id {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--text-mid);
+    flex: 1;
+  }
+
+  .switcher-session-model {
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    color: var(--text-dim);
+  }
+
+  .switcher-new-session {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+    color: var(--accent-dim);
+    font-size: 0.78rem;
+  }
+
+  .switcher-new-session:active {
+    opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+
+  <div class="switcher-backdrop" id="switcherBackdrop"></div>
+  <div class="switcher" id="switcher">
+    <div class="switcher-handle"></div>
+    <div class="switcher-header">
+      <span class="status-connection" id="switcherConnectionDot"></span>
+      <input class="switcher-search" id="switcherSearch" type="text" placeholder="Filter sessions…">
+      <button class="switcher-close" id="switcherClose" aria-label="Close">&#x2715;</button>
+    </div>
+    <div class="switcher-list" id="switcherList"></div>
+  </div>
+
+  <div class="messages" id="messages"></div>
+
+  <div class="activity-bar" id="activityBar"><div class="activity-bar-inner"></div></div>
+
+  <div id="errorToast" class="error-toast"></div>
+
+  <div class="todos" id="todos" hidden>
+    <div class="todos-title">Progress</div>
+    <div id="todoList"></div>
+  </div>
+
+  <div class="slash-sheet-overlay" id="slashSheet">
+    <div class="slash-sheet">
+      <div class="slash-sheet-handle"></div>
+      <div class="slash-sheet-title">Commands</div>
+      <div id="slashList"></div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-row">
+      <button class="slash-btn" aria-label="Commands" id="slashBtn">/</button>
+      <textarea class="input-field" placeholder="Message Claude..." rows="1"></textarea>
+      <button class="send-btn" aria-label="Send">&#x2191;</button>
+    </div>
+    <div class="status-bar">
+      <div class="status-left">
+        <span class="status-connection" id="connectionDot"></span>
+        <span class="status-project" id="project"></span>
+        <span class="status-reconnecting" id="reconnecting">reconnecting…</span>
+        <span class="status-context" id="contextPct"></span>
+      </div>
+      <span class="status-model" id="model"></span>
+    </div>
+  </div>
+
+<script>
+let cachedState = null;
+let switcherOpen = false;
+let switcherSeeded = false;
+let switcherExpandedFolder = null; // folder name currently expanded in switcher
+
+// === Mode detection ===
+const params = new URLSearchParams(location.search);
+let bridgeUrl = params.get('bridge'); // Explicit bridge URL: ?bridge=http://kube:3001
+
+// === Push notifications ===
+let swRegistration = null;
+let swReady = null;
+let pushPermissionGranted = false;
+
+// Register service worker immediately (needed for push + PWA install)
+if ('serviceWorker' in navigator) {
+  swReady = navigator.serviceWorker.register('/sw.js').then(
+    (reg) => { swRegistration = reg; return reg; },
+    (e) => { console.warn('[push] SW registration failed:', e); return null; },
+  );
+  // Listen for notification click deep-links from service worker
+  navigator.serviceWorker.addEventListener('message', (ev) => {
+    if (ev.data?.type === 'notificationClick' && ev.data.folder) {
+      location.hash = ev.data.folder;
+    }
+  });
+} else {
+  swReady = Promise.resolve(null);
+}
+
+/** Request notification permission. Must be called from user gesture. */
+async function pushRequestPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') { pushPermissionGranted = true; return true; }
+  if (Notification.permission === 'denied') return false;
+  const result = await Notification.requestPermission();
+  pushPermissionGranted = result === 'granted';
+  return pushPermissionGranted;
+}
+
+/** Subscribe to push via bridge. Call after hello provides VAPID key. */
+async function pushSubscribe(vapidPublicKey) {
+  await swReady;
+  if (!swRegistration || !vapidPublicKey || !('PushManager' in window)) return;
+  try {
+    let sub = await swRegistration.pushManager.getSubscription();
+    if (!sub) {
+      const padding = '='.repeat((4 - (vapidPublicKey.length % 4)) % 4);
+      const b64 = (vapidPublicKey + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(b64);
+      const key = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) key[i] = raw.charCodeAt(i);
+      sub = await swRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    }
+    // POST subscription to bridge
+    if (bridgeUrl) {
+      await fetch(`${bridgeUrl}/push/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sub.toJSON()),
+      });
+      console.log('[push] Subscription sent to bridge');
+    }
+  } catch (e) {
+    console.warn('[push] Subscription failed:', e);
+  }
+}
+
+/** Show local notification (when page is unfocused and SW available). */
+function pushNotify(body, opts = {}) {
+  if (document.hasFocus()) return;
+  if (!pushPermissionGranted && Notification.permission !== 'granted') return;
+  const title = 'Guéridon';
+  if (swRegistration) {
+    swRegistration.showNotification(title, {
+      body,
+      icon: '/icon-192.svg',
+      badge: '/icon-192.svg',
+      tag: opts.tag || 'gueridon-default',
+      renotify: true,
+      vibrate: opts.vibrate || [200],
+      data: { folder: opts.folder || '' },
+    });
+  } else {
+    new Notification(title, { body, icon: '/icon-192.svg', tag: opts.tag || 'gueridon-default' });
+  }
+}
+
+// === SSE bridge client ===
+let sseSource = null;
+let sseClientId = 'bb-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+let sseCurrentFolder = null; // folder name we're connected to
+let sseWatchdog = null;
+const SSE_WATCHDOG_MS = 65_000; // 60s silence = dead (pings every 30s + margin)
+
+// Live state — shared between SSE and WS modes
+let liveState = {
+  session: {},
+  messages: [],
+  connection: 'disconnected',
+  status: 'idle',
+  error: null,
+  switcher: null,
+  _activity: null,
+};
+
+function sseConnect() {
+  if (!bridgeUrl) return;
+  if (sseSource) { sseSource.close(); sseSource = null; }
+
+  const url = `${bridgeUrl}/events?clientId=${encodeURIComponent(sseClientId)}`;
+  sseSource = new EventSource(url);
+
+  sseSource.addEventListener('hello', (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.version !== 1) {
+      console.error('[bb] protocol version mismatch, reloading');
+      location.reload();
+      return;
+    }
+    liveState.connection = 'connected';
+    liveState.error = null;
+    sseResetWatchdog();
+    sseRender();
+
+    // Subscribe to push if bridge provides VAPID key
+    if (data.vapidPublicKey) {
+      pushSubscribe(data.vapidPublicKey);
+    }
+
+    // Re-establish session from hash or previous state
+    if (data.reconnect && sseCurrentFolder) {
+      ssePostSession(sseCurrentFolder);
+    } else if (location.hash.length > 1) {
+      ssePostSession(location.hash.slice(1));
+    }
+  });
+
+  sseSource.addEventListener('folders', (ev) => {
+    const data = JSON.parse(ev.data);
+    sseResetWatchdog();
+    handleSSEFolders(data.folders || []);
+  });
+
+  sseSource.addEventListener('state', (ev) => {
+    const data = JSON.parse(ev.data);
+    sseResetWatchdog();
+    // Discard events for wrong folder (data.folder is the routing key; data.session is the session object)
+    if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
+    handleSSEState(data);
+  });
+
+  sseSource.addEventListener('delta', (ev) => {
+    const data = JSON.parse(ev.data);
+    sseResetWatchdog();
+    if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
+    handleSSEDelta(data);
+  });
+
+  sseSource.addEventListener('ping', () => {
+    sseResetWatchdog();
+  });
+
+  sseSource.onerror = () => {
+    liveState.connection = 'disconnected';
+    liveState._activity = null;
+    sseRender();
+    // EventSource auto-reconnects — no manual retry needed
+  };
+
+  sseSource.onopen = () => {
+    // Fires on initial connect and each reconnect
+    sseResetWatchdog();
+  };
+}
+
+function sseResetWatchdog() {
+  if (sseWatchdog) clearTimeout(sseWatchdog);
+  sseWatchdog = setTimeout(() => {
+    console.log('[bb] SSE watchdog: no events for 65s, reconnecting');
+    if (sseSource) { sseSource.close(); sseSource = null; }
+    liveState.connection = 'disconnected';
+    sseRender();
+    sseConnect();
+  }, SSE_WATCHDOG_MS);
+}
+
+function handleSSEFolders(folders) {
+  liveState.switcher = {
+    sessions: folders.map(f => ({
+      id: f.path || f.name,
+      project: f.name,
+      status: mapFolderState(f.state),
+      updated: f.lastActive,
+      last_message: f.handoffPurpose || '',
+      context_pct: f.contextPct || 0,
+      sessions: f.sessions || [],
+    })),
+  };
+
+  // Auto-connect: hash, first active, or open switcher
+  if (!sseCurrentFolder) {
+    let target = null;
+    if (location.hash.length > 1) {
+      const hashName = location.hash.slice(1);
+      target = folders.find(f => f.name === hashName || f.path === hashName);
+    }
+    if (!target) target = folders.find(f => f.state === 'active');
+    if (target) {
+      sseConnectFolder(target);
+    } else {
+      switcherOpen = true;
+    }
+  }
+  sseRender();
+}
+
+function handleSSEState(data) {
+  // Bridge broadcasts: { session: folderName, ...getState() }
+  // getState().session is {id, model, project, context_pct} — overwrites the string
+  // (later properties win in spread). So data.session is the object.
+
+  if (data.messages) liveState.messages = data.messages;
+  if (data.session && typeof data.session === 'object') {
+    liveState.session = { ...liveState.session, ...data.session };
+  }
+  if (data.status) liveState.status = data.status;
+  if (data.error !== undefined) liveState.error = data.error;
+  if (data.slashCommands !== undefined) liveState.slashCommands = data.slashCommands;
+  liveState.todos = data.todos || null; // full snapshot — clear stale file-mode todos
+
+  if (data.status === 'idle') {
+    liveState._activity = null;
+    // Local notification when Claude finishes (page unfocused)
+    const folder = sseCurrentFolder || '';
+    pushNotify(`Claude finished in ${folder}`, {
+      tag: `gueridon-done-${folder}`,
+      folder,
+    });
+  }
+
+  sseRender();
+}
+
+function handleSSEDelta(data) {
+  switch (data.type) {
+    case 'status':
+      liveState.status = data.status;
+      if (data.status === 'idle') liveState._activity = null;
+      break;
+
+    case 'message_start':
+      // New CC assistant turn — push a fresh skeleton so subsequent content/tool
+      // deltas don't overwrite the previous turn's message.
+      liveState.messages.push({ role: 'assistant', content: null });
+      break;
+
+    case 'activity':
+      liveState._activity = data.activity;
+      liveState.status = 'working';
+      // Ensure an assistant message exists for incoming content/tool deltas
+      ensureAssistantMessage();
+      break;
+
+    case 'content': {
+      const msg = ensureAssistantMessage();
+      msg.content = data.text;
+      break;
+    }
+
+    case 'tool_start': {
+      const msg = ensureAssistantMessage();
+      if (!msg.tool_calls) msg.tool_calls = [];
+      // Ensure we have an entry at this index
+      while (msg.tool_calls.length <= data.index) {
+        msg.tool_calls.push({ name: '', status: 'running', input: '', output: null, collapsed: true });
+      }
+      msg.tool_calls[data.index] = {
+        name: data.name,
+        status: 'running',
+        input: data.input || '',
+        output: null,
+        collapsed: true,
+      };
+      break;
+    }
+
+    case 'tool_complete': {
+      const last = liveState.messages[liveState.messages.length - 1];
+      if (last?.tool_calls?.[data.index]) {
+        last.tool_calls[data.index].status = data.status;
+        if (data.output) last.tool_calls[data.index].output = data.output;
+      }
+      break;
+    }
+  }
+  sseRender();
+}
+
+/** Ensure the last message is an assistant message — create one if not. */
+function ensureAssistantMessage() {
+  const last = liveState.messages[liveState.messages.length - 1];
+  if (last && last.role === 'assistant') return last;
+  const msg = { role: 'assistant', content: null };
+  liveState.messages.push(msg);
+  return msg;
+}
+
+async function ssePostSession(folderName, sessionId) {
+  try {
+    const body = sessionId ? { sessionId } : {};
+    const res = await fetch(`${bridgeUrl}/session/${encodeURIComponent(folderName)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Client-ID': sseClientId },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) console.error('[bb] POST /session failed:', res.status);
+  } catch (err) {
+    console.error('[bb] POST /session error:', err);
+  }
+}
+
+async function ssePostPrompt(folderName, text) {
+  try {
+    const res = await fetch(`${bridgeUrl}/prompt/${encodeURIComponent(folderName)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Client-ID': sseClientId },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) console.error('[bb] POST /prompt failed:', res.status);
+    return res.ok;
+  } catch (err) {
+    console.error('[bb] POST /prompt error:', err);
+    return false;
+  }
+}
+
+async function ssePostAbort(folderName) {
+  try {
+    await fetch(`${bridgeUrl}/abort/${encodeURIComponent(folderName)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Client-ID': sseClientId },
+    });
+  } catch (err) {
+    console.error('[bb] POST /abort error:', err);
+  }
+}
+
+function sseConnectFolder(folder, sessionId) {
+  const name = folder.name || folder;
+  // Allow reconnect to same folder if switching sessions
+  if (sseCurrentFolder === name && !sessionId) return;
+  sseCurrentFolder = name;
+  liveState.session = { project: name };
+  liveState.messages = [];
+  liveState.status = 'idle';
+  liveState._activity = null;
+  location.hash = name;
+  ssePostSession(name, sessionId);
+  sseRender();
+}
+
+let sseRenderQueued = false;
+function sseRender() {
+  if (sseRenderQueued) return;
+  sseRenderQueued = true;
+  requestAnimationFrame(() => {
+    sseRenderQueued = false;
+    cachedState = liveState;
+    renderStatusBar(liveState);
+    renderMessages(liveState.messages);
+    renderTodos(liveState.todos);
+    renderSwitcher(liveState);
+    document.getElementById('slashBtn').classList.toggle('visible', !!liveState.slashCommands?.length);
+  });
+}
+
+// Start SSE if configured
+function initSSE() {
+  sseConnect();
+  window.addEventListener('hashchange', () => {
+    const folder = location.hash.slice(1);
+    if (folder && folder !== sseCurrentFolder) {
+      sseConnectFolder({ name: folder });
+    }
+  });
+}
+
+if (bridgeUrl) {
+  initSSE();
+} else if (!params.get('state')) {
+  // Auto-discover: probe same-origin /folders before falling back to file mode.
+  // Skip if ?state= is set — explicit file mode for dev/testing.
+  window.__bridgeProbe = fetch('/folders').then((res) => {
+    if (res.ok) {
+      bridgeUrl = location.origin;
+      initSSE();
+      return true;
+    }
+    return false;
+  }).catch(() => false);
+}
+
+// === Rendering helpers ===
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Minimal block-level markdown renderer for Claude's output patterns
+function md(text) {
+  if (!text) return '';
+
+  // Inline formatting on already-escaped text
+  function inline(s) {
+    s = esc(s);
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return s;
+  }
+
+  const lines = text.split('\n');
+  let out = '';
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Blank line — skip
+    if (line.trim() === '') { i++; continue; }
+
+    // Fenced code block
+    if (line.startsWith('```')) {
+      i++; // skip opening fence
+      let code = '';
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        if (code) code += '\n';
+        code += lines[i];
+        i++;
+      }
+      if (i < lines.length) i++; // skip closing fence
+      out += `<pre><code>${esc(code)}</code></pre>`;
+      continue;
+    }
+
+    // Table: starts with |
+    if (line.startsWith('|')) {
+      // Collect all | lines
+      const tableLines = [];
+      while (i < lines.length && lines[i].startsWith('|')) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      if (tableLines.length >= 3) {
+        const headers = tableLines[0].split('|').map(h => h.trim()).filter(Boolean);
+        // skip separator row (index 1)
+        const bodyRows = tableLines.slice(2);
+        out += '<table><thead><tr>' +
+          headers.map(h => `<th>${inline(h)}</th>`).join('') +
+          '</tr></thead><tbody>';
+        for (const r of bodyRows) {
+          const cells = r.split('|').map(c => c.trim()).filter(Boolean);
+          out += '<tr>' + cells.map(c => `<td>${inline(c)}</td>`).join('') + '</tr>';
+        }
+        out += '</tbody></table>';
+      }
+      continue;
+    }
+
+    // Unordered list item
+    if (/^- /.test(line)) {
+      out += '<ul>';
+      while (i < lines.length && /^- /.test(lines[i])) {
+        out += `<li>${inline(lines[i].slice(2))}</li>`;
+        i++;
+      }
+      out += '</ul>';
+      continue;
+    }
+
+    // Ordered list item
+    if (/^\d+\. /.test(line)) {
+      out += '<ol>';
+      while (i < lines.length && /^\d+\. /.test(lines[i])) {
+        out += `<li>${inline(lines[i].replace(/^\d+\. /, ''))}</li>`;
+        i++;
+      }
+      out += '</ol>';
+      continue;
+    }
+
+    // Paragraph — collect consecutive non-special lines
+    let para = '';
+    while (i < lines.length && lines[i].trim() !== '' &&
+           !lines[i].startsWith('|') &&
+           !/^- /.test(lines[i]) &&
+           !/^\d+\. /.test(lines[i])) {
+      if (para) para += ' ';
+      para += lines[i];
+      i++;
+    }
+    if (para) out += `<p>${inline(para)}</p>`;
+  }
+
+  return out;
+}
+
+// === Output trimming for small screens ===
+// Transform pipeline: applied at block boundaries before rendering
+
+function trimText(text) {
+  if (!text) return text;
+  // Strip <local-command-stdout> tags and trim /context output
+  const stdoutRe = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/g;
+  text = text.replace(stdoutRe, (_, inner) => {
+    // /context output: extract just the usage/cost summary lines
+    if (inner.includes('Context:') || inner.includes('context window')) {
+      const lines = inner.split('\n');
+      const usageLines = lines.filter(l =>
+        /^\s*Context:\s*\d/.test(l) || /token/i.test(l) || /^\s*Cost:/i.test(l) || /^\s*\d+%/.test(l)
+      );
+      return usageLines.length ? usageLines.join('\n').trim() : inner.trim();
+    }
+    return inner.trim();
+  });
+  return text;
+}
+
+function trimToolOutput(output, maxLines) {
+  if (!output) return output;
+  maxLines = maxLines || 30;
+  const lines = output.split('\n');
+  if (lines.length <= maxLines) return output;
+  const headCount = Math.ceil(maxLines / 2);
+  const tailCount = Math.floor(maxLines / 2);
+  const hidden = lines.length - headCount - tailCount;
+  return lines.slice(0, headCount).join('\n')
+    + `\n… ${hidden} lines hidden …\n`
+    + lines.slice(-tailCount).join('\n');
+}
+
+// Extract display-friendly preview from tool input JSON
+function toolInputPreview(name, rawInput) {
+  if (!rawInput) return '';
+  try {
+    const parsed = JSON.parse(rawInput);
+    // Map tool names to their primary display field
+    const fieldMap = {
+      Bash: parsed.cmd || parsed.command,
+      Read: parsed.path,
+      Write: parsed.path,
+      Edit: parsed.path,
+      edit_file: parsed.path,
+      create_file: parsed.path,
+      Grep: parsed.pattern,
+      Glob: parsed.glob || parsed.pattern,
+      glob: parsed.filePattern,
+      finder: parsed.query,
+      Task: parsed.description,
+      web_search: parsed.query || parsed.objective,
+      read_web_page: parsed.url,
+      oracle: parsed.task,
+    };
+    return fieldMap[name] || Object.values(parsed)[0] || rawInput;
+  } catch {
+    return rawInput;
+  }
+}
+
+function renderLocalCommand(content) {
+  // Extract inner content from <local-command-stdout> tags
+  const match = content.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
+  const inner = match ? match[1].trim() : content;
+
+  // Extract a one-line summary for the collapsed header
+  // /context: "Model: claude-opus-4-6  Tokens: 73.3k / 200k (37%)"
+  // /cost: the whole thing is short enough
+  // /compact: "Compacted"
+  let summary = '';
+  const lines = inner.split('\n');
+  // Look for the Tokens line (most useful for /context)
+  const tokensLine = lines.find(l => /\*\*Tokens:\*\*/.test(l));
+  if (tokensLine) {
+    // Strip markdown bold markers
+    summary = tokensLine.replace(/\*\*/g, '').trim();
+  } else if (inner.length < 100) {
+    // Short output like /compact or /cost — use as-is
+    summary = inner.replace(/\n/g, ' ').trim();
+  } else {
+    // Fallback: first non-empty, non-heading line
+    summary = lines.find(l => l.trim() && !l.startsWith('#')) || lines[0] || 'Command output';
+    summary = summary.replace(/\*\*/g, '').trim();
+  }
+
+  const block = document.createElement('div');
+  block.className = 'local-cmd';
+  block.dataset.expanded = 'false';
+
+  block.innerHTML = `
+    <div class="local-cmd-header">
+      <span class="tool-chevron">&#x25B8;</span>
+      <span class="local-cmd-summary">${esc(summary)}</span>
+    </div>
+    <div class="local-cmd-body">${md(inner)}</div>
+  `;
+
+  block.querySelector('.local-cmd-header').addEventListener('click', () => {
+    block.dataset.expanded = block.dataset.expanded === 'true' ? 'false' : 'true';
+  });
+
+  return block;
+}
+
+function renderToolCall(tc) {
+  const expanded = tc.collapsed === false;
+  const block = document.createElement('div');
+  block.className = 'tool-call';
+  block.dataset.expanded = expanded;
+
+  const statusIcon = tc.status === 'completed' ? '&#x2713;' :
+                     tc.status === 'running' ? '&#x25cf;' : '&#x2717;';
+
+  block.innerHTML = `
+    <div class="tool-header">
+      <span class="tool-chevron">&#x25B8;</span>
+      <span class="tool-status-icon" data-status="${tc.status}">${statusIcon}</span>
+      <span class="tool-name">${esc(tc.name)}</span>
+      <span class="tool-input-preview">${esc(tc.input)}</span>
+    </div>
+    <div class="tool-body">${esc(tc.input)}${tc.output ? '\n' + esc(trimToolOutput(tc.output)) : ''}</div>
+  `;
+
+  block.querySelector('.tool-header').addEventListener('click', () => {
+    block.dataset.expanded = block.dataset.expanded === 'true' ? 'false' : 'true';
+  });
+
+  return block;
+}
+
+function renderToolSummary(calls) {
+  // Count by tool name
+  const counts = {};
+  for (const tc of calls) {
+    counts[tc.name] = (counts[tc.name] || 0) + 1;
+  }
+
+  // Build summary text: "Read 5, Write 2, Edit 1"
+  const parts = Object.entries(counts).map(([name, count]) =>
+    `<span class="tool-name">${esc(name)}</span> ${count}`
+  );
+  const summaryText = parts.join(' &middot; ');
+
+  const block = document.createElement('div');
+  block.className = 'tool-summary';
+  block.dataset.expanded = 'false';
+
+  // Build detail list
+  const detailItems = calls.map(tc =>
+    `<div class="tool-summary-item">
+      <span class="tool-status-icon" data-status="completed">&#x2713;</span>
+      <span class="tool-name">${esc(tc.name)}</span>
+      <span class="tool-input-preview">${esc(tc.input)}</span>
+    </div>`
+  ).join('');
+
+  block.innerHTML = `
+    <div class="tool-summary-header">
+      <span class="tool-chevron">&#x25B8;</span>
+      <span class="tool-status-icon" data-status="completed">&#x2713;</span>
+      <span class="tool-summary-text">${summaryText}</span>
+    </div>
+    <div class="tool-summary-detail">${detailItems}</div>
+  `;
+
+  block.querySelector('.tool-summary-header').addEventListener('click', () => {
+    block.dataset.expanded = block.dataset.expanded === 'true' ? 'false' : 'true';
+  });
+
+  return block;
+}
+
+function renderMessages(messages) {
+  const el = document.getElementById('messages');
+
+  // Snapshot expanded tool calls before rebuild
+  const expandedTools = new Set();
+  for (const tc of el.querySelectorAll('.tool-call[data-expanded="true"]')) {
+    const name = tc.querySelector('.tool-name')?.textContent;
+    const preview = tc.querySelector('.tool-input-preview')?.textContent;
+    if (name) expandedTools.add(name + '|' + (preview || ''));
+  }
+  const expandedSummaries = new Set();
+  for (const ts of el.querySelectorAll('.tool-summary[data-expanded="true"]')) {
+    expandedSummaries.add(ts.querySelector('.tool-summary-text')?.innerHTML || '');
+  }
+
+  el.innerHTML = '';
+
+  for (const msg of messages) {
+    // Text content
+    if (msg.content !== null && msg.content !== undefined) {
+      // Local command output — render as collapsible block
+      if (msg.role === 'assistant' && msg.content.includes('<local-command-stdout>')) {
+        el.appendChild(renderLocalCommand(msg.content));
+      } else {
+        const div = document.createElement('div');
+        if (msg.role === 'user') {
+          div.className = 'msg-user';
+          div.textContent = msg.content;
+          if (msg._msgId) div.dataset.msgId = msg._msgId;
+          if (msg.pending) div.dataset.pending = 'true';
+          else if (msg.queued) div.dataset.queued = 'true';
+        } else {
+          div.className = 'msg-assistant';
+          div.innerHTML = md(trimText(msg.content));
+        }
+        el.appendChild(div);
+      }
+    }
+
+    // Tool calls — coalesce successful, surface errors and running
+    if (msg.tool_calls) {
+      // Group into runs: consecutive completed calls coalesce, errors/running stay individual
+      let i = 0;
+      while (i < msg.tool_calls.length) {
+        const tc = msg.tool_calls[i];
+
+        if (tc.status === 'error' || tc.status === 'running') {
+          const node = renderToolCall(tc);
+          // Restore expanded state
+          const key = tc.name + '|' + (tc.input || '');
+          if (expandedTools.has(key)) node.dataset.expanded = 'true';
+          el.appendChild(node);
+          i++;
+        } else {
+          // Collect consecutive completed calls
+          const group = [];
+          while (i < msg.tool_calls.length && msg.tool_calls[i].status === 'completed') {
+            group.push(msg.tool_calls[i]);
+            i++;
+          }
+          if (group.length === 1) {
+            const node = renderToolCall(group[0]);
+            const key = group[0].name + '|' + (group[0].input || '');
+            if (expandedTools.has(key)) node.dataset.expanded = 'true';
+            el.appendChild(node);
+          } else {
+            const node = renderToolSummary(group);
+            const summaryKey = node.querySelector('.tool-summary-text')?.innerHTML || '';
+            if (expandedSummaries.has(summaryKey)) node.dataset.expanded = 'true';
+            el.appendChild(node);
+          }
+        }
+      }
+    }
+  }
+
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderTodos(todos) {
+  const section = document.getElementById('todos');
+  const list = document.getElementById('todoList');
+
+  if (!todos || todos.length === 0) {
+    section.hidden = true;
+    return;
+  }
+
+  section.hidden = false;
+  list.innerHTML = '';
+
+  for (const t of todos) {
+    const item = document.createElement('div');
+    item.className = 'todo-item';
+    item.dataset.status = t.status;
+    const checkContent = t.status === 'completed' ? '&#x2713;' : '';
+    item.innerHTML = `
+      <div class="todo-check">${checkContent}</div>
+      <span class="todo-text">${esc(t.content)}</span>
+    `;
+    list.appendChild(item);
+  }
+}
+
+function renderStatusBar(state) {
+  const sess = state.session || {};
+  document.getElementById('model').textContent = sess.model || '';
+  document.getElementById('project').textContent = sess.project || '';
+
+  const ctxEl = document.getElementById('contextPct');
+  const pct = sess.context_pct;
+  if (pct) {
+    ctxEl.textContent = pct + '%';
+    ctxEl.dataset.level = pct >= 85 ? 'critical' : pct >= 70 ? 'low' : '';
+  } else {
+    ctxEl.textContent = '';
+  }
+
+  // Connection state
+  const connected = state.connection !== 'disconnected';
+  document.body.dataset.connection = connected ? 'connected' : 'disconnected';
+  document.getElementById('connectionDot').dataset.state = connected ? 'connected' : 'disconnected';
+  document.getElementById('switcherConnectionDot').dataset.state = connected ? 'connected' : 'disconnected';
+  document.getElementById('reconnecting').dataset.visible = !connected;
+
+  // Activity bar — only when connected + busy
+  const busy = state.status === 'working';
+  const activityBar = document.getElementById('activityBar');
+  activityBar.dataset.active = connected && busy;
+  if (state._activity) activityBar.dataset.activity = state._activity;
+  else delete activityBar.dataset.activity;
+
+  // Error toast — auto-dismiss after 5s
+  const toast = document.getElementById('errorToast');
+  if (state.error) {
+    toast.textContent = state.error;
+    toast.classList.add('visible');
+    clearTimeout(toast._dismissTimer);
+    toast._dismissTimer = setTimeout(() => {
+      toast.classList.remove('visible');
+      liveState.error = null;
+    }, 5000);
+  } else {
+    toast.classList.remove('visible');
+  }
+
+  // Send/stop button — 2×2 logic
+  const sendBtn = document.querySelector('.send-btn');
+  const hasText = document.querySelector('.input-field').value.trim().length > 0;
+  if (!connected) {
+    sendBtn.dataset.stop = 'false';
+    sendBtn.dataset.active = 'false';
+    sendBtn.innerHTML = '&#x2191;';
+  } else if (busy && !hasText) {
+    sendBtn.dataset.stop = 'true';
+    delete sendBtn.dataset.active;
+    sendBtn.innerHTML = '&#x25A0;';
+  } else {
+    sendBtn.dataset.stop = 'false';
+    sendBtn.dataset.active = hasText ? 'true' : 'false';
+    sendBtn.innerHTML = '&#x2191;';
+  }
+}
+
+async function render() {
+  const state = await loadState();
+
+  renderStatusBar(state);
+  renderMessages(state.messages);
+  renderTodos(state.todos);
+
+  // Seed switcher open state from state.json on first load only
+  if (state.switcher && state.switcher.open && !switcherSeeded) {
+    switcherOpen = true;
+    switcherSeeded = true;
+  }
+  renderSwitcher(state);
+}
+
+function renderSwitcher(state) {
+  const switcher = document.getElementById('switcher');
+  const list = document.getElementById('switcherList');
+
+  const backdrop = document.getElementById('switcherBackdrop');
+  if (!state.switcher || !switcherOpen) {
+    switcher.dataset.open = 'false';
+    backdrop.dataset.open = 'false';
+    return;
+  }
+
+  backdrop.dataset.open = 'true';
+  switcher.dataset.open = 'true';
+  list.innerHTML = '';
+
+  const currentId = state.session ? state.session.id : null;
+  const sessions = state.switcher.sessions || [];
+  const filter = document.getElementById('switcherSearch').value.trim().toLowerCase();
+
+  // Group: current/ended first, then active, dormant, old
+  const groups = { active: [], dormant: [], old: [] };
+  let top = null; // current session or most recently ended
+
+  for (const s of sessions) {
+    if (filter && !s.project.toLowerCase().includes(filter)) continue;
+    if (s.project === sseCurrentFolder) { top = s; continue; }
+    if (s.status === 'ended' && !top) { top = s; continue; }
+    if (groups[s.status]) groups[s.status].push(s);
+    else groups.old.push(s);
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return '';
+    const mins = Math.floor((Date.now() - new Date(iso)) / 60000);
+    if (mins < 0 || mins > 525600) return ''; // negative or >1 year = bad data
+    if (mins < 1) return 'now';
+    if (mins < 60) return mins + 'm';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h';
+    return Math.floor(hrs / 24) + 'd';
+  }
+
+  function shortModel(model) {
+    if (!model) return '';
+    return model.replace('claude-', '').replace(/-\d+$/, '');
+  }
+
+  function makeItem(s, isCurrent) {
+    const pct = s.context_pct;
+    const level = pct >= 85 ? 'critical' : pct >= 70 ? 'low' : '';
+    const hasSessions = s.sessions && s.sessions.length > 1;
+    const isExpanded = switcherExpandedFolder === s.project;
+    const item = document.createElement('div');
+    item.className = 'switcher-item';
+    item.dataset.status = s.status;
+    if (isCurrent) item.dataset.current = 'true';
+
+    // Main row: body (clickable → connect) + chevron (clickable → expand)
+    const row = document.createElement('div');
+    row.className = 'switcher-item-row';
+
+    const body = document.createElement('div');
+    body.className = 'switcher-item-body';
+    body.innerHTML = `
+      <span class="switcher-dot" data-status="${s.status}"></span>
+      <div class="switcher-info">
+        <div class="switcher-project">${esc(s.project)}</div>
+        <div class="switcher-last-msg">${esc(s.last_message || '')}</div>
+      </div>
+      <div class="switcher-meta">
+        <div class="switcher-context" data-level="${level}">${pct ? pct + '%' : ''}</div>
+        <div class="switcher-time">${timeAgo(s.updated)}</div>
+      </div>
+    `;
+    body.addEventListener('click', () => {
+      if (bridgeUrl) {
+        sseConnectFolder({ name: s.project, path: s.id });
+        closeSwitcher();
+      }
+    });
+    row.appendChild(body);
+
+    if (hasSessions) {
+      const countBadge = document.createElement('span');
+      countBadge.className = 'switcher-session-count';
+      countBadge.textContent = s.sessions.length;
+      row.appendChild(countBadge);
+
+      const chevron = document.createElement('div');
+      chevron.className = 'switcher-chevron';
+      chevron.dataset.expanded = isExpanded ? 'true' : 'false';
+      chevron.textContent = '\u203A'; // ›
+      chevron.addEventListener('click', (e) => {
+        e.stopPropagation();
+        switcherExpandedFolder = isExpanded ? null : s.project;
+        renderSwitcher(state);
+      });
+      row.appendChild(chevron);
+    }
+
+    item.appendChild(row);
+
+    // Expanded session list
+    if (hasSessions && isExpanded) {
+      const sessionsDiv = document.createElement('div');
+      sessionsDiv.className = 'switcher-sessions';
+
+      for (const sess of s.sessions) {
+        const sessionPct = sess.contextPct;
+        const sessionLevel = sessionPct >= 85 ? 'critical' : sessionPct >= 70 ? 'low' : '';
+        const sessionRow = document.createElement('div');
+        sessionRow.className = 'switcher-session-row';
+        sessionRow.innerHTML = `
+          <span class="switcher-dot" data-status="${sess.closed ? 'ended' : 'dormant'}"></span>
+          <span class="switcher-session-id">${esc(sess.id.slice(0, 8))}</span>
+          <span class="switcher-session-model">${esc(shortModel(sess.model))}</span>
+          <span class="switcher-context" data-level="${sessionLevel}">${sessionPct ? sessionPct + '%' : ''}</span>
+          <span class="switcher-time">${timeAgo(sess.lastActive)}</span>
+        `;
+        sessionRow.addEventListener('click', (e) => {
+          e.stopPropagation();
+          sseConnectFolder({ name: s.project, path: s.id }, sess.id);
+          closeSwitcher();
+        });
+        sessionsDiv.appendChild(sessionRow);
+      }
+
+      // New Session button
+      const newRow = document.createElement('div');
+      newRow.className = 'switcher-new-session';
+      newRow.innerHTML = '+ New Session';
+      newRow.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sseConnectFolder({ name: s.project, path: s.id }, 'new');
+        closeSwitcher();
+      });
+      sessionsDiv.appendChild(newRow);
+
+      item.appendChild(sessionsDiv);
+    }
+
+    return item;
+  }
+
+  if (top) list.appendChild(makeItem(top, true));
+
+  if (groups.active.length) {
+    const label = document.createElement('div');
+    label.className = 'switcher-section';
+    label.textContent = 'Active';
+    list.appendChild(label);
+    for (const s of groups.active) list.appendChild(makeItem(s, false));
+  }
+
+  if (groups.dormant.length) {
+    const label = document.createElement('div');
+    label.className = 'switcher-section';
+    label.textContent = 'Dormant';
+    list.appendChild(label);
+    for (const s of groups.dormant) list.appendChild(makeItem(s, false));
+  }
+
+  if (groups.old.length) {
+    const label = document.createElement('div');
+    label.className = 'switcher-section';
+    label.textContent = 'Recent';
+    list.appendChild(label);
+    for (const s of groups.old) list.appendChild(makeItem(s, false));
+  }
+}
+
+// Explicit ?state= param = file mode, skip auto-discovery
+if (params.get('state')) {
+  render();
+} else if (window.__bridgeProbe) {
+  // Wait for bridge auto-discovery before falling back to file-mode render.
+  // If bridge found, initSSE() handles rendering. If not, render from state.json.
+  window.__bridgeProbe.then((found) => { if (!found) render(); });
+} else if (!bridgeUrl) {
+  render();
+}
+// Bridge mode renders via its own event handlers — no render() call needed.
+
+function closeSwitcher() {
+  switcherOpen = false;
+  document.getElementById('switcher').dataset.open = 'false';
+  document.getElementById('switcherBackdrop').dataset.open = 'false';
+  document.getElementById('switcherSearch').value = '';
+}
+
+// Switcher: open/close uses client-side state, search re-filters without refetching
+document.getElementById('switcherClose').addEventListener('click', closeSwitcher);
+document.getElementById('switcherBackdrop').addEventListener('click', closeSwitcher);
+
+document.getElementById('switcherSearch').addEventListener('input', () => {
+  if (cachedState) renderSwitcher(cachedState);
+});
+
+// Tap status bar to open switcher (works even when project name is empty after /exit)
+document.querySelector('.status-bar').addEventListener('click', () => {
+  switcherOpen = true;
+  switcherExpandedFolder = null;
+  // Re-fetch folders from bridge for fresh session data
+  if (bridgeUrl) {
+    fetch(bridgeUrl + '/folders')
+      .then(r => r.json())
+      .then(d => { if (d.folders) handleSSEFolders(d.folders); })
+      .catch(() => {}); // stale data is fine as fallback
+  }
+  if (cachedState) renderSwitcher(cachedState);
+});
+
+// Auto-grow textarea: grows upward because flex layout shrinks messages area
+const ta = document.querySelector('.input-field');
+const msgEl = document.getElementById('messages');
+const sendBtn = document.querySelector('.send-btn');
+
+ta.addEventListener('input', () => {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+  // Keep messages scrolled to bottom so conversation stays visible
+  msgEl.scrollTop = msgEl.scrollHeight;
+  // Update send button appearance based on text content
+  updateSendButton();
+});
+
+// Enter never submits — it's always a newline
+ta.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    // Just let the default newline happen — don't submit
+    // (On desktop, Shift+Enter is also a newline, but we don't need that distinction)
+  }
+});
+
+// Update send button state based on current text and connection/busy state
+function updateSendButton() {
+  const hasText = ta.value.trim().length > 0;
+  const isDisconnected = document.body.dataset.connection === 'disconnected';
+  const isBusy = document.getElementById('activityBar').dataset.active === 'true';
+
+  const isLive = !!bridgeUrl;
+  if (isDisconnected && !isLive) {
+    // File mode disconnected — disable send
+    sendBtn.dataset.stop = 'false';
+    sendBtn.dataset.active = 'false';
+    sendBtn.innerHTML = '&#x2191;';
+  } else if (isDisconnected && isLive) {
+    // Live mode disconnected — allow send (queues as pending in WS, disabled in SSE)
+    sendBtn.dataset.stop = 'false';
+    sendBtn.dataset.active = hasText ? 'true' : 'false';
+    sendBtn.innerHTML = '&#x2191;';
+  } else if (isBusy && !hasText) {
+    sendBtn.dataset.stop = 'true';
+    delete sendBtn.dataset.active;
+    sendBtn.innerHTML = '&#x25A0;'; // stop
+  } else {
+    sendBtn.dataset.stop = 'false';
+    sendBtn.dataset.active = hasText ? 'true' : 'false';
+    sendBtn.innerHTML = '&#x2191;'; // send
+  }
+}
+
+// Undo state — tracks the last sent message so it can be recalled
+let undoTimer = null;
+let undoEl = null;
+
+function clearUndo() {
+  if (undoTimer) clearTimeout(undoTimer);
+  if (undoEl) {
+    undoEl.dataset.fading = 'true';
+    setTimeout(() => undoEl?.remove(), 300);
+  }
+  undoTimer = null;
+  undoEl = null;
+}
+
+// Send button tap
+sendBtn.addEventListener('click', () => {
+  // Request notification permission on first user gesture
+  if (!pushPermissionGranted && 'Notification' in window && Notification.permission === 'default') {
+    pushRequestPermission();
+  }
+
+  const isDisconnected = document.body.dataset.connection === 'disconnected';
+  const isLive = !!bridgeUrl;
+  if (isDisconnected && !isLive) return;
+
+  const isBusy = document.getElementById('activityBar').dataset.active === 'true';
+  const hasText = ta.value.trim().length > 0;
+
+  if (isBusy && !hasText) {
+    // Stop — abort Claude's current turn
+    if (bridgeUrl && sseCurrentFolder) {
+      ssePostAbort(sseCurrentFolder);
+    }
+  } else if (hasText) {
+    // Clear any previous undo
+    clearUndo();
+
+    const text = ta.value.trim();
+    const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+
+    // Send via SSE bridge or file-mode no-op
+    if (bridgeUrl && sseCurrentFolder) {
+      ssePostPrompt(sseCurrentFolder, text);
+    } else {
+      // File mode — no-op send
+      fetch('/send', { method: 'POST', body: text }).catch(() => {});
+    }
+    const pending = false;
+
+    // Add message to DOM
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-user';
+    bubble.textContent = text;
+    bubble.dataset.msgId = msgId;
+    if (pending) bubble.dataset.pending = 'true';
+    else if (isBusy) bubble.dataset.queued = 'true';
+    msgEl.appendChild(bubble);
+
+    // Also add to liveState so re-renders preserve it
+    if (bridgeUrl) {
+      liveState.messages.push({
+        role: 'user', content: text, _msgId: msgId,
+        pending: pending, queued: isBusy && !pending,
+      });
+    }
+
+    // Add undo button (only for pending messages)
+    if (pending) {
+      const undo = document.createElement('div');
+      undo.className = 'msg-undo';
+      undo.dataset.msgId = msgId;
+      undo.innerHTML = '<button>undo</button>';
+      msgEl.appendChild(undo);
+      undoEl = undo;
+
+      undo.querySelector('button').addEventListener('click', () => {
+        // Remove from liveState
+        const li = liveState.messages.findIndex(m => m._msgId === msgId);
+        if (li !== -1) liveState.messages.splice(li, 1);
+        // Remove from DOM
+        bubble.remove();
+        undo.remove();
+        undoEl = null;
+        if (undoTimer) clearTimeout(undoTimer);
+        undoTimer = null;
+        ta.value = text;
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+        ta.focus();
+        updateSendButton();
+      });
+
+      // No timer — undo stays until message is flushed
+    }
+
+    // Scroll to bottom
+    msgEl.scrollTop = msgEl.scrollHeight;
+
+    // Clear textarea
+    ta.value = '';
+    ta.style.height = 'auto';
+    updateSendButton();
+  }
+});
+
+// --- Slash command sheet ---
+const slashSheet = document.getElementById('slashSheet');
+const slashList = document.getElementById('slashList');
+const slashBtn = document.getElementById('slashBtn');
+
+function openSlashSheet() {
+  const cmds = liveState.slashCommands;
+  if (!cmds || !cmds.length) return;
+
+  slashList.innerHTML = '';
+  for (const cmd of cmds) {
+    const row = document.createElement('div');
+    row.className = 'slash-cmd';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'slash-cmd-name';
+    nameEl.textContent = cmd.name;
+    row.appendChild(nameEl);
+
+    if (cmd.description) {
+      const descEl = document.createElement('span');
+      descEl.className = 'slash-cmd-desc';
+      descEl.textContent = cmd.description;
+      row.appendChild(descEl);
+    }
+    if (cmd.local) {
+      const badge = document.createElement('span');
+      badge.className = 'slash-cmd-local';
+      badge.textContent = 'local';
+      row.appendChild(badge);
+    }
+
+    row.addEventListener('click', () => {
+      slashSheet.classList.remove('open');
+      ta.value = cmd.name;
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+      updateSendButton();
+      // Local commands auto-send — they're instant, no reason to pause
+      if (cmd.local) {
+        sendBtn.click();
+      } else {
+        ta.focus();
+      }
+    });
+    slashList.appendChild(row);
+  }
+  slashSheet.classList.add('open');
+}
+
+slashBtn.addEventListener('click', openSlashSheet);
+
+// Close on backdrop tap
+slashSheet.addEventListener('click', (e) => {
+  if (e.target === slashSheet) slashSheet.classList.remove('open');
+});
+</script>
+</body>
 </html>
