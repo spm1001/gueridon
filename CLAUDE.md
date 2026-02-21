@@ -38,13 +38,22 @@ journalctl -u gueridon -f          # Tail logs
 - **`KillMode=process`** — bridge restart does NOT kill CC child processes. They become orphaned; the new bridge reaps them on startup (SIGTERM) and the next client connection resumes via `--resume`.
 - **HTTPS terminated by `tailscale serve`** — bridge listens on HTTP :3001.
 - **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
-- **Session persistence** — `~/.config/gueridon/sessions.json` tracks active CC PIDs so the bridge can reap orphans after restart.
+- **Session persistence** — `~/.config/gueridon/sse-sessions.json` tracks active CC PIDs so the bridge can reap orphans after restart.
 
-See `docs/deploy.md` for VAPID key setup, Tailscale plumbing, and first-time install.
+See `docs/deploy-guide.md` for VAPID key setup, Tailscale plumbing, and first-time install.
 
 ## Bridge Server
 
-`server/bridge.ts` — HTTP server that serves the frontend and manages CC processes.
+The bridge is split across several modules in `server/`:
+
+| File | Responsibility |
+|------|---------------|
+| `bridge.ts` | HTTP server, SSE transport, process lifecycle |
+| `bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
+| `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape |
+| `folders.ts` | Folder scanning, session discovery, handoff reading |
+| `push.ts` | Web Push (VAPID) notification delivery |
+| `fun-names.ts` | Alliterative folder name generator (exported, not yet wired into production) |
 
 **Endpoints:**
 | Method | Path | Purpose |
@@ -61,12 +70,12 @@ See `docs/deploy.md` for VAPID key setup, Tailscale plumbing, and first-time ins
 
 **Key design:**
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
-- **StateBuilder** (`server/state-builder.ts`): Pure state machine translating CC stdout events into the BB state shape. Emits SSE deltas during streaming, full state snapshots at turn end.
+- **StateBuilder** (`server/state-builder.ts`): See module table above. Emits SSE deltas during streaming, full state snapshots at turn end.
 - **Delta conflation:** Text deltas accumulated and flushed on timer (not per-token). Reduces SSE traffic without visible latency.
 - **Static serving:** index.html, sw.js, manifest.json, icons — no-cache headers, same port as API.
 - **Lazy spawn:** CC process starts on first prompt, not on connect.
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
-- **Orphan reaping:** On startup, reads sessions.json, SIGTERMs any live CC processes from the previous bridge instance.
+- **Orphan reaping:** On startup, reads sse-sessions.json, SIGTERMs any live CC processes from the previous bridge instance.
 
 ## CC Process Flags
 
@@ -77,13 +86,16 @@ claude -p --verbose \
   --include-partial-messages \
   --replay-user-messages \
   --session-id <uuid> \
-  --dangerously-skip-permissions --allow-dangerously-skip-permissions
+  --dangerously-skip-permissions --allow-dangerously-skip-permissions \
+  --append-system-prompt "The user is on a mobile device using Guéridon. ..."
 ```
 
 - `--verbose` is mandatory for stream-json mode.
+- `--append-system-prompt` coaches CC about AskUserQuestion error behavior — the tool returns an error on mobile, but the user sees tappable buttons and responds in their next message. Full text in `CC_FLAGS` in `bridge-logic.ts`.
+- `--session-id <uuid>` for fresh sessions; `--resume <uuid>` for resuming after process kill. Decided by `resolveSessionForFolder()` in `bridge-logic.ts`.
 - **Local commands (`/context`, `/cost`, `/compact`) produce NO stdout.** Bridge reads JSONL tail on empty-result turns to recover output.
 - **Input format** (critical): `{"type":"user","message":{"role":"user","content":"..."}}`
-- `--dangerously-skip-permissions` is still in use. Permission model review pending (bb-mecebe).
+- `--dangerously-skip-permissions` is still in use. Migration to `--allowed-tools` is planned (gdn-fuhepu).
 
 ## Frontend
 
@@ -97,10 +109,14 @@ Single HTML file: CSS, HTML, JS — no splitting, no build, no dependencies.
 - Session switcher with per-folder session list
 - Push notifications via service worker
 
+## Stale Code
+
+`cli/bridge-client.ts`, `cli/gdn.ts`, and `scripts/test-bridge.ts` (~1,500 lines) use a WebSocket protocol that no longer exists — the bridge is SSE+POST. They compile but cannot run. The `gdn` script in `package.json` also points at this dead code. Delete or rewrite when the testing cluster (gdn-puzoni) begins.
+
 ## Key Docs
 
 | Doc | Purpose |
 |-----|---------|
-| `docs/deploy.md` | Deployment guide — systemd, Tailscale, VAPID keys |
+| `docs/deploy-guide.md` | Deployment guide — systemd, Tailscale, VAPID keys |
 | `docs/empirical-verification.md` | Verified CC event schemas, edge cases, abort mechanisms |
 | `server/CC-EVENTS.md` | CC event reference for state-builder development |
