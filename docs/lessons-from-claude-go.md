@@ -91,18 +91,14 @@ For the record, these are the things Guéridon improved on:
 - **Process-per-session over tmux-per-session** — simpler lifecycle, no tmux dependency
 - **Idle guards over lease expiry** — more nuanced (distinguishes "idle with no output" from "actively producing output slowly")
 
-## The One Gap: Session Persistence Across Bridge Restarts
+## Solved: Session Persistence Across Bridge Restarts
 
-Claude-go's tmux sessions survived a server restart. Guéridon's subprocess model means a bridge crash or restart kills all active CC processes. The `--resume` flag helps reconnect, but there's no mechanism to:
+Claude-go's tmux sessions survived a server restart. Guéridon initially had the same gap — bridge restart killed all CC processes with no recovery.
 
-1. Detect that a CC process was orphaned by a bridge restart
-2. Automatically reconnect to it
-3. Preserve the message buffer across restarts
-
-Claude-go solved this with `KillMode=process` in systemd (only kills Node, not tmux children) and JSONL file watching (can always re-read the conversation from disk).
-
-This is tracked as an Arc item — see the project's arc for details.
+**Now solved (gdn-matihe):** `KillMode=process` in systemd keeps CC children alive across bridge restarts. On startup, the bridge reads `sse-sessions.json`, SIGTERMs orphaned CC processes, and the next client connection resumes via `--resume`. PID staleness guards prevent killing unrelated processes that reused old PIDs.
 
 ## Source
 
 The claude-go repository lives at `~/Repos/claude-go` (archived, read-only). The full codebase, comments, and commit history contain additional context beyond what's summarised here.
+
+> **Note (2026-02):** This document references "Arc items" — the project work tracker has since moved to **bon**. Pattern references remain valid; tool names have changed.

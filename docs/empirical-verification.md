@@ -287,7 +287,7 @@ Tested with `--allowed-tools AskUserQuestion --permission-mode default`:
 
 **The deny-intercept-render pattern is confirmed necessary** regardless of flags. The valuable part: CC generates excellent structured question data (questions, options, multiSelect) that the bridge intercepts from the stream for native UI rendering.
 
-**Decision for the bridge:** Migrate from `--dangerously-skip-permissions` to `--allowed-tools` whitelist (gdn-tedaje). Retains observe-and-intervene UX for whitelisted tools, adds permission routing for non-whitelisted tools, and the AskUserQuestion intercept pattern is unchanged.
+**Decision for the bridge:** Migrate from `--dangerously-skip-permissions` to `--allowed-tools` whitelist (gdn-fuhepu). Retains observe-and-intervene UX for whitelisted tools, adds permission routing for non-whitelisted tools, and the AskUserQuestion intercept pattern is unchanged.
 
 ## Verified: MCP Tool Use
 

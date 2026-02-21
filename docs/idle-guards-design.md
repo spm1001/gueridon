@@ -90,20 +90,7 @@ Remove: `idleTimer` field.
 
 ## bridge.ts changes (clean replacement)
 
-**Remove:**
-- `session.idleTimer` field from Session interface
-- `setTimeout(() => { kill... }, IDLE_TIMEOUT_MS)` in ws.on('close') (lines 654-662)
-- `clearTimeout(session.idleTimer)` in `attachWsToSession` (lines 385-388)
-
-**Add:**
-- New fields on Session (above)
-- Turn tracking in `wireProcessToSession` and `handleSessionMessage`
-- `startIdleCheck(session)` — records idleStart, schedules first checkIdle
-- `cancelIdleCheck(session)` — clears timer and idle state
-- Call `startIdleCheck` from ws.on('close') when last client disconnects
-- Call `cancelIdleCheck` from `attachWsToSession` when client reconnects
-- Clear `turnInProgress` in process exit handler
-- Update `lastOutputTime` in stdout line handler
+> **Note (2026-02):** The bridge transport changed from WebSocket to SSE+POST after this design was written. The wiring points below reference WebSocket handlers (`ws.on('close')`, `attachWsToSession`) that no longer exist. The equivalent triggers in the current architecture are SSE client disconnect and SSE client connect. The pure function design (`checkIdle`, guards, constants) is transport-agnostic and still applies.
 
 ## What lives where
 

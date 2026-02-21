@@ -1,6 +1,6 @@
 # Research Brief: Cross-Platform Notifications for Guéridon
 
-**Context:** Guéridon is a self-hosted web UI for Claude Code, running as a Node.js WebSocket bridge on a Tailscale-accessible Linux box. The frontend is Lit web components served on port 3001. Users access it from mobile (iOS Safari "Add to Home Screen") and desktop browsers. There is currently **zero notification infrastructure** — no service worker, no PWA manifest, no Web Notification API usage.
+**Context:** Guéridon is a self-hosted web UI for Claude Code, running as a Node.js bridge (SSE+POST) on a Tailscale-accessible Linux box. The frontend is a single HTML file served on port 3001. Users access it from mobile (iOS Safari "Add to Home Screen") and desktop browsers. There is currently **zero notification infrastructure** — no service worker, no PWA manifest, no Web Notification API usage.
 
 **The problem:** When Claude finishes processing (a clear `result` event in the stream), the user has no way to know without staring at the screen. This is the #1 remaining lifecycle gap (documented in `docs/lifecycle-map.md` item #6).
 
@@ -11,13 +11,12 @@
 ## Architecture Summary
 
 ```
-Mobile/Desktop browser  ←—WebSocket—→  Node.js bridge (:3001)  ←—stdio—→  claude -p
+Mobile/Desktop browser  ←—SSE+POST—→  Node.js bridge (:3001)  ←—stdio—→  claude -p
 ```
 
-- Bridge already tracks turn state (`session.turnInProgress`) and emits a `result` event when Claude finishes
-- Frontend has a `ClaudeCodeAgent` that fires `agent_end` when processing completes
-- WebSocket reconnects automatically; bridge buffers missed messages
-- No service worker, no manifest, no push subscription infrastructure exists today
+- Bridge already tracks turn state and emits state updates when Claude finishes
+- SSE reconnects automatically; bridge sends full state snapshot on reconnect
+- No service worker, no manifest, no push subscription infrastructure existed at time of writing
 
 ---
 
@@ -125,13 +124,12 @@ These are the places where notification triggers would be wired in:
 
 | Signal | Where it's detected | What it means |
 |--------|-------------------|---------------|
-| `result` event | `ClaudeCodeAgent.handleResult()` in `src/claude-code-agent.ts` | Claude finished a turn |
-| `agent_end` event | Subscriber in `src/gueridon-interface.ts` | UI knows streaming stopped |
-| `turnInProgress` flag | `bridge.ts` session state | Bridge knows Claude is idle |
-| `AskUserQuestion` tool use | `src/ask-user-overlay.ts` | Claude is waiting for user input |
+| `result` event | `StateBuilder` in `server/state-builder.ts` | Claude finished a turn |
+| SSE state event | Frontend `EventSource` handler in `index.html` | UI knows streaming stopped |
+| Turn tracking | `bridge.ts` session state | Bridge knows Claude is idle |
+| `AskUserQuestion` tool use | `StateBuilder` + frontend rendering | Claude is waiting for user input |
 
-For **Notification API** (client-side only): hook into `agent_end` in the frontend.
-For **Push API** (server-sent): hook into the `result` event handler in `bridge.ts` and push to stored subscriptions.
+For **Push API** (server-sent): hook into the result event in `bridge.ts` and push to stored subscriptions — this is what was implemented (`server/push.ts`).
 
 ---
 
@@ -152,7 +150,7 @@ For **Push API** (server-sent): hook into the `result` event handler in `bridge.
 2. **Service worker + manifest + Notification API** — SW registered, manifest with display:standalone, notifications fire on agent_end and AskUserQuestion. Permission requested from user gesture (send button tap). Replay suppressed.
 3. **SW lifecycle** — skipWaiting + clients.claim for instant activation. notificationclick focuses existing tab.
 
-3. **HTTPS via `tailscale serve`** (gdn-jahaku) — TLS termination by Tailscale daemon, zero code in bridge. Certs auto-renew, no restart needed. See `docs/deploy.md`.
+3. **HTTPS via `tailscale serve`** (gdn-jahaku) — TLS termination by Tailscale daemon, zero code in bridge. Certs auto-renew, no restart needed. See `docs/deploy-guide.md`.
 4. **Push API with VAPID** (gdn-beceto) — `server/push.ts` module, `web-push` npm package. Bridge pushes when `clients.size === 0` on result and AskUserQuestion events. Client subscribes via `PushManager` on first prompt (user gesture). Subscriptions persisted to `~/.config/gueridon/push-subscriptions.json`.
 5. **iOS device testing** — verified on iOS Safari standalone mode (Add to Home Screen). Permission dialog appears, push notifications delivered to lock screen with vibration.
 

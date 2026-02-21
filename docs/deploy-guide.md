@@ -228,5 +228,5 @@ sudo tailscale serve status             # should show HTTPS proxy
 curl -s http://localhost:3001/folders    # should return JSON
 ```
 
-If DNS broke again, the persistent fix in `/etc/network/interfaces` may not
-have taken effect. Check with `resolvectl status` and re-apply if needed.
+If DNS broke again, check with `resolvectl status` — the fix is upstream
+(Tailscale DNS settings or router DHCP), not per-machine.

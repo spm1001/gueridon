@@ -69,14 +69,14 @@ No SSH tunnels. No SSHFS. No third-party daemons. Just Tailscale, which is alrea
 
 ## The Bridge Protocol Is Already Client-Agnostic
 
-Gueridon's bridge speaks WebSocket + JSON. It doesn't know or care what's on the other end. The protocol (`bridge-protocol.md`) defines:
+Gueridon's bridge speaks SSE (server→client) + POST (client→server). It doesn't know or care what's on the other end. The endpoints (see `CLAUDE.md`) cover:
 
-- `listFolders` / `folderList` — pick a project
-- `connectFolder` / `connected` — join a session
-- `prompt` / CC events — the conversation
-- `processExit` / `error` — lifecycle
+- `GET /folders` / `GET /events` — discover projects, receive live state
+- `POST /session/:folder` — join a session
+- `POST /prompt/:folder` — send a message
+- SSE events — state snapshots, deltas, folder updates
 
-A CLI client connects via the same WebSocket, sends the same JSON, receives the same events. The bridge needs zero changes to support it.
+A CLI client connects via the same HTTP endpoints, sends the same POSTs, receives the same SSE events. The bridge needs zero changes to support it.
 
 ### What The Bridge Must NOT Do
 
@@ -93,9 +93,9 @@ The only thing to build. A terminal program on Mac that connects to the Gueridon
 
 ### Core Features
 
-1. **Connect to bridge** — `ws://kube:3001` (or Tailscale hostname)
-2. **Folder picker** — `listFolders` → display → user picks → `connectFolder`
-3. **Prompt loop** — read input → `{ type: "prompt", text: "..." }` → stream CC events → render
+1. **Connect to bridge** — `https://kube:3001` (or Tailscale hostname)
+2. **Folder picker** — `GET /folders` → display → user picks → `POST /session/:folder`
+3. **Prompt loop** — read input → `POST /prompt/:folder` → stream SSE events → render
 4. **Context gauge** — always-visible fuel bar from usage data in result events. The one thing Anthropic won't build.
 5. **Streaming** — render text token-by-token, show tool calls in progress
 6. **AskUserQuestion** — detect in stream, render options, user picks one, send as next prompt
@@ -120,7 +120,7 @@ Because CC runs on Kube, the CLI client automatically gets:
 
 ### What It Can't Do (Yet)
 
-- **Image upload** — would need: client reads local file → base64 → sends via WebSocket → bridge adds to CC's input. Requires bridge protocol extension.
+- **Image upload** — would need: client reads local file → base64 → sends via POST → bridge adds to CC's input. Requires bridge protocol extension.
 - **`@` file mentions** — references local Mac files. Would need path translation or Taildrive-relative paths. Complex, defer.
 - **IDE integration** — VS Code on Mac can't talk to CC on Kube through the bridge. Use VS Code Remote-SSH to Kube directly if needed.
 
@@ -175,12 +175,14 @@ Check current ACL policy and ensure `drive:share` and `drive:access` node attrib
 
 ## What This Means For Gueridon
 
-The bridge is now serving two client types: the web UI (phone/desktop browser) and the CLI client (Mac terminal). This is fine — the protocol is already agnostic. But keep it that way:
+The bridge is now serving two client types: the web UI (phone/desktop browser) and the CLI client (Mac terminal). This is fine — the SSE+POST protocol is already agnostic. But keep it that way:
 
 1. **No client-type field in the protocol.** Clients don't identify themselves. They don't need to.
-2. **Rendering is client-side.** The bridge sends raw CC events. How they're displayed is the client's problem.
-3. **State machine stays simple.** The cleanup in progress should make the state machine *more* client-agnostic, not less. A session is a session regardless of what's consuming it.
+2. **Rendering is client-side.** The bridge sends state snapshots and deltas via SSE. How they're displayed is the client's problem.
+3. **State machine stays simple.** A session is a session regardless of what's consuming it.
 4. **Image upload (when built) goes through the bridge protocol.** Both clients will want it eventually. Design the protocol extension once, both clients use it.
+
+> **Note (2026-02):** The CLI client (`cli/bridge-client.ts`, `cli/gdn.ts`) was built for the old WebSocket protocol and is currently stale — it compiles but can't run against the SSE+POST bridge. Rewrite needed before Mac-as-viewport works.
 
 ## Build Order
 

@@ -2,6 +2,8 @@
 
 Assumptions surfaced and resolved, 2026-02-08.
 
+> **Staleness note (2026-02):** This doc was written during the Vite + Lit + WebSocket + pi-web-ui era. The architecture has since been replaced: single `index.html` (no build step), SSE+POST (no WebSocket), hand-rolled UI (no pi-web-ui). Core decisions below still hold; implementation details are outdated. See `CLAUDE.md` for current architecture.
+
 ## Session Launch
 
 **Directory picker at session start.** User chooses:
@@ -11,14 +13,14 @@ Assumptions surfaced and resolved, 2026-02-08.
 This matters because the working directory determines:
 - Which `CLAUDE.md` loads (project-specific instructions)
 - Which `.mcp.json` loads (project-specific MCP servers)
-- Which `.arc/` directory is active (project work tracking)
+- Which `.bon/` directory is active (project work tracking)
 - File access scope (relative paths)
 
 The bridge spawns `claude -p` with `cwd` set to the chosen directory.
 
 ## Permissions
 
-**Planned: migrate to `--allowed-tools` whitelist** (gdn-kugeto, originally gdn-tedaje). Currently still using `--dangerously-skip-permissions` — this works but bypasses all permission gates indiscriminately. The migration below is the intended direction, not the current state.
+**Planned: migrate to `--allowed-tools` whitelist** (gdn-fuhepu). Currently still using `--dangerously-skip-permissions` — this works but bypasses all permission gates indiscriminately. The migration below is the intended direction, not the current state.
 
 The `--allowed-tools` pattern (proven in persistent-assistant) gives us:
 - **Whitelisted tools run without prompts** — same UX as `--dangerously-skip-permissions` for safe tools
@@ -55,23 +57,10 @@ No native mid-stream steering. Second messages queue behind the current response
 
 ## Flags for the Claude Code Process
 
-```bash
-claude -p \
-  --verbose \
-  --input-format stream-json \
-  --output-format stream-json \
-  --include-partial-messages \
-  --replay-user-messages \
-  --session-id <browser-session-uuid> \
-  --allowed-tools "Read,Edit,Write,Glob,Grep,Task,TaskOutput,WebFetch,WebSearch,NotebookEdit,Skill,EnterPlanMode,ExitPlanMode,AskUserQuestion,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop" \
-  --permission-mode default
-```
-
-Note: `--dangerously-skip-permissions` will be replaced by `--allowed-tools` whitelist (gdn-kugeto). Bash intentionally excluded — will require user approval via mobile UI. **Not yet shipped — code still uses `--dangerously-skip-permissions`.**
-
-Optional per-session:
-- `--append-system-prompt "User is on mobile device"` — mobile context
-- `--mcp-config "..."` — additional MCP servers
+See `CLAUDE.md` for the current flags. Key additions since this doc was written:
+- `--append-system-prompt` coaches CC about AskUserQuestion error behavior on mobile (always used)
+- `--session-id <uuid>` for fresh sessions; `--resume <uuid>` for resuming after process kill
+- `--dangerously-skip-permissions` is still in use. Migration to `--allowed-tools` is gdn-fuhepu.
 
 ## UI Elements
 
@@ -120,7 +109,7 @@ Informed by persistent-assistant's approach and empirical testing of `--allowed-
 
 **Previous decision:** Option B (observe and intervene with `--dangerously-skip-permissions`).
 
-**Revised decision (planned, not yet shipped — see gdn-kugeto):** Hybrid — `--allowed-tools` whitelist + observe-and-intervene for whitelisted tools + approval gate for non-whitelisted.
+**Revised decision (planned, not yet shipped — see gdn-fuhepu):** Hybrid — `--allowed-tools` whitelist + observe-and-intervene for whitelisted tools + approval gate for non-whitelisted.
 
 The key insight: `--allowed-tools` is **additive, not restrictive**. All standard tools remain visible to the model; the flag controls which are auto-approved. Non-whitelisted tools trigger `permission_denials` in the result event with full tool input — the bridge can surface these for user approval without re-running.
 
