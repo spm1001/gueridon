@@ -273,16 +273,21 @@ function detachFromSession(client: SSEClient): void {
   session.clients.delete(client);
   client.folder = null;
 
-  if (session.clients.size === 0 && session.process) {
-    emit({ type: "grace:start", folder: session.folderName, sessionId: session.id, graceMs: GRACE_MS });
-    session.graceTimer = setTimeout(() => {
-      emit({ type: "grace:expire", folder: session.folderName, sessionId: session.id });
-      if (session.process) {
-        killWithEscalation(session.process);
-      }
-      sessions.delete(session.folder);
-    }, GRACE_MS);
+  if (session.clients.size === 0 && session.process && !session.turnInProgress) {
+    startGraceTimer(session);
   }
+}
+
+function startGraceTimer(session: Session): void {
+  if (session.graceTimer) clearTimeout(session.graceTimer);
+  emit({ type: "grace:start", folder: session.folderName, sessionId: session.id, graceMs: GRACE_MS });
+  session.graceTimer = setTimeout(() => {
+    emit({ type: "grace:expire", folder: session.folderName, sessionId: session.id });
+    if (session.process) {
+      killWithEscalation(session.process);
+    }
+    sessions.delete(session.folder);
+  }, GRACE_MS);
 }
 
 // -- Active sessions map for folder scanner --
@@ -503,11 +508,12 @@ function onTurnComplete(session: Session): void {
     toolCalls: lastMsg?.tool_calls?.length ?? 0,
   });
 
-  // Push notification when no SSE clients are watching (phone-in-pocket)
+  // No SSE clients watching (phone-in-pocket): push + start grace timer
   if (session.clients.size === 0) {
     pushTurnComplete(session.folderName).catch((err) =>
       emit({ type: "push:send-fail", endpoint: "turn-complete", error: String(err) }),
     );
+    startGraceTimer(session);
   }
 
   // Flush prompt queue
