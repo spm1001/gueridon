@@ -545,8 +545,8 @@
     font-family: var(--mono);
   }
 
-  .status-context[data-level="low"] { color: var(--amber); }
-  .status-context[data-level="critical"] { color: var(--red); }
+  .status-context[data-level="low"] { color: var(--amber); text-decoration: underline dotted; cursor: pointer; }
+  .status-context[data-level="critical"] { color: var(--red); text-decoration: underline dotted; cursor: pointer; }
 
   .status-model {
     font-family: var(--mono);
@@ -1367,6 +1367,35 @@ async function ssePostAbort(folderName) {
   }
 }
 
+async function ssePostExit(folderName) {
+  try {
+    await fetch(`${bridgeUrl}/exit/${encodeURIComponent(folderName)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Client-ID': sseClientId },
+    });
+  } catch (err) {
+    console.error('[bb] POST /exit error:', err);
+  }
+}
+
+async function exitSession() {
+  if (!bridgeUrl || !sseCurrentFolder) return;
+  await ssePostExit(sseCurrentFolder);
+  sseCurrentFolder = null;
+  liveState.session = {};
+  liveState.messages = [];
+  liveState.status = 'idle';
+  liveState._activity = null;
+  liveState.slashCommands = null;
+  location.hash = '';
+  switcherOpen = true;
+  fetch(bridgeUrl + '/folders')
+    .then(r => r.json())
+    .then(d => { if (d.folders) handleSSEFolders(d.folders); })
+    .catch(() => {});
+  sseRender();
+}
+
 function sseConnectFolder(folder, sessionId) {
   const name = folder.name || folder;
   // Allow reconnect to same folder if switching sessions
@@ -1997,18 +2026,46 @@ document.getElementById('switcherSearch').addEventListener('input', () => {
   if (cachedState) renderSwitcher(cachedState);
 });
 
-// Tap status bar to open switcher (works even when project name is empty after /exit)
-document.querySelector('.status-bar').addEventListener('click', () => {
-  switcherOpen = true;
-  switcherExpandedFolder = null;
-  // Re-fetch folders from bridge for fresh session data
-  if (bridgeUrl) {
-    fetch(bridgeUrl + '/folders')
-      .then(r => r.json())
-      .then(d => { if (d.folders) handleSSEFolders(d.folders); })
-      .catch(() => {}); // stale data is fine as fallback
+// Status bar: tap opens switcher, long-press (800ms) exits session
+{
+  const statusBar = document.querySelector('.status-bar');
+  let longPressTimer = null;
+  let didLongPress = false;
+  statusBar.addEventListener('pointerdown', (e) => {
+    didLongPress = false;
+    longPressTimer = setTimeout(() => {
+      didLongPress = true;
+      if (sseCurrentFolder && confirm('End this session and return to the lobby?')) {
+        exitSession();
+      }
+    }, 800);
+  });
+  statusBar.addEventListener('pointerup', () => {
+    clearTimeout(longPressTimer);
+    if (didLongPress) return;
+    // Normal tap — open switcher
+    switcherOpen = true;
+    switcherExpandedFolder = null;
+    if (bridgeUrl) {
+      fetch(bridgeUrl + '/folders')
+        .then(r => r.json())
+        .then(d => { if (d.folders) handleSSEFolders(d.folders); })
+        .catch(() => {});
+    }
+    if (cachedState) renderSwitcher(cachedState);
+  });
+  statusBar.addEventListener('pointercancel', () => clearTimeout(longPressTimer));
+}
+
+// Context gauge: tap when amber/red to offer exiting session
+document.getElementById('contextPct').addEventListener('click', (e) => {
+  const level = e.target.dataset.level;
+  if ((level === 'low' || level === 'critical') && sseCurrentFolder) {
+    e.stopPropagation(); // Don't trigger status bar long-press/tap
+    if (confirm('Context is running high. End this session and start fresh?')) {
+      exitSession();
+    }
   }
-  if (cachedState) renderSwitcher(cachedState);
 });
 
 // Auto-grow textarea: grows upward because flex layout shrinks messages area
