@@ -248,6 +248,36 @@ Test: `--allowed-tools AskUserQuestion` (only AskUserQuestion listed). Init even
 
 **To gate Bash via `--allowed-tools`, you must first remove the blanket `"Bash"` from settings.json** and replace it with specific patterns (e.g., `"Bash(git:*)"`, `"Bash(npm:*)"`, etc.).
 
+### Verified: Task Subagent Permission Behaviour (2026-02-23)
+
+**Task subagents have their own independent permission context — they bypass the parent's `--allowed-tools` restrictions entirely.**
+
+Tested on tube (empty `settings.json: {}`, no blanket Bash allow) with three scenarios:
+
+| Test | Parent `--allowed-tools` | Bash in parent's allowed? | Subagent ran Bash? | permission_denials |
+|------|-------------------------|--------------------------|-------------------|-------------------|
+| A | `"Bash" "Task"` | Yes | ✓ | `[]` |
+| B | `"Task"` only | **No** | ✓ | `[]` |
+| C | (skip-permissions) | N/A | ✓ | `[]` |
+
+**Test B is definitive.** Parent had only Task in `--allowed-tools`, Bash was NOT listed, `settings.json` was empty — yet the haiku subagent ran Bash with `is_error: false` and zero permission denials.
+
+**Key findings:**
+- `"Task"` is a valid `--allowed-tools` value — full 19-tool set appears in init (permissionMode: "default")
+- Task subagents are spawned as haiku (`claude-haiku-4-5-20251001`) — separate process, short-lived
+- **`--allowed-tools` does NOT propagate to subagents** — the subagent ignores the parent's restrictions
+- **`settings.json` is also irrelevant** — tube had `{}` and the subagent still auto-approved Bash
+- Subagents appear to run with `bypassPermissions` regardless of the parent's permission mode
+
+**Risk confirmed:** A restricted parent can use Task to route around `--allowed-tools` (and settings.json) restrictions. This is the same bypass vector as `--disallowedTools` (see Permission Handling above) but applies to all restriction mechanisms.
+
+**Implication for gdn-fuhepu:** Neither `--allowed-tools` nor `settings.json` patterns can prevent Task-based bypass. To truly restrict Bash in subagents, Task itself must be excluded from `--allowed-tools`. Since Guéridon currently uses `--dangerously-skip-permissions`, this is not a regression — but it means moving to `--allowed-tools` doesn't close the Task bypass. Options:
+1. Accept the risk: subagents can bypass restrictions (current state)
+2. Exclude Task from `--allowed-tools` (loses delegation capability)
+3. Wait for CC to add subagent permission propagation upstream
+
+CC version 2.1.50. Known upstream issue: [#27099](https://github.com/anthropics/claude-code/issues/27099), [#20264](https://github.com/anthropics/claude-code/issues/20264).
+
 ### Verified: Persistent Stdin Hangs on Unlisted Tools (2026-02-16)
 
 **In persistent `-p` mode with stdin pipe, an unlisted tool causes a hang, not a denial.** CC blocks waiting for interactive TTY approval that can never come. No output, no `permission_denials` event. The process must be killed externally.
