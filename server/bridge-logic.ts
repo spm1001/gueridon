@@ -11,6 +11,23 @@ import { resolve, join } from "node:path";
 
 export const KILL_ESCALATION_MS = 3_000; // SIGTERM → SIGKILL after 3 seconds
 
+// Tools auto-approved via --allowed-tools. This is permissive by design —
+// Task subagents bypass --allowed-tools entirely (CC #27099), so restricting
+// the parent without restricting Task is security theater. We list everything
+// explicitly instead of using --dangerously-skip-permissions so the posture
+// is auditable and ready for upstream subagent propagation fixes (#20264).
+const ALLOWED_TOOLS = [
+  "Bash", "Read", "Edit", "Write", "Glob", "Grep",
+  "WebSearch",
+  "Task", "TaskOutput", "TaskStop",
+  "Skill", "AskUserQuestion",
+  "EnterPlanMode", "ExitPlanMode", "EnterWorktree", "ToolSearch",
+];
+
+// Tools hidden from the model entirely. WebFetch returns AI summaries not
+// raw content (use curl via Bash instead). TodoWrite conflicts with bon.
+const DISALLOWED_TOOLS = ["WebFetch", "TodoWrite", "NotebookEdit"];
+
 export const CC_FLAGS = [
   "-p",
   "--verbose",
@@ -20,8 +37,12 @@ export const CC_FLAGS = [
   "stream-json",
   "--include-partial-messages",
   "--replay-user-messages",
-  "--dangerously-skip-permissions",
-  "--allow-dangerously-skip-permissions",
+  "--allowed-tools",
+  ALLOWED_TOOLS.join(","),
+  "--disallowedTools",
+  DISALLOWED_TOOLS.join(","),
+  "--permission-mode",
+  "default",
   "--append-system-prompt",
   "The user is on a mobile device using Guéridon. " +
     "When you use AskUserQuestion, it will return an error — this is expected. " +

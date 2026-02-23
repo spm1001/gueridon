@@ -315,11 +315,19 @@ function buildActiveSessionsMap(): Map<string, { sessionId: string; activity: "w
 
 function spawnCC(session: Session): void {
   const args = buildCCArgs(session.id, session.resumable);
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(
-      ([k]) => k !== "CLAUDECODE" && k !== "CLAUDE_CODE_ENTRYPOINT",
+  const env = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([k]) => k !== "CLAUDECODE" && k !== "CLAUDE_CODE_ENTRYPOINT",
+      ),
     ),
-  );
+    // Reset CWD after each Bash command — sessions must stay in their project folder
+    CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1",
+    // No TTY — background task management is meaningless
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+    // No terminal to update
+    CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
+  };
   session.process = spawn("claude", args, {
     stdio: ["pipe", "pipe", "pipe"],
     env,

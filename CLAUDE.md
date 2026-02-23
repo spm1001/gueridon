@@ -85,17 +85,45 @@ claude -p --verbose \
   --output-format stream-json \
   --include-partial-messages \
   --replay-user-messages \
+  --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,WebSearch,Task,TaskOutput,TaskStop,Skill,AskUserQuestion,EnterPlanMode,ExitPlanMode,EnterWorktree,ToolSearch" \
+  --disallowedTools "WebFetch,TodoWrite,NotebookEdit" \
+  --permission-mode default \
   --session-id <uuid> \
-  --dangerously-skip-permissions --allow-dangerously-skip-permissions \
   --append-system-prompt "The user is on a mobile device using Guéridon. ..."
 ```
 
 - `--verbose` is mandatory for stream-json mode.
+- `--allowed-tools` lists all tools permissively. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
+- `--disallowedTools` hides tools from the model entirely: WebFetch (returns AI summaries, use curl instead), TodoWrite (use bon), NotebookEdit (no notebooks).
+- `--permission-mode default` respects settings.json allow/deny lists.
 - `--append-system-prompt` coaches CC about AskUserQuestion error behavior — the tool returns an error on mobile, but the user sees tappable buttons and responds in their next message. Full text in `CC_FLAGS` in `bridge-logic.ts`.
 - `--session-id <uuid>` for fresh sessions; `--resume <uuid>` for resuming after process kill. Decided by `resolveSessionForFolder()` in `bridge-logic.ts`.
 - **Local commands (`/context`, `/cost`, `/compact`) produce NO stdout.** Bridge reads JSONL tail on empty-result turns to recover output.
 - **Input format** (critical): `{"type":"user","message":{"role":"user","content":"..."}}`
-- `--dangerously-skip-permissions` is still in use. Migration to `--allowed-tools` is planned (gdn-fuhepu).
+
+### CC Environment Variables
+
+The bridge sets these on spawned CC processes (in `spawnCC()` in `bridge.ts`):
+
+| Variable | Value | Why |
+|----------|-------|-----|
+| `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` | `1` | Reset CWD after each Bash command — sessions must stay in their project folder |
+| `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` | `1` | No TTY for background task management |
+| `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` | `1` | No terminal to update |
+
+Other CC environment variables worth knowing about (not currently set):
+
+| Variable | What it does | Notes |
+|----------|-------------|-------|
+| `CLAUDE_CODE_SIMPLE` | Minimal tools (Bash, Read, Edit only), no MCP/hooks/CLAUDE.md | Too restrictive for bridge, but useful for locked-down mode |
+| `CLAUDE_CODE_DISABLE_AUTO_MEMORY` | Don't create/load auto memory files | Consider for ephemeral sessions |
+| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | When auto-compaction triggers (default ~95%) | We don't use auto-compaction |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | Override max output tokens (default 32K, max 64K) | Could increase for long responses |
+| `CLAUDE_CODE_SHELL_PREFIX` | Wrap all Bash commands (e.g. for logging) | Potential for auditing |
+| `CLAUDE_CODE_EXIT_AFTER_STOP_DELAY` | Auto-exit after idle (ms) | We manage lifecycle ourselves via grace timer |
+| `CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS` | Override file read token limit | For reading larger files in full |
+
+Full list: https://code.claude.com/docs/en/settings
 
 ## Frontend
 
