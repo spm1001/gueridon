@@ -273,6 +273,11 @@ function detachFromSession(client: SSEClient): void {
   session.clients.delete(client);
   client.folder = null;
 
+  maybeStartGraceTimer(session);
+}
+
+/** Start grace timer only when idle with no audience: no clients, process alive, not mid-turn. */
+function maybeStartGraceTimer(session: Session): void {
   if (session.clients.size === 0 && session.process && !session.turnInProgress) {
     startGraceTimer(session);
   }
@@ -508,19 +513,20 @@ function onTurnComplete(session: Session): void {
     toolCalls: lastMsg?.tool_calls?.length ?? 0,
   });
 
-  // No SSE clients watching (phone-in-pocket): push + start grace timer
+  // Push notification when no SSE clients are watching (phone-in-pocket)
   if (session.clients.size === 0) {
     pushTurnComplete(session.folderName).catch((err) =>
       emit({ type: "push:send-fail", endpoint: "turn-complete", error: String(err) }),
     );
-    startGraceTimer(session);
   }
 
-  // Flush prompt queue
+  // Flush prompt queue (may start a new turn, so grace check must come after)
   if (session.promptQueue.length > 0) {
     const next = session.promptQueue.shift()!;
     deliverPrompt(session, next);
   }
+
+  maybeStartGraceTimer(session);
 }
 
 // -- Prompt delivery --
