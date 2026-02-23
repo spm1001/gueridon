@@ -47,6 +47,9 @@ import {
 
 import { StateBuilder } from "./state-builder.js";
 import { getVapidPublicKey, pushTurnComplete, addSubscription, removeSubscription } from "./push.js";
+import { emit } from "./event-bus.js";
+import { initLogger } from "./logger.js";
+import { initStatusBuffer, getRecent } from "./status-buffer.js";
 
 // -- Types --
 
@@ -99,6 +102,7 @@ interface Session {
   graceTimer: ReturnType<typeof setTimeout> | null;
   initTimer: ReturnType<typeof setTimeout> | null;
   contextPct: number | null;
+  turnStartedAt: number | null;
 }
 
 // -- State --
@@ -110,6 +114,7 @@ const clientsById = new Map<string, SSEClient>();
 const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
 const GRACE_MS = 60_000;
 const INIT_TIMEOUT_MS = 30_000;
+let clientErrorTimestamps: number[] = [];
 
 // -- Orphan reaping --
 
@@ -144,7 +149,7 @@ function persistSessions(): void {
       mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
       await writeFile(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
     } catch (err) {
-      console.error("[bridge] failed to persist sessions:", err);
+      emit({ type: "server:persist-error", error: String(err) });
     }
   }, 500);
 }
@@ -164,12 +169,12 @@ function reapOrphans(): void {
   let reaped = 0;
   for (const rec of records) {
     if (rec.spawnedAt && Date.now() - rec.spawnedAt > MAX_AGE_MS) {
-      console.log(`[bridge] skipping stale orphan pid=${rec.pid} (spawned ${Math.round((Date.now() - rec.spawnedAt) / 3600000)}h ago)`);
+      emit({ type: "orphan:skip", pid: rec.pid, folder: basename(rec.folder), ageHours: Math.round((Date.now() - rec.spawnedAt) / 3600000) });
       continue;
     }
     try {
       process.kill(rec.pid, 0); // check alive
-      console.log(`[bridge] reaping orphan CC pid=${rec.pid} session=${rec.sessionId.slice(0, 8)} folder=${basename(rec.folder)}`);
+      emit({ type: "orphan:reap", pid: rec.pid, folder: basename(rec.folder), sessionId: rec.sessionId });
       process.kill(rec.pid, "SIGTERM");
       reaped++;
     } catch {
@@ -179,7 +184,7 @@ function reapOrphans(): void {
 
   try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
   if (reaped > 0) {
-    console.log(`[bridge] reaped ${reaped} orphaned CC process(es)`);
+    emit({ type: "orphan:summary", reaped });
   }
 }
 
@@ -231,6 +236,7 @@ function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): 
   const client: SSEClient = { res, folder: null, eventSeq: 0 };
   allClients.add(client);
   clientsById.set(clientId, client);
+  emit({ type: "sse:connect", clientId });
 
   const vapidPublicKey = getVapidPublicKey();
   sendSSE(client, "hello", { version: 1, clientId, reconnect, ...(vapidPublicKey ? { vapidPublicKey } : {}) });
@@ -241,6 +247,7 @@ function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): 
   );
 
   res.on("close", () => {
+    emit({ type: "sse:disconnect", clientId, folder: client.folder });
     allClients.delete(client);
     clientsById.delete(clientId);
     if (client.folder) detachFromSession(client);
@@ -267,7 +274,9 @@ function detachFromSession(client: SSEClient): void {
   client.folder = null;
 
   if (session.clients.size === 0 && session.process) {
+    emit({ type: "grace:start", folder: session.folderName, sessionId: session.id, graceMs: GRACE_MS });
     session.graceTimer = setTimeout(() => {
+      emit({ type: "grace:expire", folder: session.folderName, sessionId: session.id });
       if (session.process) {
         killWithEscalation(session.process);
       }
@@ -310,7 +319,7 @@ function spawnCC(session: Session): void {
   session.spawnedAt = Date.now();
   session.stderrBuffer = [];
   wireProcess(session);
-  console.log(`[bridge] spawned CC for ${session.folderName} (session ${session.id}, pid ${session.process.pid})`);
+  emit({ type: "session:spawn", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
   persistSessions();
 
   // Init timeout: if CC doesn't emit an init event within 30s, kill it.
@@ -318,7 +327,7 @@ function spawnCC(session: Session): void {
   session.initTimer = setTimeout(() => {
     session.initTimer = null;
     if (session.process) {
-      console.error(`[bridge] init timeout for ${session.folderName} (pid ${session.process.pid}) — killing`);
+      emit({ type: "init:timeout", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
       killWithEscalation(session.process);
       broadcastToSession(session, "delta", {
         type: "status",
@@ -342,7 +351,7 @@ function wireProcess(session: Session): void {
       if (isUserTextEcho(event)) return;
       handleCCEvent(session, event);
     } catch {
-      console.log(`[bridge] non-json: ${trimmed.slice(0, 200)}`);
+      emit({ type: "process:non-json", folder: session.folderName, line: trimmed.slice(0, 200) });
     }
   });
 
@@ -354,7 +363,7 @@ function wireProcess(session: Session): void {
   });
 
   proc.on("exit", (code, signal) => {
-    console.log(`[bridge] CC exited for ${session.folderName}: code=${code} signal=${signal}`);
+    emit({ type: "session:exit", folder: session.folderName, sessionId: session.id, code, signal });
     if (session.initTimer) { clearTimeout(session.initTimer); session.initTimer = null; }
     const wasMidTurn = session.turnInProgress;
     session.process = null;
@@ -457,7 +466,9 @@ function flushPendingDeltas(session: Session): void {
 // -- Turn completion --
 
 function onTurnComplete(session: Session): void {
+  const durationMs = session.turnStartedAt ? Date.now() - session.turnStartedAt : 0;
   session.turnInProgress = false;
+  session.turnStartedAt = null;
 
   // Recover local command output (CC writes to JSONL, not stdout)
   if (!session.hadContentThisTurn) {
@@ -478,10 +489,24 @@ function onTurnComplete(session: Session): void {
     ...session.stateBuilder.getState(),
   });
 
+  // Emit turn metrics
+  const state = session.stateBuilder.getState();
+  const lastMsg = [...state.messages].reverse().find((m) => m.role === "assistant");
+  emit({
+    type: "turn:complete",
+    folder: session.folderName,
+    sessionId: session.id,
+    durationMs,
+    inputTokens: null,
+    outputTokens: null,
+    contextPct: session.contextPct,
+    toolCalls: lastMsg?.tool_calls?.length ?? 0,
+  });
+
   // Push notification when no SSE clients are watching (phone-in-pocket)
   if (session.clients.size === 0) {
     pushTurnComplete(session.folderName).catch((err) =>
-      console.warn("[bridge] push failed:", err),
+      emit({ type: "push:send-fail", endpoint: "turn-complete", error: String(err) }),
     );
   }
 
@@ -520,6 +545,7 @@ function deliverPrompt(
   try {
     session.process!.stdin!.write(envelope + "\n");
     session.turnInProgress = true;
+    session.turnStartedAt = Date.now();
     session.hadContentThisTurn = false;
 
     // Cold path: no SSE clients watching → close stdin after writing.
@@ -527,12 +553,12 @@ function deliverPrompt(
     // The process exit handler will broadcast state to any clients that reconnect.
     if (session.clients.size === 0) {
       session.process!.stdin!.end();
-      console.log(`[bridge] cold prompt delivered to ${session.folderName} (stdin closed)`);
+      emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id, cold: true });
     } else {
-      console.log(`[bridge] prompt delivered to ${session.folderName}`);
+      emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id, cold: false });
     }
   } catch (err) {
-    console.error(`[bridge] stdin write failed:`, err);
+    emit({ type: "process:stdin-error", folder: session.folderName, sessionId: session.id, error: String(err) });
     broadcastToSession(session, "delta", {
       type: "status",
       status: "error",
@@ -574,6 +600,8 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
     randomUUID,
   );
 
+  emit({ type: "session:resolve", folder: folderName, sessionId: resolution.sessionId, outcome: resolution.resumable ? "resume" : "fresh" });
+
   const session: Session = {
     id: resolution.sessionId,
     folder: folderPath,
@@ -593,6 +621,7 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
     graceTimer: null,
     initTimer: null,
     contextPct: null,
+    turnStartedAt: null,
   };
 
   // Replay JSONL if resuming (async to avoid blocking on large files)
@@ -602,9 +631,9 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
       const content = await readFile(jsonlPath, "utf-8");
       const events = parseSessionJSONL(content);
       session.stateBuilder.replayFromJSONL(events);
-      console.log(`[bridge] replayed ${events.length} events for ${folderName}`);
+      emit({ type: "replay:ok", folder: folderName, eventCount: events.length });
     } catch (err) {
-      console.log(`[bridge] JSONL replay failed for ${folderName}:`, err);
+      emit({ type: "replay:fail", folder: folderName, error: String(err) });
     }
   }
 
@@ -623,6 +652,7 @@ function readBody(req: IncomingMessage): Promise<string> {
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
+        emit({ type: "request:rejected", reason: "body-too-large", method: req.method || "?", url: req.url || "?" });
         req.destroy();
         reject(new Error("Body too large"));
         return;
@@ -653,7 +683,7 @@ function resolveFolder(folderParam: string): string | null {
  * Used when switching to a different session within the same folder.
  */
 async function tearDownSession(session: Session): Promise<void> {
-  console.log(`[bridge] tearing down session ${session.id.slice(0, 8)} for ${session.folderName}`);
+  emit({ type: "session:teardown", folder: session.folderName, sessionId: session.id });
 
   if (session.flushTimer) { clearTimeout(session.flushTimer); session.flushTimer = null; }
   if (session.graceTimer) { clearTimeout(session.graceTimer); session.graceTimer = null; }
@@ -702,6 +732,7 @@ async function createSessionWithId(
     graceTimer: null,
     initTimer: null,
     contextPct: null,
+    turnStartedAt: null,
   };
 
   if (resumable) {
@@ -710,9 +741,9 @@ async function createSessionWithId(
       const content = await readFile(jsonlPath, "utf-8");
       const events = parseSessionJSONL(content);
       session.stateBuilder.replayFromJSONL(events);
-      console.log(`[bridge] replayed ${events.length} events for ${folderName} (session ${sessionId.slice(0, 8)})`);
+      emit({ type: "replay:ok", folder: folderName, eventCount: events.length, sessionId });
     } catch (err) {
-      console.log(`[bridge] JSONL replay failed for ${folderName}:`, err);
+      emit({ type: "replay:fail", folder: folderName, error: String(err), sessionId });
     }
   }
 
@@ -807,6 +838,7 @@ async function handlePrompt(
   if (session.turnInProgress) {
     // Queue the prompt
     session.promptQueue.push(parsed);
+    emit({ type: "prompt:queue", folder: session.folderName, sessionId: session.id, depth: session.promptQueue.length });
     res.writeHead(202, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ queued: true, position: session.promptQueue.length }));
     return;
@@ -920,6 +952,31 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // GET /status — debug endpoint
+  if (req.method === "GET" && url.pathname === "/status") {
+    const now = Date.now();
+    const sessionList = [...sessions.values()].map((s) => ({
+      folder: s.folderName,
+      sessionId: s.id,
+      pid: s.process?.pid ?? null,
+      uptimeMs: s.spawnedAt ? now - s.spawnedAt : null,
+      contextPct: s.contextPct,
+      turnInProgress: s.turnInProgress,
+      clients: s.clients.size,
+      queueDepth: s.promptQueue.length,
+    }));
+    const mem = process.memoryUsage();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      uptime: process.uptime(),
+      memory: { rss: mem.rss, heapUsed: mem.heapUsed, heapTotal: mem.heapTotal },
+      sessions: sessionList,
+      sseClients: allClients.size,
+      recentEvents: getRecent(50),
+    }));
+    return;
+  }
+
   // POST routes: /session/:folder, /prompt/:folder, /abort/:folder, /exit/:folder
   const match = url.pathname.match(/^\/(session|prompt|abort|exit)\/(.+)$/);
   if (match && req.method === "POST") {
@@ -961,7 +1018,7 @@ const server = createServer(async (req, res) => {
           return;
       }
     } catch (err) {
-      console.error(`[bridge] ${action} error:`, err);
+      emit({ type: "request:error", action, error: String(err) });
       if (!res.headersSent) {
         res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
       }
@@ -1005,6 +1062,28 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // POST /client-error — mobile error reporting
+  if (req.method === "POST" && url.pathname === "/client-error") {
+    // Simple rate limit: track recent reports, cap at 10/min
+    const now = Date.now();
+    clientErrorTimestamps = clientErrorTimestamps.filter((t) => now - t < 60_000);
+    if (clientErrorTimestamps.length >= 10) {
+      res.writeHead(429).end(JSON.stringify({ error: "Rate limited" }));
+      return;
+    }
+    clientErrorTimestamps.push(now);
+    try {
+      const body = await readBody(req);
+      const { message, stack, userAgent, url: errorUrl } = JSON.parse(body);
+      emit({ type: "client:error", message: String(message || ""), stack, userAgent, url: errorUrl });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ received: true }));
+    } catch {
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid body" }));
+    }
+    return;
+  }
+
   // Static files — index.html, sw.js, manifest.json, icons
   if (req.method === "GET" && serveStatic(url.pathname, res)) return;
 
@@ -1023,7 +1102,7 @@ pingTimer.unref(); // don't prevent clean shutdown
 // -- Graceful shutdown --
 
 function shutdown(signal: string): void {
-  console.log(`[bridge] ${signal} received, shutting down...`);
+  emit({ type: "server:shutdown", signal });
 
   // Stop accepting new connections
   server.close();
@@ -1037,7 +1116,7 @@ function shutdown(signal: string): void {
     if (session.graceTimer) clearTimeout(session.graceTimer);
     if (session.initTimer) clearTimeout(session.initTimer);
     if (session.process) {
-      console.log(`[bridge] killing CC pid ${session.process.pid} (${session.folderName})`);
+      emit({ type: "process:kill", folder: session.folderName, pid: session.process.pid!, reason: "shutdown" });
       killWithEscalation(session.process);
     }
   }
@@ -1062,9 +1141,10 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 // -- Start --
 
+initLogger();
+initStatusBuffer();
 reapOrphans();
 
 server.listen(PORT, () => {
-  console.log(`[bridge] listening on port ${PORT}`);
-  console.log(`[bridge] SCAN_ROOT: ${SCAN_ROOT}`);
+  emit({ type: "server:start", port: PORT, scanRoot: SCAN_ROOT });
 });

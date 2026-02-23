@@ -2,6 +2,7 @@ import { readdir, stat, readFile, writeFile, access, open as fsOpen } from "node
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import type { ActiveSessionInfo } from "./bridge-logic.js";
+import { emit } from "./event-bus.js";
 
 // --- Types ---
 
@@ -333,7 +334,7 @@ export async function scanFolders(
   try {
     entries = await readdir(SCAN_ROOT);
   } catch (err) {
-    console.warn(`[folders] Cannot read ${SCAN_ROOT}:`, err);
+    emit({ type: "folders:scan-error", scanRoot: SCAN_ROOT, error: String(err) });
     return [];
   }
 

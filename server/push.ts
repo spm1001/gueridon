@@ -12,6 +12,7 @@ import webpush from "web-push";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { emit } from "./event-bus.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "gueridon");
 const VAPID_PATH = join(CONFIG_DIR, "vapid.json");
@@ -25,7 +26,7 @@ let subscriptions: Map<string, webpush.PushSubscription> = new Map();
 
 function init(): void {
   if (!existsSync(VAPID_PATH)) {
-    console.log("[push] No VAPID keys at", VAPID_PATH, "— push disabled");
+    emit({ type: "push:init", status: "disabled", detail: VAPID_PATH });
     return;
   }
   try {
@@ -36,9 +37,9 @@ function init(): void {
       keys.publicKey, keys.privateKey,
     );
     vapidReady = true;
-    console.log("[push] VAPID configured");
+    emit({ type: "push:init", status: "configured" });
   } catch (e) {
-    console.warn("[push] Failed to load VAPID keys:", e);
+    emit({ type: "push:init", status: "error", detail: String(e) });
     return;
   }
   loadSubscriptions();
@@ -49,9 +50,9 @@ function loadSubscriptions(): void {
   try {
     const data = JSON.parse(readFileSync(SUBS_PATH, "utf-8")) as webpush.PushSubscription[];
     subscriptions = new Map(data.map((s) => [s.endpoint, s]));
-    console.log(`[push] Loaded ${subscriptions.size} subscription(s)`);
+    emit({ type: "push:subscriptions-loaded", count: subscriptions.size });
   } catch {
-    console.warn("[push] Failed to load subscriptions");
+    emit({ type: "push:subscriptions-load-error" });
   }
 }
 
@@ -69,14 +70,14 @@ export function getVapidPublicKey(): string | null {
 export function addSubscription(sub: webpush.PushSubscription): void {
   subscriptions.set(sub.endpoint, sub);
   saveSubscriptions();
-  console.log(`[push] Subscription added (total: ${subscriptions.size})`);
+  emit({ type: "push:subscribe", total: subscriptions.size });
 }
 
 /** Remove a push subscription. */
 export function removeSubscription(endpoint: string): void {
   if (subscriptions.delete(endpoint)) {
     saveSubscriptions();
-    console.log(`[push] Subscription removed (total: ${subscriptions.size})`);
+    emit({ type: "push:unsubscribe", total: subscriptions.size });
   }
 }
 
@@ -106,7 +107,7 @@ export async function sendPush(payload: {
         // 403 BadJwtToken from Apple means the subscription needs re-creating.
         expired.push(endpoint);
       } else {
-        console.warn(`[push] Failed to send to ${endpoint.slice(0, 60)}:`, err);
+        emit({ type: "push:send-fail", endpoint: endpoint.slice(0, 60), error: String(err) });
       }
     }
   }
@@ -114,7 +115,7 @@ export async function sendPush(payload: {
   if (expired.length > 0) {
     for (const ep of expired) subscriptions.delete(ep);
     saveSubscriptions();
-    console.log(`[push] Removed ${expired.length} expired subscription(s)`);
+    emit({ type: "push:expired-cleanup", count: expired.length });
   }
 }
 

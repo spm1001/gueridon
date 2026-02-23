@@ -994,6 +994,28 @@
   </div>
 
 <script>
+// === Client error reporting ===
+// Captures unhandled errors and promise rejections, sends to bridge.
+// Fire-and-forget — never blocks or throws.
+{
+  const reported = new Set();
+  function reportError(message, stack) {
+    const key = message + (stack || '');
+    if (reported.has(key)) return;
+    reported.add(key);
+    setTimeout(() => reported.delete(key), 5000); // dedup window
+    try {
+      fetch('/client-error', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, stack, userAgent: navigator.userAgent, url: location.href }),
+      }).catch(() => {}); // swallow fetch failures
+    } catch { /* swallow */ }
+  }
+  window.addEventListener('error', (e) => reportError(e.message, e.error?.stack));
+  window.addEventListener('unhandledrejection', (e) => reportError(String(e.reason), e.reason?.stack));
+}
+
 let cachedState = null;
 let switcherOpen = false;
 let switcherExpandedFolder = null; // folder name currently expanded in switcher
