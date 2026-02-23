@@ -112,7 +112,7 @@ const allClients = new Set<SSEClient>();
 const clientsById = new Map<string, SSEClient>();
 
 const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
-const GRACE_MS = 60_000;
+const GRACE_MS = parseInt(process.env.GRACE_MS || "300000", 10);
 const INIT_TIMEOUT_MS = 30_000;
 let clientErrorTimestamps: number[] = [];
 
