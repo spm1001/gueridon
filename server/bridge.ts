@@ -905,6 +905,23 @@ async function handlePrompt(
         message: { role: "user", content: parsed.text },
       });
     }
+
+    // Outrider: on the first queued message, write a nudge to CC's stdin.
+    // CC buffers stdin mid-turn and processes it after the current result.
+    // The hypothesis: CC may see this during tool execution pauses and wrap
+    // up sooner. If not, it just becomes the next turn and gets consumed
+    // before the coalesced delivery. Experimental — may remove.
+    if (session.promptQueue.length === 1 && session.process?.stdin?.writable) {
+      const nudge = JSON.stringify({
+        type: "user",
+        message: { role: "user", content: "The user has sent a follow-up message. Finish your current work at the next natural stopping point, then stop so you can read it." },
+      });
+      try {
+        session.process.stdin.write(nudge + "\n");
+        emit({ type: "prompt:outrider", folder: session.folderName, sessionId: session.id });
+      } catch { /* stdin may be closed */ }
+    }
+
     emit({ type: "prompt:queue", folder: session.folderName, sessionId: session.id, depth: session.promptQueue.length });
     res.writeHead(202, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ queued: true, position: session.promptQueue.length }));
