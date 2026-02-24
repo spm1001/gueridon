@@ -23,8 +23,8 @@
     --text: #e8e8e8;
     --text-dim: #777;
     --text-mid: #aaa;
-    --accent: #c9a0ff;
-    --accent-dim: #6b4d8a;
+    --accent: #E8734A;
+    --accent-dim: #8B4530;
     --green: #4ade80;
     --amber: #fbbf24;
     --blue: #60a5fa;
@@ -573,9 +573,7 @@
   .status-context[data-level="critical"] { color: var(--red); text-decoration: underline dotted; cursor: pointer; }
 
   .status-model {
-    font-family: var(--mono);
-    font-size: 0.68rem;
-    color: var(--accent-dim);
+    display: none;
   }
 
   .status-push-denied {
@@ -649,9 +647,8 @@
     100% { transform: translateX(-100%); }
   }
 
-  /* Queued message indicator */
+  /* Queued message indicator — no opacity stacking, just a dashed border */
   .msg-user[data-queued="true"] {
-    opacity: 0.6;
     border: 1px dashed var(--accent-dim);
   }
 
@@ -659,18 +656,17 @@
     content: 'queued';
     display: block;
     font-size: 0.65rem;
-    color: var(--text-dim);
+    color: var(--text-mid);
     text-align: right;
     margin-top: 2px;
   }
 
   .msg-user[data-pending="true"] {
-    opacity: 0.5;
     border: 1px dotted var(--text-dim);
   }
 
   .msg-user[data-pending="true"]::after {
-    content: 'pending';
+    content: 'sending…';
     display: block;
     font-size: 0.65rem;
     color: var(--text-dim);
@@ -967,7 +963,7 @@
     gap: 6px;
     padding: 8px 10px;
     cursor: pointer;
-    color: var(--accent-dim);
+    color: var(--accent);
     font-size: 0.78rem;
   }
 
@@ -2527,11 +2523,11 @@ ta.addEventListener('focus', () => {
   msgEl.scrollTop = msgEl.scrollHeight;
 });
 
-// Enter never submits — it's always a newline
+// Enter = newline. Shift+Enter or Cmd/Ctrl+Enter = submit.
 ta.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-    // Just let the default newline happen — don't submit
-    // (On desktop, Shift+Enter is also a newline, but we don't need that distinction)
+  if (e.key === 'Enter' && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    sendBtn.click();
   }
 });
 
