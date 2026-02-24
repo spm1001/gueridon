@@ -106,6 +106,7 @@ interface Session {
   initTimer: ReturnType<typeof setTimeout> | null;
   contextPct: number | null;
   turnStartedAt: number | null;
+  wasInterrupted?: boolean;
 }
 
 // -- State --
@@ -692,6 +693,14 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
       const events = parseSessionJSONL(content);
       session.stateBuilder.replayFromJSONL(events);
       emit({ type: "replay:ok", folder: folderName, eventCount: events.length });
+
+      // Detect interrupted turn: if status is "working" after replay, the
+      // last turn had system:init but no result — CC was mid-work when killed.
+      const replayState = session.stateBuilder.getState();
+      if (replayState.status === "working") {
+        session.wasInterrupted = true;
+        emit({ type: "session:interrupted", folder: folderName, sessionId: session.id });
+      }
     } catch (err) {
       emit({ type: "replay:fail", folder: folderName, error: String(err) });
     }
@@ -871,6 +880,17 @@ async function handleSession(
   // Lazy spawn: CC starts on first prompt, not on session connect.
   // This avoids cold starts when the user browses folders without sending.
   // deliverPrompt() handles spawn-if-needed.
+  //
+  // Exception: if the session was interrupted mid-work (bridge restart killed
+  // CC while it was processing), auto-inject a resume prompt so Claude picks
+  // up where it left off without the user having to nudge.
+  if (session.wasInterrupted) {
+    session.wasInterrupted = false; // one-shot
+    deliverPrompt(session, {
+      text: "You were interrupted mid-work by a system restart. The bridge has restarted and your session has been resumed. Review the conversation above and continue where you left off.",
+    });
+    emit({ type: "session:auto-resume", folder: session.folderName, sessionId: session.id });
+  }
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
