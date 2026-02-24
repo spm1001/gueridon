@@ -736,6 +736,26 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10MB — screenshots are typically 1-3MB
+
+function readBinaryBody(req: IncomingMessage): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_UPLOAD_BYTES) {
+        req.destroy();
+        reject(new Error("Upload too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 // -- Folder path resolution --
 
 function resolveFolder(folderParam: string): string | null {
@@ -1186,6 +1206,31 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({ received: true }));
     } catch {
       res.writeHead(400).end(JSON.stringify({ error: "Invalid body" }));
+    }
+    return;
+  }
+
+  // POST /upload — receive files (screenshots from iOS Shortcut)
+  if (req.method === "POST" && url.pathname === "/upload") {
+    try {
+      const buf = await readBinaryBody(req);
+      if (buf.length === 0) {
+        res.writeHead(400).end(JSON.stringify({ error: "Empty body" }));
+        return;
+      }
+      const ct = req.headers["content-type"] || "";
+      const ext = ct.includes("png") ? ".png" : ct.includes("jpeg") || ct.includes("jpg") ? ".jpg" : ct.includes("webp") ? ".webp" : ".bin";
+      const name = `screenshot-${Date.now()}-${randomUUID().slice(0, 6)}${ext}`;
+      const dir = join(homedir(), "Taildrop");
+      mkdirSync(dir, { recursive: true });
+      const filePath = join(dir, name);
+      await writeFile(filePath, buf);
+      emit({ type: "upload:received", file: name, bytes: buf.length });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ file: filePath, name, size: buf.length }));
+    } catch (err: any) {
+      res.writeHead(err.message === "Upload too large" ? 413 : 500);
+      res.end(JSON.stringify({ error: err.message || "Upload failed" }));
     }
     return;
   }

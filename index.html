@@ -23,8 +23,8 @@
     --text: #e8e8e8;
     --text-dim: #777;
     --text-mid: #aaa;
-    --accent: #E8734A;
-    --accent-dim: #8B4530;
+    --accent: #CB7C5E;
+    --accent-dim: #B15B39;
     --green: #4ade80;
     --amber: #fbbf24;
     --blue: #60a5fa;
@@ -407,9 +407,14 @@
     gap: 6px;
   }
 
-  /* In standalone PWA mode, safe-area-inset-bottom may over-report.
-     Use a smaller minimum so the input bar docks flush. */
+  /* In standalone PWA mode, iOS reports viewport height shorter than the
+     actual screen (793px vs 852px on iPhone 14 Pro). CSS viewport units
+     and position:fixed are both capped at this wrong value. JS sets
+     html height to screen.height to fill the real screen. */
   @media (display-mode: standalone) {
+    html {
+      overflow: hidden;
+    }
     .input-area {
       padding-bottom: max(env(safe-area-inset-bottom, 0px), 4px);
     }
@@ -1196,6 +1201,16 @@ let userScrolledUp = false; // true when user has scrolled away from bottom
 const params = new URLSearchParams(location.search);
 let bridgeUrl = params.get('bridge'); // Explicit bridge URL: ?bridge=http://kube:3001
 
+// === iOS standalone viewport fix ===
+// iOS reports viewport height shorter than the actual screen in standalone mode.
+// CSS viewport units (dvh, vh) and position:fixed are all capped at this wrong value.
+// Force html+body to screen.height which IS the real renderable area.
+if (window.matchMedia('(display-mode: standalone)').matches) {
+  const h = screen.height + 'px';
+  document.documentElement.style.height = h;
+  document.body.style.height = h;
+}
+
 // === Push notifications ===
 let swRegistration = null;
 let swReady = null;
@@ -1801,20 +1816,23 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// Inline markdown: code spans, bold, italic, strikethrough, links.
+// Escaped first (esc), so safe for innerHTML on user input too.
+function inline(s) {
+  s = esc(s);
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  s = s.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Bare URLs — only those not already inside an href="..." or <a> tag
+  s = s.replace(/(?<!href="|">)(https?:\/\/[^\s<)]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  return s;
+}
+
 // Minimal block-level markdown renderer for Claude's output patterns
 function md(text) {
   if (!text) return '';
-
-  // Inline formatting on already-escaped text
-  function inline(s) {
-    s = esc(s);
-    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    s = s.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    return s;
-  }
 
   const lines = text.split('\n');
   let out = '';
@@ -1886,23 +1904,35 @@ function md(text) {
       continue;
     }
 
-    // Unordered list item (-, •, or *)
+    // Unordered list item (-, •, or *) — spans blank lines between items
     if (/^[-•*]\s/.test(line)) {
       out += '<ul>';
-      while (i < lines.length && /^[-•*]\s/.test(lines[i])) {
-        out += `<li>${inline(lines[i].replace(/^[-•*]\s/, ''))}</li>`;
-        i++;
+      while (i < lines.length) {
+        if (/^[-•*]\s/.test(lines[i])) {
+          out += `<li>${inline(lines[i].replace(/^[-•*]\s/, ''))}</li>`;
+          i++;
+        } else if (lines[i].trim() === '' && i + 1 < lines.length && /^[-•*]\s/.test(lines[i + 1])) {
+          i++; // skip blank line between list items
+        } else {
+          break;
+        }
       }
       out += '</ul>';
       continue;
     }
 
-    // Ordered list item
+    // Ordered list item — spans blank lines between consecutive items
     if (/^\d+\. /.test(line)) {
       out += '<ol>';
-      while (i < lines.length && /^\d+\. /.test(lines[i])) {
-        out += `<li>${inline(lines[i].replace(/^\d+\. /, ''))}</li>`;
-        i++;
+      while (i < lines.length) {
+        if (/^\d+\. /.test(lines[i])) {
+          out += `<li>${inline(lines[i].replace(/^\d+\. /, ''))}</li>`;
+          i++;
+        } else if (lines[i].trim() === '' && i + 1 < lines.length && /^\d+\. /.test(lines[i + 1])) {
+          i++; // skip blank line between list items
+        } else {
+          break;
+        }
       }
       out += '</ol>';
       continue;
@@ -2099,7 +2129,7 @@ function renderMessages(messages) {
         const div = document.createElement('div');
         if (msg.role === 'user') {
           div.className = 'msg-user';
-          div.textContent = msg.content;
+          div.innerHTML = inline(msg.content);
           if (msg._msgId) div.dataset.msgId = msg._msgId;
           if (msg.pending) div.dataset.pending = 'true';
           else if (msg.queued) div.dataset.queued = 'true';
@@ -2602,7 +2632,7 @@ sendBtn.addEventListener('click', () => {
     // Add message to DOM immediately as pending
     const bubble = document.createElement('div');
     bubble.className = 'msg-user';
-    bubble.textContent = text;
+    bubble.innerHTML = inline(text);
     bubble.dataset.msgId = msgId;
     bubble.dataset.pending = 'true';
     msgEl.appendChild(bubble);
