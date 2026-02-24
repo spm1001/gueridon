@@ -22,6 +22,7 @@ const ALLOWED_TOOLS = [
   "Task", "TaskOutput", "TaskStop",
   "Skill", "AskUserQuestion",
   "EnterPlanMode", "ExitPlanMode", "EnterWorktree", "ToolSearch",
+  "mcp__*",
 ];
 
 // Tools hidden from the model entirely. WebFetch returns AI summaries not
