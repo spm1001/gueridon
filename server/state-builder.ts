@@ -58,6 +58,7 @@ export type SSEDelta =
   | { type: "tool_complete"; index: number; status: "completed" | "error"; output?: string }
   | { type: "ask_user"; questions: AskUserQuestion[]; toolCallId: string }
   | { type: "message_start" }
+  | { type: "api_error"; error: string }
   | null;
 
 // -- Constants --
@@ -80,6 +81,34 @@ function extractToolInput(name: string, args: Record<string, unknown>): string {
     if (typeof v === "string" && v.length < 200) return v;
   }
   return JSON.stringify(args).slice(0, 100);
+}
+
+// -- Helper: extract human-readable error from CC API error message --
+
+function extractApiErrorText(message: Record<string, unknown>): string {
+  const contentBlocks = message.content as unknown[] | undefined;
+  if (!Array.isArray(contentBlocks)) return "API error";
+
+  const raw = contentBlocks
+    .filter((b: unknown) => (b as Record<string, unknown>).type === "text")
+    .map((b: unknown) => (b as Record<string, unknown>).text as string)
+    .join(" ");
+
+  // Extract the human-readable message from the JSON blob
+  // Raw: 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Could not process image"},...}'
+  try {
+    const jsonStart = raw.indexOf("{");
+    if (jsonStart >= 0) {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      const apiMessage = parsed?.error?.message;
+      if (apiMessage) {
+        const status = raw.match(/API Error: (\d+)/)?.[1] || "?";
+        return `API error ${status}: ${apiMessage}`;
+      }
+    }
+  } catch { /* fall through to raw */ }
+
+  return raw || "API error";
 }
 
 // -- StateBuilder --
@@ -374,6 +403,17 @@ export class StateBuilder {
   private handleAssistant(event: Record<string, unknown>): SSEDelta {
     const message = event.message as Record<string, unknown> | undefined;
     if (!message) return null;
+
+    // API error messages — CC emits isApiErrorMessage: true when the Anthropic
+    // API returns an error (e.g. 400 "Could not process image"). No result event
+    // follows, no streaming events fire. The error text is in the content blocks.
+    // Without handling here, the user sees nothing — the turn silently fails.
+    if (event.isApiErrorMessage) {
+      const errorText = extractApiErrorText(message);
+      this.state.status = "idle";
+      this.state.error = errorText;
+      return { type: "api_error", error: errorText };
+    }
 
     // Deduplicate by message ID
     const msgId = message.id as string;

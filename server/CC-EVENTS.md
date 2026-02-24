@@ -214,6 +214,43 @@ Session JSONL files (on disk) and `parseSessionJSONL()` output use a wrapper:
 
 The `event` field contains the raw CC event. Unwrap before passing to StateBuilder.
 
+## API Error Events (assistant with isApiErrorMessage)
+
+When the Anthropic API returns an error (e.g. 400 "Could not process image"), CC emits
+an `assistant` event — not a `result` event. **No `result` event follows.** No streaming
+events fire (`message_start`, `content_block_*`). The turn just... ends.
+
+```json
+{
+  "type": "assistant",
+  "isApiErrorMessage": true,
+  "error": "unknown",
+  "message": {
+    "id": "msg_...",
+    "model": "claude-opus-4-6",
+    "role": "assistant",
+    "stop_reason": "stop_sequence",
+    "content": [
+      {
+        "type": "text",
+        "text": "API Error: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Could not process image\"},\"request_id\":\"req_...\"}"
+      }
+    ],
+    "usage": { "input_tokens": 100, "output_tokens": 0 }
+  }
+}
+```
+
+**Key fields:**
+- `isApiErrorMessage: true` — the signal. Normal assistant events don't have this.
+- `error: "unknown"` — error category (always "unknown" in observed cases).
+- `message.content[0].text` — raw error with embedded JSON blob.
+- **No `result` event follows** — bridge must treat this as turn-complete.
+
+**Verified:** 2026-02-24, CC v2.1.50, session c73cd33d. Two PNG files read via the Read
+tool produced base64 image blocks the API couldn't process. Every subsequent prompt
+replayed the poisoned context and hit the same 400 — permanent death spiral.
+
 ## Stdin Envelope Format
 
 ```json

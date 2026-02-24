@@ -474,6 +474,15 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
     }
   }
 
+  // API error — no result event follows, so trigger turn completion here.
+  // The state builder returns an api_error delta which the client uses to
+  // show the error inline. Without this, the turn silently stalls.
+  if (delta?.type === "api_error") {
+    const state = session.stateBuilder.getState();
+    session.contextPct = state.session.context_pct;
+    onTurnComplete(session);
+  }
+
   // Update context % on state builder
   if (event.type === "result") {
     const state = session.stateBuilder.getState();

@@ -1515,6 +1515,12 @@ function handleSSEDelta(data) {
     case 'ask_user':
       showAskUserOverlay(data.questions, data.toolCallId);
       break;
+
+    case 'api_error':
+      liveState.status = 'idle';
+      liveState._activity = null;
+      liveState.error = data.error;
+      break;
   }
   sseRender();
 }

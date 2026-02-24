@@ -105,6 +105,33 @@ function toolResult(
   };
 }
 
+function apiErrorMessage(
+  id: string,
+  statusCode: number,
+  errorType: string,
+  errorMessage: string,
+): Record<string, unknown> {
+  const jsonBody = JSON.stringify({
+    type: "error",
+    error: { type: errorType, message: errorMessage },
+    request_id: "req_test123",
+  });
+  return {
+    type: "assistant",
+    isApiErrorMessage: true,
+    error: "unknown",
+    message: {
+      id,
+      model: "claude-opus-4-6",
+      role: "assistant",
+      content: [{ type: "text", text: `API Error: ${statusCode} ${jsonBody}` }],
+      stop_reason: "stop_sequence",
+      usage: { input_tokens: 100, output_tokens: 0 },
+    },
+    session_id: "test-session-1",
+  };
+}
+
 function resultEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     type: "result",
@@ -819,6 +846,80 @@ describe("StateBuilder", () => {
       expect(state.status).toBe("idle");
       expect(state.error).toBeNull();
       expect(state.slashCommands).toBeNull();
+    });
+  });
+
+  describe("API error handling", () => {
+    it("returns api_error delta with human-readable message", () => {
+      const sb = makeBuilder();
+      const delta = sb.handleEvent(
+        apiErrorMessage("err-1", 400, "invalid_request_error", "Could not process image"),
+      );
+      expect(delta).toEqual({ type: "api_error", error: "API error 400: Could not process image" });
+    });
+
+    it("sets state.error and status to idle", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      expect(sb.getState().status).toBe("working");
+
+      sb.handleEvent(
+        apiErrorMessage("err-1", 400, "invalid_request_error", "Could not process image"),
+      );
+      const state = sb.getState();
+      expect(state.status).toBe("idle");
+      expect(state.error).toBe("API error 400: Could not process image");
+    });
+
+    it("does not push API error into messages array", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(
+        apiErrorMessage("err-1", 400, "invalid_request_error", "Could not process image"),
+      );
+      expect(sb.getState().messages).toEqual([]);
+    });
+
+    it("handles repeated API errors without duplicating", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(
+        apiErrorMessage("err-1", 400, "invalid_request_error", "Could not process image"),
+      );
+      sb.handleEvent(
+        apiErrorMessage("err-2", 400, "invalid_request_error", "Could not process image"),
+      );
+      const state = sb.getState();
+      expect(state.error).toBe("API error 400: Could not process image");
+      expect(state.messages).toEqual([]);
+    });
+
+    it("handles API error with malformed JSON gracefully", () => {
+      const sb = makeBuilder();
+      const event = {
+        type: "assistant",
+        isApiErrorMessage: true,
+        error: "unknown",
+        message: {
+          id: "err-bad",
+          role: "assistant",
+          content: [{ type: "text", text: "API Error: 500 not-json" }],
+          usage: {},
+        },
+      };
+      const delta = sb.handleEvent(event);
+      expect(delta).toEqual({ type: "api_error", error: "API Error: 500 not-json" });
+    });
+
+    it("replays API error from JSONL without crashing", () => {
+      const sb = makeBuilder();
+      const errorEvent = apiErrorMessage(
+        "err-1", 400, "invalid_request_error", "Could not process image",
+      );
+      const jsonlLine = JSON.stringify({ event: errorEvent });
+      sb.replayFromJSONL([jsonlLine]);
+
+      const state = sb.getState();
+      expect(state.status).toBe("idle");
+      expect(state.error).toBe("API error 400: Could not process image");
     });
   });
 });
