@@ -858,7 +858,7 @@ describe("StateBuilder", () => {
       expect(delta).toEqual({ type: "api_error", error: "API error 400: Could not process image" });
     });
 
-    it("sets state.error and status to idle", () => {
+    it("pushes error as assistant message and sets status to idle", () => {
       const sb = makeBuilder();
       sb.handleEvent(systemInit());
       expect(sb.getState().status).toBe("working");
@@ -868,18 +868,13 @@ describe("StateBuilder", () => {
       );
       const state = sb.getState();
       expect(state.status).toBe("idle");
-      expect(state.error).toBe("API error 400: Could not process image");
+      expect(state.error).toBeNull();
+      expect(state.messages).toEqual([
+        { role: "assistant", content: "API error 400: Could not process image" },
+      ]);
     });
 
-    it("does not push API error into messages array", () => {
-      const sb = makeBuilder();
-      sb.handleEvent(
-        apiErrorMessage("err-1", 400, "invalid_request_error", "Could not process image"),
-      );
-      expect(sb.getState().messages).toEqual([]);
-    });
-
-    it("handles repeated API errors without duplicating", () => {
+    it("pushes each repeated API error as a separate message", () => {
       const sb = makeBuilder();
       sb.handleEvent(
         apiErrorMessage("err-1", 400, "invalid_request_error", "Could not process image"),
@@ -888,8 +883,9 @@ describe("StateBuilder", () => {
         apiErrorMessage("err-2", 400, "invalid_request_error", "Could not process image"),
       );
       const state = sb.getState();
-      expect(state.error).toBe("API error 400: Could not process image");
-      expect(state.messages).toEqual([]);
+      expect(state.messages).toHaveLength(2);
+      expect(state.messages[0].content).toBe("API error 400: Could not process image");
+      expect(state.messages[1].content).toBe("API error 400: Could not process image");
     });
 
     it("handles API error with malformed JSON gracefully", () => {
@@ -909,7 +905,7 @@ describe("StateBuilder", () => {
       expect(delta).toEqual({ type: "api_error", error: "API Error: 500 not-json" });
     });
 
-    it("replays API error from JSONL without crashing", () => {
+    it("replays API error from JSONL as inline message", () => {
       const sb = makeBuilder();
       const errorEvent = apiErrorMessage(
         "err-1", 400, "invalid_request_error", "Could not process image",
@@ -919,7 +915,9 @@ describe("StateBuilder", () => {
 
       const state = sb.getState();
       expect(state.status).toBe("idle");
-      expect(state.error).toBe("API error 400: Could not process image");
+      expect(state.messages).toEqual([
+        { role: "assistant", content: "API error 400: Could not process image" },
+      ]);
     });
   });
 });

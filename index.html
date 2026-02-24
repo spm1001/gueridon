@@ -1519,7 +1519,7 @@ function handleSSEDelta(data) {
     case 'api_error':
       liveState.status = 'idle';
       liveState._activity = null;
-      liveState.error = data.error;
+      liveState.messages.push({ role: 'assistant', content: data.error });
       break;
   }
   sseRender();

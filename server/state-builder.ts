@@ -411,7 +411,7 @@ export class StateBuilder {
     if (event.isApiErrorMessage) {
       const errorText = extractApiErrorText(message);
       this.state.status = "idle";
-      this.state.error = errorText;
+      this.state.messages.push({ role: "assistant", content: errorText });
       return { type: "api_error", error: errorText };
     }
 
