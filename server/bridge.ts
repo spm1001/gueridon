@@ -31,6 +31,7 @@ import {
   parseSessionJSONL,
   getActiveSessions,
   resolveSessionForFolder,
+  isHandoffStale,
   type PendingDelta,
   type SessionProcessInfo,
 } from "./bridge-logic.js";
@@ -624,10 +625,21 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
   const handoff = await getLatestHandoff(folderPath);
   const exited = latestSession ? await hasExitMarker(folderPath, latestSession.id) : false;
 
+  // Stale handoff guard: if the session was resumed after the handoff was written,
+  // the handoff is a stale close signal — ignore it. (gdn-sekeca)
+  const handoffId = handoff?.sessionId ?? null;
+  const handoffStale = isHandoffStale(
+    handoffId, handoff?.mtime ?? null,
+    latestSession?.id ?? null, latestSession?.lastActive ?? null,
+  );
+  if (handoffStale) {
+    emit({ type: "handoff:stale", folder: folderName, sessionId: latestSession!.id });
+  }
+
   const resolution = resolveSessionForFolder(
     null, // no existing bridge session for this folder
     latestSession,
-    handoff?.sessionId ?? null,
+    handoffStale ? null : handoffId,
     exited,
     randomUUID,
   );

@@ -125,6 +125,20 @@ export function resolveSessionForFolder(
   };
 }
 
+/**
+ * Check if a handoff is stale: the session was resumed after the handoff was written.
+ * Returns true if the handoff should be ignored (JSONL modified after handoff). (gdn-sekeca)
+ */
+export function isHandoffStale(
+  handoffSessionId: string | null,
+  handoffMtime: Date | null,
+  sessionId: string | null,
+  sessionMtime: Date | null,
+): boolean {
+  if (!handoffSessionId || !handoffMtime || !sessionId || !sessionMtime) return false;
+  return handoffSessionId === sessionId && sessionMtime > handoffMtime;
+}
+
 // --- Path validation ---
 
 /**

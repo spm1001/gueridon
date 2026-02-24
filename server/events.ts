@@ -46,6 +46,9 @@ export type BridgeEvent =
   | { type: "orphan:reap"; pid: number; folder: string; sessionId: string }
   | { type: "orphan:summary"; reaped: number }
 
+  // Handoff staleness
+  | { type: "handoff:stale"; folder: string; sessionId: string }
+
   // JSONL replay
   | { type: "replay:ok"; folder: string; eventCount: number; sessionId?: string }
   | { type: "replay:fail"; folder: string; error: string; sessionId?: string }
@@ -96,6 +99,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "orphan:skip": "debug",
   "orphan:reap": "info",
   "orphan:summary": "info",
+  "handoff:stale": "info",
   "replay:ok": "info",
   "replay:fail": "warn",
   "push:init": "info",

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   resolveSessionForFolder,
+  isHandoffStale,
   validateFolderPath,
   buildCCArgs,
   getActiveSessions,
@@ -207,6 +208,38 @@ describe("resolveSessionForFolder", () => {
         isReconnect: false,
       });
     });
+  });
+});
+
+// --- isHandoffStale (gdn-sekeca) ---
+// A handoff is stale when the session was resumed after the handoff was written.
+
+describe("isHandoffStale", () => {
+  const earlier = new Date("2026-02-24T06:39:00Z");
+  const later   = new Date("2026-02-24T06:41:00Z");
+
+  it("returns true when handoff matches session and JSONL is newer", () => {
+    expect(isHandoffStale("sess-1", earlier, "sess-1", later)).toBe(true);
+  });
+
+  it("returns false when handoff matches session and handoff is newer", () => {
+    expect(isHandoffStale("sess-1", later, "sess-1", earlier)).toBe(false);
+  });
+
+  it("returns false when handoff matches session and times are equal", () => {
+    expect(isHandoffStale("sess-1", earlier, "sess-1", earlier)).toBe(false);
+  });
+
+  it("returns false when handoff does not match session", () => {
+    expect(isHandoffStale("sess-old", earlier, "sess-new", later)).toBe(false);
+  });
+
+  it("returns false when handoff is null", () => {
+    expect(isHandoffStale(null, null, "sess-1", later)).toBe(false);
+  });
+
+  it("returns false when session is null", () => {
+    expect(isHandoffStale("sess-1", earlier, null, null)).toBe(false);
   });
 });
 
