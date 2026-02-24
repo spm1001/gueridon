@@ -694,13 +694,16 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
       session.stateBuilder.replayFromJSONL(events);
       emit({ type: "replay:ok", folder: folderName, eventCount: events.length });
 
-      // Detect interrupted turn: if status is "working" after replay, the
-      // last turn had system:init but no result — CC was mid-work when killed.
+      // Any resumable session should auto-resume after bridge restart.
+      // CC was killed (orphan reap or shutdown) — the user expects continuity.
+      session.wasInterrupted = true;
       const replayState = session.stateBuilder.getState();
-      if (replayState.status === "working") {
-        session.wasInterrupted = true;
-        emit({ type: "session:interrupted", folder: folderName, sessionId: session.id });
-      }
+      emit({
+        type: "session:interrupted",
+        folder: folderName,
+        sessionId: session.id,
+        midTurn: replayState.status === "working",
+      });
     } catch (err) {
       emit({ type: "replay:fail", folder: folderName, error: String(err) });
     }
@@ -881,13 +884,12 @@ async function handleSession(
   // This avoids cold starts when the user browses folders without sending.
   // deliverPrompt() handles spawn-if-needed.
   //
-  // Exception: if the session was interrupted mid-work (bridge restart killed
-  // CC while it was processing), auto-inject a resume prompt so Claude picks
-  // up where it left off without the user having to nudge.
+  // Exception: after bridge restart, any resumable session auto-spawns CC
+  // so Claude picks up without the user having to nudge.
   if (session.wasInterrupted) {
     session.wasInterrupted = false; // one-shot
     deliverPrompt(session, {
-      text: "You were interrupted mid-work by a system restart. The bridge has restarted and your session has been resumed. Review the conversation above and continue where you left off.",
+      text: "The bridge was restarted and your session has been resumed. Review the conversation and continue where you left off.",
     });
     emit({ type: "session:auto-resume", folder: session.folderName, sessionId: session.id });
   }
