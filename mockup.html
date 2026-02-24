@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Full design system</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #1a1a1a;
+    --surface: #242424;
+    --surface-raised: #2a2a2a;
+    --border: #333;
+    --text: #e8e8e8;
+    --text-dim: #777;
+    --text-mid: #aaa;
+    --accent: #d97757;
+    --accent-dim: #B85A35;
+    --red: #CE3931;
+    --amber: #fbbf24;
+    --blue: #6a9bcc;
+    --green: #788c5d;
+    --font: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --mono: 'SF Mono', Menlo, Consolas, monospace;
+  }
+  html { font-size: 15px; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); padding: 0; }
+  h1 { font-size: 1.1rem; color: var(--accent); margin-bottom: 4px; padding: 16px 14px 0; }
+  h2 { font-size: 0.85rem; color: var(--text-mid); margin: 0; padding: 20px 14px 6px;
+    text-transform: uppercase; letter-spacing: 0.5px; background: var(--surface); }
+  p.note { font-size: 0.75rem; color: var(--text-dim); padding: 0 14px 12px; line-height: 1.4;
+    background: var(--surface); }
+  hr.sep { border: none; border-top: 1px solid var(--border); margin: 0; }
+
+  .phone {
+    max-width: 390px;
+    margin: 0 auto 32px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .phone-messages {
+    padding: 12px 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .phone-input {
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 8px 10px;
+  }
+  .phone-textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 20px; padding: 10px 14px; color: var(--text);
+    font-family: var(--font); font-size: 16px; line-height: 1.4;
+    resize: none; outline: none; height: 42px;
+  }
+  .phone-textarea::placeholder { color: var(--text-dim); }
+  .btn-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .btn-circle {
+    width: 34px; height: 34px; border-radius: 50%; border: none;
+    font-size: 1rem; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; cursor: pointer;
+  }
+  .btn-slash { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+  .btn-file { background: transparent; border: 1px solid var(--border); color: var(--text-dim); font-size: 1.2rem; font-weight: 400; }
+  .btn-send { background: var(--accent); color: var(--bg); }
+  .btn-send.inactive { background: var(--text-dim); }
+  .btn-stop { background: var(--red); color: var(--bg); }
+  .btn-lozenge {
+    height: 34px; border-radius: 17px; border: 1px solid var(--border);
+    background: transparent; color: var(--text-dim); font-family: var(--font);
+    font-size: 0.72rem; padding: 0 12px;
+    display: flex; align-items: center; gap: 4px;
+    cursor: pointer; white-space: nowrap; overflow: hidden;
+  }
+  .btn-lozenge.folder { flex: 1; min-width: 0; }
+  .btn-lozenge .label { overflow: hidden; text-overflow: ellipsis; }
+  .btn-lozenge .pct { font-family: var(--mono); font-size: 0.7rem; }
+  .btn-lozenge.low { border-color: var(--amber); color: var(--amber); }
+  .btn-lozenge.critical { border-color: var(--red); color: var(--red); }
+
+  /* Messages */
+  .msg-user {
+    align-self: flex-end; max-width: 85%;
+    background: #2a3a4a; color: #d4e4f4;
+    padding: 9px 14px; border-radius: 18px 18px 4px 18px;
+    font-size: 0.93rem; line-height: 1.4;
+  }
+  .msg-assistant {
+    align-self: flex-start; max-width: 92%;
+    font-size: 0.93rem; padding: 2px 0;
+    color: var(--accent); line-height: 1.5;
+  }
+  .icode { font-family: var(--mono); font-size: 0.82rem; background: var(--surface-raised); padding: 1px 5px; border-radius: 4px; }
+  b { font-weight: 600; }
+
+  /* ========= PILL CHIPS ========= */
+  .chip-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 4px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.65rem;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .chip .c-status { font-size: 0.45rem; flex-shrink: 0; }
+  .chip .c-status.done { color: var(--green); }
+  .chip .c-status.err { color: var(--red); }
+  .chip .c-name { font-family: var(--mono); color: var(--text-dim); white-space: nowrap; }
+  .chip .c-path { font-family: var(--mono); font-size: 0.58rem; color: var(--text-dim); opacity: 0.4;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px; }
+  .chip.error { border-color: var(--red); }
+
+  /* Running chip — pulsing border */
+  .chip.running {
+    border-color: var(--amber);
+    animation: pulse-amber 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse-amber {
+    0%, 100% { border-color: var(--border); }
+    50% { border-color: var(--amber); }
+  }
+
+  /* Expanded chip */
+  .chip.expanded {
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    border-radius: 8px;
+    padding: 6px 10px;
+    gap: 4px;
+  }
+  .chip .c-detail {
+    display: none;
+    font-family: var(--mono); font-size: 0.6rem; color: var(--text-dim);
+    white-space: pre-wrap; max-height: 100px; overflow-y: auto;
+    width: 100%; padding-top: 4px; border-top: 1px solid var(--border);
+  }
+  .chip.expanded .c-detail { display: block; }
+
+  /* ========= THINKING CHIP ========= */
+  .chip.thinking {
+    border-color: var(--accent);
+    animation: pulse-coral 1.5s ease-in-out infinite;
+    color: var(--accent);
+  }
+  .chip.thinking .c-name { color: var(--accent); }
+  @keyframes pulse-coral {
+    0%, 100% { border-color: var(--border); opacity: 0.5; }
+    50% { border-color: var(--accent); opacity: 1; }
+  }
+
+  /* ========= WRITING CHIP ========= */
+  .chip.writing {
+    border-color: var(--green);
+    animation: pulse-green 1.5s ease-in-out infinite;
+    color: var(--green);
+  }
+  .chip.writing .c-name { color: var(--green); }
+  @keyframes pulse-green {
+    0%, 100% { border-color: var(--border); opacity: 0.5; }
+    50% { border-color: var(--green); opacity: 1; }
+  }
+
+  /* Code block */
+  .code-block {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; margin: 6px 0; font-family: var(--mono);
+    font-size: 0.75rem; line-height: 1.4; color: var(--text-mid); overflow-x: auto;
+  }
+</style>
+</head>
+<body>
+
+<h1>Full design — conversation + activity</h1>
+<p class="note" style="padding-top: 8px;">Scheme A &bull; Pill chips &bull; Semantic pulsing &bull; No zinger</p>
+
+<!-- ========================================
+     SCENE 1: Normal conversation
+     ======================================== -->
+<h2>Normal conversation</h2>
+<p class="note">Chips collapsed. Green ticks. No zinger needed — the chips ARE the activity record.</p>
+<div class="phone">
+  <div class="phone-messages">
+    <div class="msg-user">Can you fix the input bar? The buttons crowd the text on multi-line messages.</div>
+    <div class="msg-assistant">I'll take a look at the current layout.</div>
+    <div class="chip-grid">
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">index.html</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Grep</span><span class="c-path">input-bar</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts:400</span></div>
+    </div>
+    <div class="msg-assistant">Found it. The <span class="icode">.input-row</span> uses inline flex. When text wraps, buttons compress the textarea width. Fix: detect multi-line, use <span class="icode">flex-wrap</span>.</div>
+    <div class="chip-grid">
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Edit</span><span class="c-path">index.html</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Bash</span><span class="c-path">npm test</span></div>
+    </div>
+    <div class="msg-assistant"><b>Done.</b> 186 tests pass. Hard refresh to test on your phone.</div>
+  </div>
+  <div class="phone-input">
+    <textarea class="phone-textarea" placeholder="Message Claude..." readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file">+</button>
+      <button class="btn-circle btn-slash">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon-exit-plan</span></button>
+      <button class="btn-lozenge"><span class="pct">31%</span></button>
+      <button class="btn-circle btn-send inactive">&uarr;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================
+     SCENE 2: Thinking
+     ======================================== -->
+<h2>Thinking</h2>
+<p class="note">Coral pulsing chip. "Claude's colour" = thinking. No ambiguity. Placeholder also says thinking.</p>
+<div class="phone">
+  <div class="phone-messages">
+    <div class="msg-user">Refactor the upload handler to support multipart form data</div>
+    <div class="chip-grid">
+      <div class="chip thinking"><span class="c-name">Thinking...</span></div>
+    </div>
+  </div>
+  <div class="phone-input">
+    <textarea class="phone-textarea" placeholder="Claude is thinking..." readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file">+</button>
+      <button class="btn-circle btn-slash">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon-exit-plan</span></button>
+      <button class="btn-lozenge"><span class="pct">31%</span></button>
+      <button class="btn-circle btn-stop">&#x25A0;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================
+     SCENE 3: Thinking then tool use
+     ======================================== -->
+<h2>Thinking &rarr; tools</h2>
+<p class="note">Thinking chip settles (goes dim/static). Tool chips appear. Running tool pulses amber. You can see the sequence: thought, then acted.</p>
+<div class="phone">
+  <div class="phone-messages">
+    <div class="msg-user">Refactor the upload handler to support multipart form data</div>
+    <div class="chip-grid">
+      <div class="chip" style="opacity: 0.5;"><span class="c-name" style="color: var(--text-dim);">Thought</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts:1213</span></div>
+      <div class="chip running"><span class="c-name">Edit</span><span class="c-path">bridge.ts</span></div>
+    </div>
+  </div>
+  <div class="phone-input">
+    <textarea class="phone-textarea" placeholder="Claude is editing..." readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file">+</button>
+      <button class="btn-circle btn-slash">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon-exit-plan</span></button>
+      <button class="btn-lozenge"><span class="pct">45%</span></button>
+      <button class="btn-circle btn-stop">&#x25A0;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================
+     SCENE 4: Writing response
+     ======================================== -->
+<h2>Writing response</h2>
+<p class="note">Green pulsing chip. Tool chips settled. Claude composing text = green (the Anthropic brand green). Text streams in below.</p>
+<div class="phone">
+  <div class="phone-messages">
+    <div class="msg-user">Refactor the upload handler to support multipart form data</div>
+    <div class="chip-grid">
+      <div class="chip" style="opacity: 0.5;"><span class="c-name" style="color: var(--text-dim);">Thought</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts:1213</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Edit</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Bash</span><span class="c-path">npm test</span></div>
+      <div class="chip writing"><span class="c-name">Writing...</span></div>
+    </div>
+    <div class="msg-assistant">The upload handler now supports multipart. I added <span class="icode">parseMultipart()</span> which extracts each part's headers and body. The existing <span class="icode">readBinaryBody</span> falls through to&#x2026;</div>
+  </div>
+  <div class="phone-input">
+    <textarea class="phone-textarea" placeholder="Claude is writing..." readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file">+</button>
+      <button class="btn-circle btn-slash">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon-exit-plan</span></button>
+      <button class="btn-lozenge"><span class="pct">48%</span></button>
+      <button class="btn-circle btn-stop">&#x25A0;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================
+     SCENE 5: Error mid-flow
+     ======================================== -->
+<h2>Error mid-flow</h2>
+<p class="note">Red border on failed chip. Stands out in the flow. Claude explains, retries.</p>
+<div class="phone">
+  <div class="phone-messages">
+    <div class="msg-assistant">Let me run the tests.</div>
+    <div class="chip-grid">
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Edit</span><span class="c-path">index.html</span></div>
+      <div class="chip error"><span class="c-status err">&#x2717;</span><span class="c-name">Bash</span><span class="c-path">npm test</span></div>
+    </div>
+    <div class="msg-assistant">Test failed — the <span class="icode">parseMultipart</span> import is missing. Let me fix that.</div>
+    <div class="chip-grid">
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Edit</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Bash</span><span class="c-path">npm test</span></div>
+    </div>
+    <div class="msg-assistant"><b>Fixed.</b> 186 tests pass now.</div>
+  </div>
+  <div class="phone-input">
+    <textarea class="phone-textarea" placeholder="Message Claude..." readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file">+</button>
+      <button class="btn-circle btn-slash">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon-exit-plan</span></button>
+      <button class="btn-lozenge"><span class="pct">52%</span></button>
+      <button class="btn-circle btn-send inactive">&uarr;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================
+     SCENE 6: Expanded chip
+     ======================================== -->
+<h2>Tapped a chip</h2>
+<p class="note">Tap any chip &rarr; expands full-width showing content. Tap again to collapse. Every chip is independently expandable — no coalescing problems.</p>
+<div class="phone">
+  <div class="phone-messages">
+    <div class="chip-grid">
+      <div class="chip expanded">
+        <div style="display:flex; align-items:center; gap:4px; width:100%;">
+          <span class="c-status done">&#x2713;</span><span class="c-name">Bash</span><span class="c-path">npm test</span>
+        </div>
+        <div class="c-detail" style="display:block;">PASS server/bridge-logic.test.ts (104 tests)
+PASS server/folders.test.ts (34 tests)
+PASS server/status-buffer.test.ts (5 tests)
+PASS server/state-builder.test.ts (28 tests)
+
+186 passed (8 files) 2.22s</div>
+      </div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">index.html</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Grep</span><span class="c-path">input-bar</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Edit</span><span class="c-path">index.html</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================
+     SCENE 7: Heavy tool use session
+     ======================================== -->
+<h2>Heavy tool session</h2>
+<p class="note">Lots of tool calls. Chips stay compact. Compare this density with 15 rows of log lines.</p>
+<div class="phone">
+  <div class="phone-messages">
+    <div class="msg-user">Add multipart upload support to the bridge</div>
+    <div class="chip-grid">
+      <div class="chip" style="opacity: 0.5;"><span class="c-name" style="color: var(--text-dim);">Thought</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts:741</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts:1213</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Grep</span><span class="c-path">Content-Type</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Edit</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Edit</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip error"><span class="c-status err">&#x2717;</span><span class="c-name">Bash</span><span class="c-path">npm test</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Edit</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Bash</span><span class="c-path">npm test</span></div>
+    </div>
+    <div class="msg-assistant"><b>Done.</b> The upload endpoint now handles both raw binary (existing) and <span class="icode">multipart/form-data</span>. Each part is saved as a separate file. 186 tests pass.</div>
+  </div>
+  <div class="phone-input">
+    <textarea class="phone-textarea" placeholder="Message Claude..." readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file">+</button>
+      <button class="btn-circle btn-slash">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon-exit-plan</span></button>
+      <button class="btn-lozenge"><span class="pct">52%</span></button>
+      <button class="btn-circle btn-send inactive">&uarr;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================
+     SCENE 8: Context critical
+     ======================================== -->
+<h2>Context critical + stop</h2>
+<p class="note">Matching reds. Both use #CE3931.</p>
+<div class="phone">
+  <div class="phone-messages">
+    <div class="chip-grid">
+      <div class="chip" style="opacity: 0.5;"><span class="c-name" style="color: var(--text-dim);">Thought</span></div>
+      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">bridge.ts</span></div>
+      <div class="chip running"><span class="c-name">Edit</span><span class="c-path">bridge.ts</span></div>
+    </div>
+  </div>
+  <div class="phone-input">
+    <textarea class="phone-textarea" placeholder="Claude is editing..." readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file">+</button>
+      <button class="btn-circle btn-slash">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon-exit-plan</span></button>
+      <button class="btn-lozenge critical"><span class="pct">95%</span></button>
+      <button class="btn-circle btn-stop">&#x25A0;</button>
+    </div>
+  </div>
+</div>
+
+<div style="height: 60px;"></div>
+</body>
+</html>

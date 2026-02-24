@@ -23,12 +23,12 @@
     --text: #e8e8e8;
     --text-dim: #777;
     --text-mid: #aaa;
-    --accent: #CB7C5E;
-    --accent-dim: #B15B39;
-    --green: #4ade80;
+    --accent: #d97757;
+    --accent-dim: #B85A35;
+    --green: #788c5d;
     --amber: #fbbf24;
-    --blue: #60a5fa;
-    --red: #f87171;
+    --blue: #6a9bcc;
+    --red: #CE3931;
     --radius: 10px;
     --font: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
     --mono: 'SF Mono', Menlo, Consolas, monospace;
@@ -61,23 +61,26 @@
 
   .messages > * { flex-shrink: 0; }
 
-  /* User bubble */
+  /* User bubble — cool blue-grey (scheme A) */
   .msg-user {
     align-self: flex-end;
     max-width: 85%;
-    background: var(--accent-dim);
-    color: #fff;
+    background: #2a3a4a;
+    color: #d4e4f4;
     padding: 9px 14px;
     border-radius: 18px 18px 4px 18px;
     font-size: 0.93rem;
+    line-height: 1.4;
   }
 
-  /* Assistant text */
+  /* Assistant text — brand orange (scheme A) */
   .msg-assistant {
     align-self: flex-start;
     max-width: 92%;
     font-size: 0.93rem;
     padding: 2px 0;
+    color: var(--accent);
+    line-height: 1.5;
   }
 
   /* Markdown in assistant messages */
@@ -119,6 +122,7 @@
     overflow-x: auto;
     font-size: 0.78rem;
     line-height: 1.4;
+    color: var(--text-mid);
   }
 
   .msg-assistant pre code {
@@ -139,6 +143,7 @@
     margin: 8px 0;
     font-size: 0.82rem;
     width: 100%;
+    color: var(--text-mid);
   }
 
   .msg-assistant th, .msg-assistant td {
@@ -424,6 +429,17 @@
     display: flex;
     gap: 8px;
     align-items: center;
+  }
+
+  .input-row.multiline {
+    flex-wrap: wrap;
+  }
+  .input-row.multiline .input-field {
+    order: -1;
+    flex-basis: 100%;
+  }
+  .input-row.multiline .send-btn {
+    margin-left: auto;
   }
 
   .input-field {
@@ -2541,6 +2557,14 @@ const msgEl = document.getElementById('messages');
 const sendBtn = document.querySelector('.send-btn');
 
 ta.addEventListener('input', () => {
+  const row = ta.closest('.input-row');
+  // Always measure at inline (narrow) width to avoid oscillation:
+  // text that wraps narrow but fits wide would thrash between modes.
+  row.classList.remove('multiline');
+  ta.style.height = 'auto';
+  const inlineSh = Math.min(ta.scrollHeight, 120);
+  row.classList.toggle('multiline', inlineSh > 44);
+  // Now set height at the final (possibly wider) width
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
   // Update send button appearance based on text content
@@ -2684,6 +2708,10 @@ sendBtn.addEventListener('click', () => {
         if (undoTimer) clearTimeout(undoTimer);
         undoTimer = null;
         ta.value = text;
+        const urow = ta.closest('.input-row');
+        urow.classList.remove('multiline');
+        ta.style.height = 'auto';
+        urow.classList.toggle('multiline', Math.min(ta.scrollHeight, 120) > 44);
         ta.style.height = 'auto';
         ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
         ta.focus();
@@ -2700,6 +2728,7 @@ sendBtn.addEventListener('click', () => {
     // Clear textarea
     ta.value = '';
     ta.style.height = 'auto';
+    ta.closest('.input-row').classList.remove('multiline');
     updateSendButton();
   }
 });
@@ -2763,6 +2792,7 @@ function openSlashSheet() {
       ta.value = '/' + cmd.name;
       ta.style.height = 'auto';
       ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+      ta.closest('.input-row').classList.remove('multiline');
       updateSendButton();
       // Local commands auto-send — they're instant, no reason to pause
       if (cmd.local) {
