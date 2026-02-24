@@ -85,6 +85,22 @@
   .msg-assistant p:last-child { margin-bottom: 0; }
   .msg-assistant strong { font-weight: 600; }
   .msg-assistant em { font-style: italic; }
+  .msg-assistant del { text-decoration: line-through; color: var(--text-dim); }
+  .msg-assistant a { color: var(--blue); text-decoration: underline; }
+
+  .msg-assistant h1, .msg-assistant h2, .msg-assistant h3,
+  .msg-assistant h4, .msg-assistant h5, .msg-assistant h6 {
+    font-weight: 600;
+    margin: 12px 0 4px;
+  }
+  .msg-assistant h1 { font-size: 1.25rem; }
+  .msg-assistant h2 { font-size: 1.12rem; }
+  .msg-assistant h3 { font-size: 1.0rem; }
+  .msg-assistant h4, .msg-assistant h5, .msg-assistant h6 { font-size: 0.93rem; color: var(--text-mid); }
+
+  .msg-assistant .task-list { list-style: none; margin-left: 4px; }
+  .msg-assistant .task-list li::before { content: none; }
+  .msg-assistant .task-checkbox { margin-right: 6px; }
 
   .msg-assistant code {
     font-family: var(--mono);
@@ -138,8 +154,7 @@
 
   /* === Tool calls === */
   .tool-call {
-    align-self: flex-start;
-    max-width: 92%;
+    align-self: stretch;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -163,11 +178,12 @@
   }
 
   .tool-chevron {
-    font-size: 0.85rem;
+    font-size: 1.1rem;
     color: var(--text-dim);
     transition: transform 0.15s;
-    width: 14px;
+    width: 20px;
     text-align: center;
+    flex-shrink: 0;
   }
 
   .tool-call[data-expanded="true"] .tool-chevron {
@@ -224,8 +240,7 @@
 
   /* Tool summary (coalesced successful calls) */
   .tool-summary {
-    align-self: flex-start;
-    max-width: 92%;
+    align-self: stretch;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -391,6 +406,14 @@
     gap: 6px;
   }
 
+  /* In standalone PWA mode, safe-area-inset-bottom may over-report.
+     Use a smaller minimum so the input bar docks flush. */
+  @media (display-mode: standalone) {
+    .input-area {
+      padding-bottom: max(env(safe-area-inset-bottom, 0px), 4px);
+    }
+  }
+
   .input-row {
     display: flex;
     gap: 8px;
@@ -450,7 +473,7 @@
     justify-content: center;
     flex-shrink: 0;
   }
-  .slash-btn { display: none; } /* Hidden until slash_commands arrive from init */
+  .slash-btn { display: none; } /* Hidden until a folder is connected */
   .slash-btn.visible { display: flex; }
   .slash-btn:active { background: var(--surface-raised); }
   body[data-connection="disconnected"] .slash-btn { opacity: 0.3; pointer-events: none; }
@@ -554,34 +577,34 @@
     color: var(--accent-dim);
   }
 
-  /* Connection indicator dot */
+  .status-push-denied {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: none;
+  }
+  .status-push-denied.visible { display: inline; }
+
+  /* Connection indicator dot — hidden in conversation (desaturation communicates state).
+     Kept for per-folder dots in switcher (.switcher-dot). */
   .status-connection {
     width: 7px;
     height: 7px;
     border-radius: 50%;
     background: var(--green);
     flex-shrink: 0;
+    display: none; /* Hidden — disconnect communicated by desaturation + placeholder */
   }
 
-  .status-connection[data-state="disconnected"] {
-    background: var(--text-dim);
-    animation: pulse 2s infinite;
-  }
-
-  /* Reconnecting label */
+  /* Reconnecting label — removed (placeholder text handles this now) */
   .status-reconnecting {
-    font-size: 0.68rem;
-    color: var(--text-dim);
     display: none;
   }
 
-  .status-reconnecting[data-visible="true"] {
-    display: inline;
-  }
-
-  /* Disconnected state: mute the whole UI */
+  /* Disconnected state: desaturated + dimmed — clearly "wrong" like Mac deep-sleep resume */
   body[data-connection="disconnected"] .messages {
     opacity: 0.5;
+    filter: grayscale(0.8);
   }
 
   body[data-connection="disconnected"] .input-field {
@@ -691,6 +714,7 @@
     background: rgba(0, 0, 0, 0.5);
     z-index: 99;
     display: none;
+    touch-action: manipulation; /* Prevent iOS double-tap-to-zoom */
   }
 
   .switcher-backdrop[data-open="true"] {
@@ -711,6 +735,8 @@
     transform: translateY(100%);
     visibility: hidden;
     transition: transform 0.25s ease, visibility 0s 0.25s;
+    overscroll-behavior: none; /* Prevent pull-to-refresh hijacking */
+    touch-action: pan-y; /* Allow scroll but prevent other gestures */
   }
 
   .switcher[data-open="true"] {
@@ -989,6 +1015,7 @@
         <span class="status-reconnecting" id="reconnecting">reconnecting…</span>
         <span class="status-context" id="contextPct"></span>
       </div>
+      <span class="status-push-denied" id="pushDenied" title="Notifications blocked">🔇</span>
       <span class="status-model" id="model"></span>
     </div>
   </div>
@@ -1019,6 +1046,7 @@
 let cachedState = null;
 let switcherOpen = false;
 let switcherExpandedFolder = null; // folder name currently expanded in switcher
+let userScrolledUp = false; // true when user has scrolled away from bottom
 
 // === Mode detection ===
 const params = new URLSearchParams(location.search);
@@ -1049,11 +1077,23 @@ if ('serviceWorker' in navigator) {
 async function pushRequestPermission() {
   if (!('Notification' in window)) return false;
   if (Notification.permission === 'granted') { pushPermissionGranted = true; return true; }
-  if (Notification.permission === 'denied') return false;
+  if (Notification.permission === 'denied') {
+    document.getElementById('pushDenied').classList.add('visible');
+    return false;
+  }
   const result = await Notification.requestPermission();
   pushPermissionGranted = result === 'granted';
+  if (!pushPermissionGranted) {
+    document.getElementById('pushDenied').classList.add('visible');
+  }
   return pushPermissionGranted;
 }
+
+// Push denied indicator: tap shows instructions
+document.getElementById('pushDenied').addEventListener('click', (e) => {
+  e.stopPropagation();
+  alert('Notifications are blocked.\n\nTo re-enable:\niOS: Settings → Notifications → Safari\nAndroid: Site settings → Notifications');
+});
 
 /** Subscribe to push via bridge. Call after hello provides VAPID key. */
 async function pushSubscribe(vapidPublicKey) {
@@ -1411,6 +1451,21 @@ function sseConnectFolder(folder, sessionId) {
 }
 
 let sseRenderQueued = false;
+function updatePlaceholder() {
+  const ta = document.querySelector('.input-field');
+  if (!sseCurrentFolder) {
+    ta.placeholder = 'Choose a folder…';
+  } else if (liveState.connection === 'disconnected') {
+    ta.placeholder = 'Reconnecting…';
+  } else if (liveState.status === 'working') {
+    ta.placeholder = 'Claude is thinking…';
+  } else {
+    const model = liveState.session?.model;
+    const short = model ? model.replace('claude-', '').replace(/-\d{8}$/, '') : '';
+    ta.placeholder = short ? `Message ${short}…` : 'Message Claude…';
+  }
+}
+
 function sseRender() {
   if (sseRenderQueued) return;
   sseRenderQueued = true;
@@ -1420,7 +1475,9 @@ function sseRender() {
     renderStatusBar(liveState);
     renderMessages(liveState.messages);
     renderSwitcher(liveState);
-    document.getElementById('slashBtn').classList.toggle('visible', !!liveState.slashCommands?.length);
+    // Show slash button when any folder is connected (local commands always available)
+    document.getElementById('slashBtn').classList.toggle('visible', !!sseCurrentFolder);
+    updatePlaceholder();
   });
 }
 
@@ -1462,8 +1519,11 @@ function md(text) {
   // Inline formatting on already-escaped text
   function inline(s) {
     s = esc(s);
-    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+    s = s.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     return s;
   }
 
@@ -1476,6 +1536,15 @@ function md(text) {
 
     // Blank line — skip
     if (line.trim() === '') { i++; continue; }
+
+    // Headers: # through ######
+    const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headerMatch) {
+      const level = headerMatch[1].length;
+      out += `<h${level}>${inline(headerMatch[2])}</h${level}>`;
+      i++;
+      continue;
+    }
 
     // Fenced code block
     if (line.startsWith('```')) {
@@ -1515,11 +1584,24 @@ function md(text) {
       continue;
     }
 
-    // Unordered list item
-    if (/^- /.test(line)) {
+    // Task list: - [x] or - [ ]
+    if (/^[-•*]\s+\[[ xX]\]\s/.test(line)) {
+      out += '<ul class="task-list">';
+      while (i < lines.length && /^[-•*]\s+\[[ xX]\]\s/.test(lines[i])) {
+        const checked = /^[-•*]\s+\[[xX]\]/.test(lines[i]);
+        const text = lines[i].replace(/^[-•*]\s+\[[ xX]\]\s*/, '');
+        out += `<li><input type="checkbox" class="task-checkbox" disabled ${checked ? 'checked' : ''}>${inline(text)}</li>`;
+        i++;
+      }
+      out += '</ul>';
+      continue;
+    }
+
+    // Unordered list item (-, •, or *)
+    if (/^[-•*]\s/.test(line)) {
       out += '<ul>';
-      while (i < lines.length && /^- /.test(lines[i])) {
-        out += `<li>${inline(lines[i].slice(2))}</li>`;
+      while (i < lines.length && /^[-•*]\s/.test(lines[i])) {
+        out += `<li>${inline(lines[i].replace(/^[-•*]\s/, ''))}</li>`;
         i++;
       }
       out += '</ul>';
@@ -1541,8 +1623,10 @@ function md(text) {
     let para = '';
     while (i < lines.length && lines[i].trim() !== '' &&
            !lines[i].startsWith('|') &&
-           !/^- /.test(lines[i]) &&
-           !/^\d+\. /.test(lines[i])) {
+           !/^[-•*]\s/.test(lines[i]) &&
+           !/^\d+\. /.test(lines[i]) &&
+           !/^#{1,6}\s/.test(lines[i]) &&
+           !lines[i].startsWith('```')) {
       if (para) para += ' ';
       para += lines[i];
       i++;
@@ -1775,8 +1859,19 @@ function renderMessages(messages) {
     }
   }
 
-  el.scrollTop = el.scrollHeight;
+  // Only auto-scroll if user hasn't scrolled up to read earlier content
+  if (!userScrolledUp) {
+    el.scrollTop = el.scrollHeight;
+  }
 }
+
+// Track user scroll intent on the messages container
+document.getElementById('messages').addEventListener('scroll', () => {
+  const el = document.getElementById('messages');
+  // "At bottom" = within 60px of the end (threshold for finger imprecision)
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 60;
+  userScrolledUp = !atBottom;
+});
 
 function renderStatusBar(state) {
   const sess = state.session || {};
@@ -1785,9 +1880,12 @@ function renderStatusBar(state) {
 
   const ctxEl = document.getElementById('contextPct');
   const pct = sess.context_pct;
-  if (pct) {
+  if (pct !== undefined && pct !== null) {
     ctxEl.textContent = pct + '%';
     ctxEl.dataset.level = pct >= 85 ? 'critical' : pct >= 70 ? 'low' : '';
+  } else if (sess.project) {
+    ctxEl.textContent = '0%';
+    ctxEl.dataset.level = '';
   } else {
     ctxEl.textContent = '';
   }
@@ -1921,9 +2019,10 @@ function renderSwitcher(state) {
     row.appendChild(body);
 
     if (hasSessions) {
+      const humanCount = s.sessions.filter(sess => sess.humanInteraction !== false).length;
       const countBadge = document.createElement('span');
       countBadge.className = 'switcher-session-count';
-      countBadge.textContent = s.sessions.length;
+      countBadge.textContent = humanCount;
       row.appendChild(countBadge);
 
       const chevron = document.createElement('div');
@@ -1945,7 +2044,11 @@ function renderSwitcher(state) {
       const sessionsDiv = document.createElement('div');
       sessionsDiv.className = 'switcher-sessions';
 
-      for (const sess of s.sessions) {
+      // Filter to human-interactive sessions only (hide subagent spam)
+      const humanSessions = s.sessions.filter(sess => sess.humanInteraction !== false);
+      const hiddenCount = s.sessions.length - humanSessions.length;
+
+      for (const sess of humanSessions) {
         const sessionPct = sess.contextPct;
         const sessionLevel = sessionPct >= 85 ? 'critical' : sessionPct >= 70 ? 'low' : '';
         const sessionRow = document.createElement('div');
@@ -1975,6 +2078,13 @@ function renderSwitcher(state) {
         closeSwitcher();
       });
       sessionsDiv.appendChild(newRow);
+
+      if (hiddenCount > 0) {
+        const hidden = document.createElement('div');
+        hidden.style.cssText = 'font-size: 0.65rem; color: var(--text-dim); padding: 4px 10px;';
+        hidden.textContent = `${hiddenCount} subagent session${hiddenCount > 1 ? 's' : ''} hidden`;
+        sessionsDiv.appendChild(hidden);
+      }
 
       item.appendChild(sessionsDiv);
     }
@@ -2021,6 +2131,44 @@ function closeSwitcher() {
 // Switcher: open/close uses client-side state, search re-filters without refetching
 document.getElementById('switcherClose').addEventListener('click', closeSwitcher);
 document.getElementById('switcherBackdrop').addEventListener('click', closeSwitcher);
+
+// Swipe-down-to-dismiss on switcher
+{
+  const switcherEl = document.getElementById('switcher');
+  let swipeStartY = null;
+  let swipeStartTranslate = 0;
+  const handleEl = switcherEl.querySelector('.switcher-handle');
+
+  handleEl.addEventListener('touchstart', (e) => {
+    swipeStartY = e.touches[0].clientY;
+    swipeStartTranslate = 0;
+    switcherEl.style.transition = 'none';
+  }, { passive: true });
+
+  handleEl.addEventListener('touchmove', (e) => {
+    if (swipeStartY === null) return;
+    const dy = e.touches[0].clientY - swipeStartY;
+    if (dy > 0) {
+      swipeStartTranslate = dy;
+      switcherEl.style.transform = `translateY(${dy}px)`;
+    }
+  }, { passive: true });
+
+  handleEl.addEventListener('touchend', () => {
+    switcherEl.style.transition = '';
+    if (swipeStartTranslate > 80) {
+      closeSwitcher();
+    } else {
+      switcherEl.style.transform = '';
+    }
+    swipeStartY = null;
+  });
+
+  // Tap empty space below list items dismisses (the switcher itself, not just backdrop)
+  document.getElementById('switcherList').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeSwitcher();
+  });
+}
 
 document.getElementById('switcherSearch').addEventListener('input', () => {
   if (cachedState) renderSwitcher(cachedState);
@@ -2076,10 +2224,14 @@ const sendBtn = document.querySelector('.send-btn');
 ta.addEventListener('input', () => {
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
-  // Keep messages scrolled to bottom so conversation stays visible
-  msgEl.scrollTop = msgEl.scrollHeight;
   // Update send button appearance based on text content
   updateSendButton();
+});
+
+// Tapping input resets scroll — user wants to see latest to compose a reply
+ta.addEventListener('focus', () => {
+  userScrolledUp = false;
+  msgEl.scrollTop = msgEl.scrollHeight;
 });
 
 // Enter never submits — it's always a newline
@@ -2210,7 +2362,8 @@ sendBtn.addEventListener('click', () => {
       // No timer — undo stays until message is flushed
     }
 
-    // Scroll to bottom
+    // Scroll to bottom and reset scroll tracking
+    userScrolledUp = false;
     msgEl.scrollTop = msgEl.scrollHeight;
 
     // Clear textarea
@@ -2225,9 +2378,17 @@ const slashSheet = document.getElementById('slashSheet');
 const slashList = document.getElementById('slashList');
 const slashBtn = document.getElementById('slashBtn');
 
+const LOCAL_SLASH_COMMANDS = [
+  { name: 'context', description: 'Show context window usage', local: true },
+  { name: 'cost', description: 'Show session cost', local: true },
+  { name: 'compact', description: 'Compact conversation history', local: true },
+  { name: 'abort', description: 'Kill hung Claude process', local: true },
+  { name: 'exit', description: 'End session and return to lobby', local: true },
+];
+
 function openSlashSheet() {
-  const cmds = liveState.slashCommands;
-  if (!cmds || !cmds.length) return;
+  const cmds = liveState.slashCommands?.length ? liveState.slashCommands : LOCAL_SLASH_COMMANDS;
+  if (!cmds.length) return;
 
   slashList.innerHTML = '';
   for (const cmd of cmds) {
@@ -2254,6 +2415,20 @@ function openSlashSheet() {
 
     row.addEventListener('click', () => {
       slashSheet.classList.remove('open');
+      // /exit is handled client-side — triggers exitSession with confirmation
+      if (cmd.name === 'exit') {
+        if (sseCurrentFolder && confirm('End this session and return to the lobby?')) {
+          exitSession();
+        }
+        return;
+      }
+      // /abort kills the CC process — emergency escape for hung sessions
+      if (cmd.name === 'abort') {
+        if (sseCurrentFolder) {
+          ssePostAbort(sseCurrentFolder);
+        }
+        return;
+      }
       ta.value = '/' + cmd.name;
       ta.style.height = 'auto';
       ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';

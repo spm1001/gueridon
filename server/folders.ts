@@ -142,6 +142,7 @@ export interface SessionListItem {
   contextPct: number | null;  // from last assistant usage, null if no assistant events
   model: string | null;       // from last assistant message.model
   closed: boolean;            // .exit marker exists
+  humanInteraction: boolean;  // true if has user-typed text (not just subagent Tool calls)
 }
 
 /**
@@ -183,6 +184,7 @@ export async function getSessionsForFolder(
       // Tail last ~4KB to find the last assistant event with model/usage
       let model: string | null = null;
       let contextPct: number | null = null;
+      let humanInteraction = false;
 
       const tailSize = 4096;
       const fileSize = s.size;
@@ -203,16 +205,22 @@ export async function getSessionsForFolder(
           try {
             const evt = JSON.parse(line);
             if (evt.type === "assistant" && evt.message) {
-              model = evt.message.model ?? null;
-              const usage = evt.message.usage;
-              if (usage) {
-                const input = (usage.input_tokens ?? 0)
-                  + (usage.cache_creation_input_tokens ?? 0)
-                  + (usage.cache_read_input_tokens ?? 0);
-                // 200K is the standard context window
-                contextPct = Math.round((input / 200_000) * 100);
+              if (!model) {
+                model = evt.message.model ?? null;
+                const usage = evt.message.usage;
+                if (usage) {
+                  const input = (usage.input_tokens ?? 0)
+                    + (usage.cache_creation_input_tokens ?? 0)
+                    + (usage.cache_read_input_tokens ?? 0);
+                  // 200K is the standard context window
+                  contextPct = Math.round((input / 200_000) * 100);
+                }
               }
-              break;
+            }
+            // Detect human interaction: user events with string content
+            // (subagent sessions only have array content from tool results)
+            if (evt.type === "user" && evt.message?.content && typeof evt.message.content === "string") {
+              humanInteraction = true;
             }
           } catch {
             continue; // partial line or non-JSON
@@ -222,12 +230,38 @@ export async function getSessionsForFolder(
         await fh.close();
       }
 
+      // For large sessions where the tail might miss early user events,
+      // also check the head (first ~2KB) for user text
+      if (!humanInteraction && fileSize > tailSize) {
+        const headFh = await fsOpen(filePath, "r");
+        try {
+          const headBuf = Buffer.alloc(Math.min(2048, fileSize));
+          await headFh.read(headBuf, 0, headBuf.length, 0);
+          const head = headBuf.toString("utf-8");
+          const headLines = head.split("\n");
+          for (const hl of headLines) {
+            const trimmed = hl.trim();
+            if (!trimmed) continue;
+            try {
+              const evt = JSON.parse(trimmed);
+              if (evt.type === "user" && evt.message?.content && typeof evt.message.content === "string") {
+                humanInteraction = true;
+                break;
+              }
+            } catch { continue; }
+          }
+        } finally {
+          await headFh.close();
+        }
+      }
+
       items.push({
         id,
         lastActive: s.mtime.toISOString(),
         contextPct,
         model,
         closed,
+        humanInteraction,
         _mtime: s.mtime.getTime(),
       });
     } catch {

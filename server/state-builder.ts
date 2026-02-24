@@ -60,7 +60,6 @@ function extractToolInput(name: string, args: Record<string, unknown>): string {
     return (args.file_path as string) || "";
   if (name === "Grep") return (args.pattern as string) || "";
   if (name === "Glob") return (args.pattern as string) || "";
-  if (name === "WebFetch") return (args.url as string) || "";
   if (name === "WebSearch") return (args.query as string) || "";
   if (name === "Task") return ((args.prompt as string) || "").slice(0, 100);
   // Fallback: first short string value
@@ -77,6 +76,7 @@ export class StateBuilder {
 
   // Streaming accumulation
   private currentText = "";
+  private textBlocks = new Map<number, string>();          // block index → accumulated text for that block
   private currentToolCalls: BBToolCall[] = [];
   private pendingToolJson = new Map<number, string>();    // block index → accumulated JSON
   private toolIdToIndex = new Map<string, number>();       // tool_use_id → index in currentToolCalls
@@ -199,6 +199,7 @@ export class StateBuilder {
 
   private onMessageStart(): SSEDelta {
     this.currentText = "";
+    this.textBlocks.clear();
     this.currentToolCalls = [];
     this.pendingToolJson.clear();
     this.blockTypes.clear();
@@ -248,7 +249,10 @@ export class StateBuilder {
     if (!delta) return null;
 
     if (delta.type === "text_delta") {
-      this.currentText += (delta.text as string) || "";
+      const text = (delta.text as string) || "";
+      // Accumulate per-block to avoid repeating text across blocks
+      const existing = this.textBlocks.get(index) || "";
+      this.textBlocks.set(index, existing + text);
       return null; // text aggregated, emitted at content_block_stop
     }
 
@@ -267,6 +271,17 @@ export class StateBuilder {
     const blockType = this.blockTypes.get(index);
 
     if (blockType === "text") {
+      // Rebuild currentText from all text blocks (avoids repeating earlier blocks)
+      const blockText = this.textBlocks.get(index) || "";
+      const allTexts: string[] = [];
+      // Sort by block index to maintain order
+      const sortedIndices = [...this.textBlocks.keys()].sort((a, b) => a - b);
+      for (const idx of sortedIndices) {
+        const t = this.textBlocks.get(idx);
+        if (t) allTexts.push(t);
+      }
+      this.currentText = allTexts.join("\n\n");
+
       // Also patch the committed assistant message in state.messages.
       // With extended thinking, handleAssistant fires (and commits) after the
       // thinking block but BEFORE the text block completes. The second assistant
@@ -292,6 +307,17 @@ export class StateBuilder {
         } catch {
           call.input = rawJson.slice(0, 100);
         }
+      }
+
+      // Patch the committed assistant message's tool_calls — handleAssistant may
+      // have fired before content_block_stop (CC sends assistant before block stops
+      // on 2nd+ turns). Without this, the state snapshot at turn end has no tools.
+      const lastMsg = this.state.messages[this.state.messages.length - 1];
+      if (lastMsg?.role === "assistant") {
+        // Snapshot currentToolCalls into the committed message
+        lastMsg.tool_calls = [...this.currentToolCalls];
+        // Keep lastCommittedToolCalls in sync so handleUser can update results
+        this.lastCommittedToolCalls = lastMsg.tool_calls;
       }
 
       return { type: "tool_start", index: callIndex, name: call.name, input: call.input };
@@ -376,6 +402,7 @@ export class StateBuilder {
     // on 2nd+ turns due to user replay event shifting ordering).
     if (this.replaying) {
       this.currentText = "";
+      this.textBlocks.clear();
       this.currentToolCalls = [];
     }
 
