@@ -97,6 +97,7 @@ interface Session {
   hadContentThisTurn: boolean;
   lastOutputTime: number | null;
   promptQueue: { text?: string; content?: unknown[] }[];
+  lastPromptAt: number | null;
   pendingDeltas: Map<string, PendingDelta>;
   flushTimer: ReturnType<typeof setTimeout> | null;
   graceTimer: ReturnType<typeof setTimeout> | null;
@@ -276,9 +277,15 @@ function detachFromSession(client: SSEClient): void {
   maybeStartGraceTimer(session);
 }
 
-/** Start grace timer only when idle with no audience: no clients, process alive, not mid-turn. */
+/** Start grace timer only when idle with no audience and no recent prompt activity. */
 function maybeStartGraceTimer(session: Session): void {
   if (session.clients.size === 0 && session.process && !session.turnInProgress) {
+    // Don't start grace if a prompt arrived recently — the user is active,
+    // just momentarily disconnected (iOS SSE drops during screen lock).
+    const PROMPT_RECENCY_MS = 10 * 60 * 1000; // 10 minutes
+    if (session.lastPromptAt && (Date.now() - session.lastPromptAt) < PROMPT_RECENCY_MS) {
+      return;
+    }
     startGraceTimer(session);
   }
 }
@@ -553,6 +560,13 @@ function deliverPrompt(
     spawnCC(session);
   }
 
+  // A prompt means someone is active — cancel any grace countdown
+  if (session.graceTimer) {
+    clearTimeout(session.graceTimer);
+    session.graceTimer = null;
+  }
+  session.lastPromptAt = Date.now();
+
   // Add user message to state immediately
   if (msg.text) {
     session.stateBuilder.handleEvent({
@@ -574,15 +588,7 @@ function deliverPrompt(
     session.turnStartedAt = Date.now();
     session.hadContentThisTurn = false;
 
-    // Cold path: no SSE clients watching → close stdin after writing.
-    // CC will process the prompt, emit events, and exit when stdin closes.
-    // The process exit handler will broadcast state to any clients that reconnect.
-    if (session.clients.size === 0) {
-      session.process!.stdin!.end();
-      emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id, cold: true });
-    } else {
-      emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id, cold: false });
-    }
+    emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id });
   } catch (err) {
     emit({ type: "process:stdin-error", folder: session.folderName, sessionId: session.id, error: String(err) });
     broadcastToSession(session, "delta", {
@@ -642,6 +648,7 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
     hadContentThisTurn: false,
     lastOutputTime: null,
     promptQueue: [],
+    lastPromptAt: null,
     pendingDeltas: new Map(),
     flushTimer: null,
     graceTimer: null,
@@ -753,6 +760,7 @@ async function createSessionWithId(
     hadContentThisTurn: false,
     lastOutputTime: null,
     promptQueue: [],
+    lastPromptAt: null,
     pendingDeltas: new Map(),
     flushTimer: null,
     graceTimer: null,

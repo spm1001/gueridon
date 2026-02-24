@@ -32,7 +32,7 @@ export type BridgeEvent =
   | { type: "grace:expire"; folder: string; sessionId: string }
 
   // Prompt delivery
-  | { type: "prompt:deliver"; folder: string; sessionId: string; cold: boolean }
+  | { type: "prompt:deliver"; folder: string; sessionId: string }
   | { type: "prompt:queue"; folder: string; sessionId: string; depth: number }
 
   // Process management
