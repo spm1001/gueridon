@@ -38,7 +38,7 @@ function thinkingDelta(index: number, thinking: string): Record<string, unknown>
   return streamEvent({
     type: "content_block_delta",
     index,
-    delta: { type: "thinking_delta", thinking },
+    delta: { type: "thinking", thinking },
   });
 }
 
@@ -827,6 +827,197 @@ describe("StateBuilder", () => {
       expect(assistantMsgs[1].content).toBe("Second");
       // Second message must NOT inherit first's text
       expect(assistantMsgs[1].content).not.toBe("FirstSecond");
+    });
+  });
+
+  describe("thinking content (gdn-vinagu)", () => {
+    it("realistic CC stream: separate assistant events per block type, thinking persists in final state", () => {
+      // CC sends separate assistant events for each content block type (same msg ID).
+      // Only the first is processed; second/third are deduped.
+      // Thinking and text come from streaming events, not the assistant content array.
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      // Thinking block (index 0)
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "Let me reason about this."));
+
+      // CC sends first assistant event — ONLY thinking in content array
+      sb.handleEvent(
+        assistantMessage("msg_real", [
+          { type: "thinking", thinking: "Let me reason about this." },
+        ]),
+      );
+      sb.handleEvent(blockStop(0)); // thinking block stop
+
+      // Text block (index 1)
+      sb.handleEvent(textBlockStart(1));
+      sb.handleEvent(textDelta(1, "Here is my answer."));
+
+      // CC sends second assistant event — ONLY text (same ID, deduped)
+      sb.handleEvent(
+        assistantMessage("msg_real", [
+          { type: "text", text: "Here is my answer." },
+        ]),
+      );
+      sb.handleEvent(blockStop(1)); // text block stop
+
+      // Result
+      sb.handleEvent(resultEvent());
+
+      const state = sb.getState();
+      expect(state.messages).toHaveLength(1);
+      expect(state.messages[0].content).toBe("Here is my answer.");
+      expect(state.messages[0].thinking).toBe("Let me reason about this.");
+    });
+
+    it("accumulates thinking deltas and emits thinking_content on block stop", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      // Thinking block
+      sb.handleEvent(thinkingBlockStart(0));
+      const d1 = sb.handleEvent(thinkingDelta(0, "Let me think"));
+      expect(d1).toBeNull(); // accumulated, not emitted yet
+
+      sb.handleEvent(thinkingDelta(0, " about this carefully."));
+
+      const d2 = sb.handleEvent(blockStop(0));
+      expect(d2).toEqual({
+        type: "thinking_content",
+        text: "Let me think about this carefully.",
+      });
+    });
+
+    it("includes thinking text on the committed assistant message", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      // Thinking block
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "Reasoning here"));
+      sb.handleEvent(blockStop(0));
+
+      // Text block
+      sb.handleEvent(textBlockStart(1));
+      sb.handleEvent(textDelta(1, "The answer is 42."));
+      sb.handleEvent(blockStop(1));
+
+      // Assistant message
+      sb.handleEvent(
+        assistantMessage("msg_think_1", [
+          { type: "thinking", thinking: "Reasoning here" },
+          { type: "text", text: "The answer is 42." },
+        ]),
+      );
+      sb.handleEvent(resultEvent());
+
+      const state = sb.getState();
+      expect(state.messages).toHaveLength(1);
+      expect(state.messages[0].thinking).toBe("Reasoning here");
+      expect(state.messages[0].content).toBe("The answer is 42.");
+    });
+
+    it("extracts thinking from JSONL replay content array", () => {
+      const sb = makeBuilder();
+      const events = [
+        JSON.stringify({
+          source: "cc",
+          event: {
+            type: "assistant",
+            message: {
+              id: "msg_replay_think",
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "Deep thoughts" },
+                { type: "text", text: "Here is my answer." },
+              ],
+              usage: { input_tokens: 100, output_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+            },
+          },
+        }),
+        JSON.stringify({
+          source: "cc",
+          event: { type: "result", subtype: "success", is_error: false, modelUsage: {} },
+        }),
+      ];
+
+      sb.replayFromJSONL(events);
+      const state = sb.getState();
+      expect(state.messages).toHaveLength(1);
+      expect(state.messages[0].thinking).toBe("Deep thoughts");
+      expect(state.messages[0].content).toBe("Here is my answer.");
+    });
+
+    it("handles multiple thinking blocks in one message", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      // First thinking block
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "First thought"));
+      sb.handleEvent(blockStop(0));
+
+      // Second thinking block
+      sb.handleEvent(blockStart(1, { type: "thinking", thinking: "" }));
+      sb.handleEvent(thinkingDelta(1, "Second thought"));
+      const d = sb.handleEvent(blockStop(1));
+      expect(d).toEqual({
+        type: "thinking_content",
+        text: "First thought\n\nSecond thought",
+      });
+    });
+
+    it("does not emit thinking_content when thinking is empty", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      sb.handleEvent(thinkingBlockStart(0));
+      // No thinking deltas
+      const d = sb.handleEvent(blockStop(0));
+      expect(d).toBeNull();
+    });
+
+    it("clears thinking between messages", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+
+      // Turn 1 with thinking
+      sb.handleEvent(messageStart());
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "Turn 1 thought"));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(textBlockStart(1));
+      sb.handleEvent(textDelta(1, "Answer 1"));
+      sb.handleEvent(blockStop(1));
+      sb.handleEvent(
+        assistantMessage("msg_t1", [
+          { type: "thinking", thinking: "Turn 1 thought" },
+          { type: "text", text: "Answer 1" },
+        ]),
+      );
+      sb.handleEvent(resultEvent());
+
+      // Turn 2 without thinking
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Answer 2"));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(
+        assistantMessage("msg_t2", [{ type: "text", text: "Answer 2" }]),
+      );
+      sb.handleEvent(resultEvent());
+
+      const state = sb.getState();
+      const assistantMsgs = state.messages.filter(m => m.role === "assistant");
+      expect(assistantMsgs[0].thinking).toBe("Turn 1 thought");
+      expect(assistantMsgs[1].thinking).toBeUndefined();
     });
   });
 

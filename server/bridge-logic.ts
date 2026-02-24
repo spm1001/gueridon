@@ -6,6 +6,7 @@
  */
 
 import { resolve, join } from "node:path";
+import { homedir } from "node:os";
 
 // --- Configuration constants ---
 
@@ -29,6 +30,10 @@ const ALLOWED_TOOLS = [
 // raw content (use curl via Bash instead). TodoWrite conflicts with bon.
 const DISALLOWED_TOOLS = ["WebFetch", "TodoWrite", "NotebookEdit"];
 
+// CC in -p (print) mode does not load MCP servers from ~/.claude/settings.json.
+// Pass --mcp-config explicitly so bridge-spawned sessions have MCP access.
+const MCP_CONFIG_PATH = join(homedir(), ".claude", "settings.json");
+
 export const CC_FLAGS = [
   "-p",
   "--verbose",
@@ -44,6 +49,8 @@ export const CC_FLAGS = [
   DISALLOWED_TOOLS.join(","),
   "--permission-mode",
   "default",
+  "--mcp-config",
+  MCP_CONFIG_PATH,
   "--append-system-prompt",
   "The user is on a mobile device using Guéridon. " +
     "When you use AskUserQuestion, it will return an error — this is expected. " +

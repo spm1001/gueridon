@@ -20,6 +20,7 @@ export interface BBMessage {
   role: "user" | "assistant";
   content: string | null;
   tool_calls?: BBToolCall[];
+  thinking?: string;
 }
 
 export interface BBToolCall {
@@ -54,6 +55,7 @@ export type SSEDelta =
   | { type: "status"; status: "working" | "idle" }
   | { type: "activity"; activity: "thinking" | "writing" | "tool" }
   | { type: "content"; index: number; text: string }
+  | { type: "thinking_content"; text: string }
   | { type: "tool_start"; index: number; name: string; input: string }
   | { type: "tool_complete"; index: number; status: "completed" | "error"; output?: string }
   | { type: "ask_user"; questions: AskUserQuestion[]; toolCallId: string }
@@ -119,6 +121,7 @@ export class StateBuilder {
   // Streaming accumulation
   private currentText = "";
   private textBlocks = new Map<number, string>();          // block index → accumulated text for that block
+  private thinkingBlocks = new Map<number, string>();      // block index → accumulated thinking text
   private currentToolCalls: BBToolCall[] = [];
   private pendingToolJson = new Map<number, string>();    // block index → accumulated JSON
   private toolIdToIndex = new Map<string, number>();       // tool_use_id → index in currentToolCalls
@@ -247,6 +250,7 @@ export class StateBuilder {
   private onMessageStart(): SSEDelta {
     this.currentText = "";
     this.textBlocks.clear();
+    this.thinkingBlocks.clear();
     this.currentToolCalls = [];
     this.pendingToolJson.clear();
     this.blockTypes.clear();
@@ -322,7 +326,13 @@ export class StateBuilder {
       return null; // accumulated, emitted at content_block_stop
     }
 
-    // thinking_delta — ignore
+    if (delta.type === "thinking") {
+      const text = (delta.thinking as string) || "";
+      const existing = this.thinkingBlocks.get(index) || "";
+      this.thinkingBlocks.set(index, existing + text);
+      return null; // accumulated, emitted at content_block_stop
+    }
+
     return null;
   }
 
@@ -397,7 +407,29 @@ export class StateBuilder {
       return { type: "tool_start", index: callIndex, name: call.name, input: call.input };
     }
 
-    return null; // thinking — nothing to emit
+    if (blockType === "thinking") {
+      const thinkingText = this.thinkingBlocks.get(index) || "";
+      if (!thinkingText) return null;
+
+      // Build combined thinking from all blocks
+      const allThinking: string[] = [];
+      const sortedIndices = [...this.thinkingBlocks.keys()].sort((a, b) => a - b);
+      for (const idx of sortedIndices) {
+        const t = this.thinkingBlocks.get(idx);
+        if (t) allThinking.push(t);
+      }
+      const combined = allThinking.join("\n\n");
+
+      // Patch committed assistant message
+      const lastMsg = this.state.messages[this.state.messages.length - 1];
+      if (lastMsg?.role === "assistant") {
+        lastMsg.thinking = combined;
+      }
+
+      return { type: "thinking_content", text: combined };
+    }
+
+    return null;
   }
 
   private handleAssistant(event: Record<string, unknown>): SSEDelta {
@@ -439,15 +471,30 @@ export class StateBuilder {
     let text = this.currentText || null;
     let toolCalls = this.currentToolCalls.length > 0 ? this.currentToolCalls : undefined;
 
+    // Thinking text from streaming accumulation
+    let thinking: string | undefined;
+    if (this.thinkingBlocks.size > 0) {
+      const sortedIndices = [...this.thinkingBlocks.keys()].sort((a, b) => a - b);
+      const parts: string[] = [];
+      for (const idx of sortedIndices) {
+        const t = this.thinkingBlocks.get(idx);
+        if (t) parts.push(t);
+      }
+      if (parts.length > 0) thinking = parts.join("\n\n");
+    }
+
     if (!text && !toolCalls) {
       const contentBlocks = message.content as unknown[] | undefined;
       if (Array.isArray(contentBlocks)) {
         const textParts: string[] = [];
+        const thinkingParts: string[] = [];
         const calls: BBToolCall[] = [];
         for (const block of contentBlocks) {
           const b = block as Record<string, unknown>;
           if (b.type === "text" && b.text) {
             textParts.push(b.text as string);
+          } else if (b.type === "thinking" && b.thinking) {
+            thinkingParts.push(b.thinking as string);
           } else if (b.type === "tool_use") {
             const args = (b.input as Record<string, unknown>) || {};
             calls.push({
@@ -461,6 +508,7 @@ export class StateBuilder {
           }
         }
         if (textParts.length > 0) text = textParts.join("\n");
+        if (thinkingParts.length > 0 && !thinking) thinking = thinkingParts.join("\n\n");
         if (calls.length > 0) {
           toolCalls = calls;
           this.currentToolCalls = calls; // so tool_result can find them
@@ -472,6 +520,7 @@ export class StateBuilder {
       role: "assistant",
       content: text,
       ...(toolCalls && { tool_calls: toolCalls }),
+      ...(thinking && { thinking }),
     };
     this.state.messages.push(msg);
 
@@ -488,6 +537,7 @@ export class StateBuilder {
     if (this.replaying) {
       this.currentText = "";
       this.textBlocks.clear();
+      this.thinkingBlocks.clear();
       this.currentToolCalls = [];
     }
 

@@ -536,6 +536,17 @@
     50% { border-color: var(--accent); opacity: 1; }
   }
 
+  /* Completed thinking chip — static coral accent */
+  .chip.thinking-done {
+    border-color: var(--border);
+    color: var(--accent);
+  }
+  .chip.thinking-done .c-name { color: var(--accent); }
+  .chip.thinking-done .c-detail {
+    color: var(--text-dim);
+    line-height: 1.45;
+  }
+
   /* Writing chip — green pulsing border */
   .chip.writing {
     border-color: var(--green);
@@ -1433,6 +1444,12 @@ function handleSSEDelta(data) {
       showAskUserOverlay(data.questions, data.toolCallId);
       break;
 
+    case 'thinking_content': {
+      const msg = ensureAssistantMessage();
+      msg.thinking = data.text;
+      break;
+    }
+
     case 'api_error':
       liveState.status = 'idle';
       liveState._activity = null;
@@ -1945,6 +1962,39 @@ function renderLocalCommand(content) {
   return block;
 }
 
+const THINKING_TRUNCATE = 500;
+
+function truncateThinking(text) {
+  if (text.length <= THINKING_TRUNCATE) return text;
+  return text.slice(0, THINKING_TRUNCATE) + '…';
+}
+
+function renderThinkingChip(thinkingText) {
+  const chip = document.createElement('div');
+  chip.className = 'chip thinking-done';
+  const truncated = truncateThinking(thinkingText);
+  const needsMore = thinkingText.length > THINKING_TRUNCATE;
+
+  chip.innerHTML =
+    `<span class="c-status done" style="color:var(--accent)">&#x2726;</span>` +
+    `<span class="c-name" style="color:var(--accent)">Thought</span>` +
+    `<div class="c-detail">${esc(truncated)}` +
+    (needsMore ? `<span class="thinking-more" style="color:var(--accent);cursor:pointer;display:block;margin-top:4px;font-size:0.55rem">Show full thinking</span>` : '') +
+    `</div>`;
+
+  chip.addEventListener('click', (e) => {
+    if (e.target.classList.contains('thinking-more')) {
+      // Replace truncated with full text
+      const detail = chip.querySelector('.c-detail');
+      detail.textContent = thinkingText;
+      return;
+    }
+    chip.classList.toggle('expanded');
+  });
+
+  return chip;
+}
+
 function renderChip(tc) {
   const statusClass = tc.status === 'completed' ? 'done' : tc.status === 'running' ? 'run' : 'err';
   const statusIcon = tc.status === 'completed' ? '&#x2713;' :
@@ -1978,10 +2028,22 @@ function renderMessages(messages) {
   for (const chip of el.querySelectorAll('.chip.expanded')) {
     if (chip.dataset.toolId) expandedChips.add(chip.dataset.toolId);
   }
+  const thinkingExpanded = !!el.querySelector('.chip.thinking-done.expanded, .chip.thinking.expanded');
 
   el.innerHTML = '';
 
   for (const msg of messages) {
+    // Thinking chip — before content (thinking happened first, keeps visual position)
+    const hasThinking = msg.thinking && msg.role === 'assistant';
+    if (hasThinking) {
+      const grid = document.createElement('div');
+      grid.className = 'chip-grid';
+      const chip = renderThinkingChip(msg.thinking);
+      if (thinkingExpanded) chip.classList.add('expanded');
+      grid.appendChild(chip);
+      el.appendChild(grid);
+    }
+
     // Text content
     if (msg.content !== null && msg.content !== undefined) {
       // Local command output — render as collapsible block
@@ -2003,8 +2065,9 @@ function renderMessages(messages) {
       }
     }
 
-    // Tool calls — render as chip grid
-    if (msg.tool_calls && msg.tool_calls.length) {
+    // Tool calls — render as chip grid (after content)
+    const hasTools = msg.tool_calls && msg.tool_calls.length;
+    if (hasTools) {
       const grid = document.createElement('div');
       grid.className = 'chip-grid';
       for (const tc of msg.tool_calls) {
@@ -2024,7 +2087,19 @@ function renderMessages(messages) {
       const label = activity === 'thinking' ? 'Thinking…' : 'Writing…';
       const chip = document.createElement('div');
       chip.className = 'chip ' + activity;
-      chip.innerHTML = `<span class="c-name">${label}</span>`;
+
+      // During thinking, show accumulated text in expandable detail
+      const lastMsg = liveState.messages[liveState.messages.length - 1];
+      const thinkingText = activity === 'thinking' && lastMsg?.thinking ? lastMsg.thinking : null;
+      if (thinkingText) {
+        chip.innerHTML = `<span class="c-name">${label}</span>` +
+          `<div class="c-detail">${esc(truncateThinking(thinkingText))}</div>`;
+        if (thinkingExpanded) chip.classList.add('expanded');
+        chip.addEventListener('click', () => chip.classList.toggle('expanded'));
+      } else {
+        chip.innerHTML = `<span class="c-name">${label}</span>`;
+      }
+
       // Append to last chip-grid if one exists, otherwise create new grid
       const lastGrid = el.querySelector('.chip-grid:last-child');
       if (lastGrid && lastGrid === el.lastElementChild) {

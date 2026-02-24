@@ -309,6 +309,7 @@ describe("buildCCArgs", () => {
     expect(args).toContain("--allowed-tools");
     expect(args).toContain("--permission-mode");
     expect(args).toContain("default");
+    expect(args).toContain("--mcp-config");
     expect(args).toContain("--append-system-prompt");
     // Must NOT include dangerous bypass
     expect(args).not.toContain("--dangerously-skip-permissions");
