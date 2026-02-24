@@ -152,51 +152,50 @@
     font-weight: 600;
   }
 
-  /* === Tool calls === */
+  /* === Tool calls — inline log lines, not cards === */
   .tool-call {
     align-self: stretch;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-    font-size: 0.82rem;
+    font-size: 0.72rem;
   }
 
-  /* Cluster consecutive tool calls tighter */
   .tool-call + .tool-call {
-    margin-top: -6px;
+    margin-top: -2px;
   }
 
   .tool-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 7px 10px;
+    gap: 4px;
+    padding: 2px 0;
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
+    line-height: 1.2;
   }
 
   .tool-chevron {
-    font-size: 1.1rem;
+    font-size: 0.68rem;
     color: var(--text-dim);
     transition: transform 0.15s;
-    width: 20px;
-    text-align: center;
+    width: 12px;
     flex-shrink: 0;
+    opacity: 0.5;
+    transform: scale(3);
+    transform-origin: 20% 50%;
   }
 
   .tool-call[data-expanded="true"] .tool-chevron {
-    transform: rotate(90deg);
+    transform: scale(3) rotate(90deg);
+    opacity: 0.7;
   }
 
   .tool-status-icon {
-    width: 14px;
-    height: 14px;
+    width: 8px;
+    height: 8px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.75rem;
+    font-size: 0.5rem;
   }
 
   .tool-status-icon[data-status="completed"] { color: var(--green); }
@@ -205,33 +204,36 @@
 
   .tool-name {
     font-family: var(--mono);
-    font-weight: 600;
-    color: var(--text-mid);
-    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-dim);
+    font-size: 0.68rem;
   }
 
   .tool-input-preview {
     color: var(--text-dim);
     font-family: var(--mono);
-    font-size: 0.75rem;
+    font-size: 0.63rem;
     margin-left: auto;
-    max-width: 55%;
+    max-width: 60%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    opacity: 0.5;
   }
 
   .tool-body {
     display: none;
-    border-top: 1px solid var(--border);
-    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin: 2px 0 4px 16px;
+    padding: 6px 8px;
     font-family: var(--mono);
-    font-size: 0.75rem;
+    font-size: 0.65rem;
     color: var(--text-dim);
     white-space: pre-wrap;
     max-height: 150px;
     overflow-y: auto;
-    background: var(--bg);
+    background: var(--surface);
   }
 
   .tool-call[data-expanded="true"] .tool-body {
@@ -241,18 +243,14 @@
   /* Tool summary (coalesced successful calls) */
   .tool-summary {
     align-self: stretch;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-    font-size: 0.82rem;
+    font-size: 0.72rem;
   }
 
   .tool-summary-header {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 7px 10px;
+    gap: 4px;
+    padding: 2px 0;
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
@@ -260,13 +258,15 @@
 
   .tool-summary-text {
     color: var(--text-dim);
-    font-size: 0.78rem;
+    font-size: 0.68rem;
   }
 
   .tool-summary-detail {
     display: none;
-    border-top: 1px solid var(--border);
-    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin: 2px 0 4px 16px;
+    padding: 4px 8px;
   }
 
   .tool-summary[data-expanded="true"] .tool-summary-detail {
@@ -275,6 +275,7 @@
 
   .tool-summary[data-expanded="true"] .tool-chevron {
     transform: rotate(90deg);
+    opacity: 0.7;
   }
 
   .tool-summary-item {
@@ -973,6 +974,147 @@
   .switcher-new-session:active {
     opacity: 0.7;
   }
+
+  /* === Ask User overlay — bottom sheet === */
+  .ask-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    z-index: 200;
+    display: none;
+    touch-action: manipulation;
+  }
+  .ask-backdrop[data-open="true"] { display: block; }
+
+  .ask-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 70vh;
+    background: var(--surface);
+    border-radius: 14px 14px 0 0;
+    z-index: 201;
+    display: flex;
+    flex-direction: column;
+    transform: translateY(100%);
+    visibility: hidden;
+    transition: transform 0.25s ease, visibility 0s 0.25s;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    overscroll-behavior: none;
+  }
+  .ask-sheet[data-open="true"] {
+    transform: translateY(0);
+    visibility: visible;
+    transition: transform 0.25s ease, visibility 0s;
+  }
+
+  .ask-handle {
+    width: 36px;
+    height: 4px;
+    background: var(--text-dim);
+    border-radius: 2px;
+    margin: 8px auto 4px;
+    opacity: 0.4;
+  }
+
+  .ask-question {
+    padding: 8px 16px 4px;
+    font-size: 0.85rem;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .ask-header {
+    padding: 0 16px;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .ask-options {
+    padding: 8px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+  }
+
+  .ask-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    min-height: 44px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: background 0.1s;
+  }
+  .ask-option:active { background: var(--surface-raised); }
+  .ask-option[data-selected="true"] {
+    border-color: var(--accent);
+    background: var(--surface-raised);
+  }
+
+  .ask-option-label {
+    font-size: 0.85rem;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .ask-option-desc {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  .ask-option-check {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    color: transparent;
+  }
+  .ask-option[data-selected="true"] .ask-option-check {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .ask-confirm {
+    margin: 4px 12px 8px;
+    padding: 12px;
+    min-height: 44px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: none;
+  }
+  .ask-confirm[data-visible="true"] { display: block; }
+  .ask-confirm:active { opacity: 0.8; }
+
+  .ask-custom {
+    padding: 8px 12px 12px;
+    text-align: center;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -986,6 +1128,12 @@
       <button class="switcher-close" id="switcherClose" aria-label="Close">&#x2715;</button>
     </div>
     <div class="switcher-list" id="switcherList"></div>
+  </div>
+
+  <div class="ask-backdrop" id="askBackdrop"></div>
+  <div class="ask-sheet" id="askSheet">
+    <div class="ask-handle"></div>
+    <div id="askContent"></div>
   </div>
 
   <div class="messages" id="messages"></div>
@@ -1308,6 +1456,15 @@ function handleSSEDelta(data) {
     case 'status':
       liveState.status = data.status;
       if (data.status === 'idle') liveState._activity = null;
+      // Working status = CC ingested queued messages — clear queued/pending flags
+      if (data.status === 'working') {
+        for (const msg of liveState.messages) {
+          if (msg.queued || msg.pending) {
+            msg.queued = false;
+            msg.pending = false;
+          }
+        }
+      }
       break;
 
     case 'message_start':
@@ -1354,6 +1511,10 @@ function handleSSEDelta(data) {
       }
       break;
     }
+
+    case 'ask_user':
+      showAskUserOverlay(data.questions, data.toolCallId);
+      break;
   }
   sseRender();
 }
@@ -1388,11 +1549,15 @@ async function ssePostPrompt(folderName, text) {
       headers: { 'Content-Type': 'application/json', 'X-Client-ID': sseClientId },
       body: JSON.stringify({ text }),
     });
-    if (!res.ok) console.error('[bb] POST /prompt failed:', res.status);
-    return res.ok;
+    if (!res.ok) {
+      console.error('[bb] POST /prompt failed:', res.status);
+      return { ok: false };
+    }
+    const data = await res.json();
+    return { ok: true, queued: !!data.queued, delivered: !!data.delivered };
   } catch (err) {
     console.error('[bb] POST /prompt error:', err);
-    return false;
+    return { ok: false };
   }
 }
 
@@ -1434,6 +1599,128 @@ async function exitSession() {
     .then(d => { if (d.folders) handleSSEFolders(d.folders); })
     .catch(() => {});
   sseRender();
+}
+
+// === AskUserQuestion overlay ===
+
+function showAskUserOverlay(questions, toolCallId) {
+  const backdrop = document.getElementById('askBackdrop');
+  const sheet = document.getElementById('askSheet');
+  const content = document.getElementById('askContent');
+
+  // Build overlay content
+  let html = '';
+  const isSingleImmediate = questions.length === 1 && !questions[0].multiSelect;
+
+  questions.forEach((q, qi) => {
+    html += `<div class="ask-header">${esc(q.header)}</div>`;
+    html += `<div class="ask-question">${esc(q.question)}</div>`;
+    html += `<div class="ask-options" data-qi="${qi}" data-multi="${q.multiSelect}">`;
+    q.options.forEach((opt, oi) => {
+      html += `<div class="ask-option" data-qi="${qi}" data-oi="${oi}" data-label="${esc(opt.label)}">`;
+      if (q.multiSelect) {
+        html += `<span class="ask-option-check">&#x2713;</span>`;
+      }
+      html += `<div>`;
+      html += `<div class="ask-option-label">${esc(opt.label)}</div>`;
+      if (opt.description) {
+        html += `<div class="ask-option-desc">${esc(opt.description)}</div>`;
+      }
+      html += `</div></div>`;
+    });
+    html += `</div>`;
+  });
+
+  if (!isSingleImmediate) {
+    html += `<button class="ask-confirm" id="askConfirm" data-visible="true">Send answers</button>`;
+  }
+  html += `<div class="ask-custom" id="askCustom">Type a custom answer instead</div>`;
+
+  content.innerHTML = html;
+
+  // Show overlay
+  backdrop.dataset.open = 'true';
+  sheet.dataset.open = 'true';
+
+  // Option tap handlers
+  content.querySelectorAll('.ask-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      const qi = opt.dataset.qi;
+      const container = opt.closest('.ask-options');
+      const isMulti = container.dataset.multi === 'true';
+
+      if (isMulti) {
+        // Toggle selection
+        opt.dataset.selected = opt.dataset.selected === 'true' ? 'false' : 'true';
+      } else {
+        // Single-select: deselect siblings, select this one
+        container.querySelectorAll('.ask-option').forEach(s => s.dataset.selected = 'false');
+        opt.dataset.selected = 'true';
+
+        // Single question + single select = immediate send
+        if (isSingleImmediate) {
+          sendAskUserAnswer(questions, toolCallId);
+        }
+      }
+    });
+  });
+
+  // Confirm button (multi-select or multi-question)
+  const confirmBtn = document.getElementById('askConfirm');
+  if (confirmBtn) {
+    confirmBtn.addEventListener('click', () => {
+      sendAskUserAnswer(questions, toolCallId);
+    });
+  }
+
+  // Custom answer — dismiss overlay, focus input
+  document.getElementById('askCustom').addEventListener('click', () => {
+    hideAskUserOverlay();
+    document.querySelector('.input-field').focus();
+  });
+
+  // Backdrop tap dismisses
+  backdrop.addEventListener('click', () => {
+    hideAskUserOverlay();
+    document.querySelector('.input-field').focus();
+  });
+}
+
+function sendAskUserAnswer(questions, toolCallId) {
+  // Collect selections
+  const content = document.getElementById('askContent');
+  let answer = '';
+
+  if (questions.length === 1) {
+    const selected = content.querySelectorAll('.ask-option[data-selected="true"]');
+    const labels = Array.from(selected).map(s => s.dataset.label);
+    answer = labels.join(', ');
+  } else {
+    // Multi-question: "Header: label1, label2\nHeader2: label3"
+    const parts = [];
+    questions.forEach((q, qi) => {
+      const selected = content.querySelectorAll(`.ask-option[data-qi="${qi}"][data-selected="true"]`);
+      const labels = Array.from(selected).map(s => s.dataset.label);
+      if (labels.length > 0) {
+        parts.push(`${q.header}: ${labels.join(', ')}`);
+      }
+    });
+    answer = parts.join('\n');
+  }
+
+  if (answer && sseCurrentFolder) {
+    ssePostPrompt(sseCurrentFolder, answer);
+    // Show the answer as a user message
+    liveState.messages.push({ role: 'user', content: answer });
+    sseRender();
+  }
+
+  hideAskUserOverlay();
+}
+
+function hideAskUserOverlay() {
+  document.getElementById('askBackdrop').dataset.open = 'false';
+  document.getElementById('askSheet').dataset.open = 'false';
 }
 
 function sseConnectFolder(folder, sessionId) {
@@ -2310,31 +2597,43 @@ sendBtn.addEventListener('click', () => {
     const text = ta.value.trim();
     const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
 
-    // Send via SSE bridge
-    if (bridgeUrl && sseCurrentFolder) {
-      ssePostPrompt(sseCurrentFolder, text);
-    }
-    const pending = false;
-
-    // Add message to DOM
+    // Add message to DOM immediately as pending
     const bubble = document.createElement('div');
     bubble.className = 'msg-user';
     bubble.textContent = text;
     bubble.dataset.msgId = msgId;
-    if (pending) bubble.dataset.pending = 'true';
-    else if (isBusy) bubble.dataset.queued = 'true';
+    bubble.dataset.pending = 'true';
     msgEl.appendChild(bubble);
 
     // Also add to liveState so re-renders preserve it
     if (bridgeUrl) {
       liveState.messages.push({
         role: 'user', content: text, _msgId: msgId,
-        pending: pending, queued: isBusy && !pending,
+        pending: true, queued: false,
       });
     }
 
-    // Add undo button (only for pending messages)
-    if (pending) {
+    // Send via SSE bridge — transition pending → queued/delivered on response
+    if (bridgeUrl && sseCurrentFolder) {
+      ssePostPrompt(sseCurrentFolder, text).then(result => {
+        const msg = liveState.messages.find(m => m._msgId === msgId);
+        if (!msg) return;
+        msg.pending = false;
+        if (result.queued) {
+          msg.queued = true;
+          bubble.dataset.pending = 'false';
+          bubble.dataset.queued = 'true';
+        } else if (result.delivered) {
+          // Delivered immediately — remove pending styling
+          msg.queued = false;
+          delete bubble.dataset.pending;
+          delete bubble.dataset.queued;
+        }
+      });
+    }
+
+    // Undo button — available briefly after send
+    {
       const undo = document.createElement('div');
       undo.className = 'msg-undo';
       undo.dataset.msgId = msgId;

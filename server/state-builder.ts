@@ -38,12 +38,25 @@ export interface BBSlashCommand {
 
 // -- SSE delta types (what handleEvent returns for the bridge to broadcast) --
 
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
+export interface AskUserQuestion {
+  question: string;
+  header: string;
+  options: AskUserOption[];
+  multiSelect: boolean;
+}
+
 export type SSEDelta =
   | { type: "status"; status: "working" | "idle" }
   | { type: "activity"; activity: "thinking" | "writing" | "tool" }
   | { type: "content"; index: number; text: string }
   | { type: "tool_start"; index: number; name: string; input: string }
   | { type: "tool_complete"; index: number; status: "completed" | "error"; output?: string }
+  | { type: "ask_user"; questions: AskUserQuestion[]; toolCallId: string }
   | { type: "message_start" }
   | null;
 
@@ -87,6 +100,11 @@ export class StateBuilder {
   // to attach tool results. Separate from currentToolCalls so replay of a second
   // assistant message doesn't inherit the first message's tool calls.
   private lastCommittedToolCalls: BBToolCall[] = [];
+
+  // AskUserQuestion suppression — block indices and tool_use_ids to hide from UI
+  private askUserBlockIndices = new Set<number>();
+  private askUserToolIds = new Set<string>();
+  private askUserBlockToolId = new Map<number, string>(); // block index → tool_use_id
 
   // True during replayFromJSONL — controls whether handleAssistant resets
   // currentText/currentToolCalls. During live streaming, onMessageStart handles
@@ -204,6 +222,8 @@ export class StateBuilder {
     this.pendingToolJson.clear();
     this.blockTypes.clear();
     this.toolBlockToCallIndex.clear();
+    this.askUserBlockIndices.clear();
+    this.askUserBlockToolId.clear();
     return { type: "message_start" };
   }
 
@@ -222,6 +242,17 @@ export class StateBuilder {
     if (blockType === "tool_use") {
       const name = (block.name as string) || "Unknown";
       const toolId = block.id as string;
+
+      // AskUserQuestion: suppress from tool calls, track for ask_user delta
+      if (name === "AskUserQuestion" && !this.replaying) {
+        this.askUserBlockIndices.add(index);
+        if (toolId) {
+          this.askUserToolIds.add(toolId);
+          this.askUserBlockToolId.set(index, toolId);
+        }
+        return null; // no tool activity — overlay handles it
+      }
+
       const call: BBToolCall = {
         name,
         status: "running",
@@ -259,7 +290,7 @@ export class StateBuilder {
     if (delta.type === "input_json_delta") {
       const existing = this.pendingToolJson.get(index) || "";
       this.pendingToolJson.set(index, existing + ((delta.partial_json as string) || ""));
-      return null;
+      return null; // accumulated, emitted at content_block_stop
     }
 
     // thinking_delta — ignore
@@ -292,6 +323,20 @@ export class StateBuilder {
         lastMsg.content = this.currentText || lastMsg.content;
       }
       return { type: "content", index, text: this.currentText };
+    }
+
+    if (blockType === "tool_use" && this.askUserBlockIndices.has(index)) {
+      // AskUserQuestion: parse full input and emit ask_user delta
+      const rawJson = this.pendingToolJson.get(index);
+      if (!rawJson) return null;
+      try {
+        const args = JSON.parse(rawJson);
+        const questions = (args.questions || []) as AskUserQuestion[];
+        const toolId = this.askUserBlockToolId.get(index) || "";
+        return { type: "ask_user" as const, questions, toolCallId: toolId };
+      } catch {
+        return null;
+      }
     }
 
     if (blockType === "tool_use") {
@@ -432,6 +477,12 @@ export class StateBuilder {
         if (block.type !== "tool_result") continue;
 
         const toolUseId = block.tool_use_id as string;
+
+        // Suppress AskUserQuestion error results — the overlay handles the UX
+        if (this.askUserToolIds.has(toolUseId)) {
+          this.askUserToolIds.delete(toolUseId);
+          continue;
+        }
         const idx = this.toolIdToIndex.get(toolUseId);
         if (idx === undefined) continue;
 

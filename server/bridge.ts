@@ -46,7 +46,7 @@ import {
 } from "./folders.js";
 
 import { StateBuilder } from "./state-builder.js";
-import { getVapidPublicKey, pushTurnComplete, addSubscription, removeSubscription } from "./push.js";
+import { getVapidPublicKey, pushTurnComplete, pushAskUser, addSubscription, removeSubscription } from "./push.js";
 import { emit } from "./event-bus.js";
 import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
@@ -458,6 +458,12 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
   const delta = session.stateBuilder.handleEvent(event);
   if (delta) {
     broadcastToSession(session, "delta", delta);
+    // Push notification when Claude asks a question and user isn't watching
+    if (delta.type === "ask_user") {
+      pushAskUser(session.folderName).catch((err) =>
+        console.error("[push] ask_user notification failed:", err),
+      );
+    }
   }
 
   // Update context % on state builder
