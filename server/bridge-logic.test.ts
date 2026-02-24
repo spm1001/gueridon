@@ -14,6 +14,7 @@ import {
   buildMergedDelta,
   isUserTextEcho,
   extractLocalCommandOutput,
+  coalescePrompts,
   LOCAL_CMD_TAIL_LINES,
   CONFLATION_INTERVAL_MS,
   type SessionProcessInfo,
@@ -1198,5 +1199,50 @@ describe("extractLocalCommandOutput", () => {
 
     const result = extractLocalCommandOutput(content);
     expect(result).not.toBeNull();
+  });
+});
+
+describe("coalescePrompts", () => {
+  it("returns null for empty queue", () => {
+    expect(coalescePrompts([])).toBeNull();
+  });
+
+  it("passes single message through unchanged", () => {
+    const msg = { text: "hello" };
+    expect(coalescePrompts([msg])).toBe(msg);
+  });
+
+  it("concatenates two messages with numbered markers", () => {
+    const result = coalescePrompts([
+      { text: "first" },
+      { text: "second" },
+    ]);
+    expect(result).toEqual({ text: "[1/2] first\n\n[2/2] second" });
+  });
+
+  it("concatenates three messages with correct numbering", () => {
+    const result = coalescePrompts([
+      { text: "alpha" },
+      { text: "beta" },
+      { text: "gamma" },
+    ]);
+    expect(result!.text).toBe("[1/3] alpha\n\n[2/3] beta\n\n[3/3] gamma");
+  });
+
+  it("handles empty text in some prompts", () => {
+    const result = coalescePrompts([
+      { text: "real message" },
+      { text: "" },
+      { text: "another" },
+    ]);
+    expect(result!.text).toBe("[1/3] real message\n\n[2/3] \n\n[3/3] another");
+  });
+
+  it("handles prompts with no text field", () => {
+    const result = coalescePrompts([
+      { text: "has text" },
+      { content: [{ type: "text", text: "content array" }] },
+    ]);
+    expect(result!.text).toBe("[1/2] has text\n\n[2/2] ");
   });
 });

@@ -32,6 +32,7 @@ import {
   getActiveSessions,
   resolveSessionForFolder,
   isHandoffStale,
+  coalescePrompts,
   type PendingDelta,
   type SessionProcessInfo,
 } from "./bridge-logic.js";
@@ -551,10 +552,13 @@ function onTurnComplete(session: Session): void {
     );
   }
 
-  // Flush prompt queue (may start a new turn, so grace check must come after)
+  // Flush prompt queue — coalesce all queued prompts into a single delivery.
+  // One turn instead of N serial roundtrips. Individual messages were already
+  // added to the state builder at queue time, so skip the state message.
   if (session.promptQueue.length > 0) {
-    const next = session.promptQueue.shift()!;
-    deliverPrompt(session, next);
+    const batch = session.promptQueue.splice(0);
+    const coalesced = coalescePrompts(batch);
+    if (coalesced) deliverPrompt(session, coalesced, { skipStateMessage: true });
   }
 
   maybeStartGraceTimer(session);
@@ -565,6 +569,7 @@ function onTurnComplete(session: Session): void {
 function deliverPrompt(
   session: Session,
   msg: { text?: string; content?: unknown[] },
+  opts?: { skipStateMessage?: boolean },
 ): void {
   if (!session.process || session.process.exitCode !== null) {
     spawnCC(session);
@@ -577,8 +582,9 @@ function deliverPrompt(
   }
   session.lastPromptAt = Date.now();
 
-  // Add user message to state immediately
-  if (msg.text) {
+  // Add user message to state immediately (skip for coalesced deliveries
+  // where the individual messages were already added at queue time)
+  if (msg.text && !opts?.skipStateMessage) {
     session.stateBuilder.handleEvent({
       type: "user",
       message: { role: "user", content: msg.text },
@@ -891,8 +897,14 @@ async function handlePrompt(
   }
 
   if (session.turnInProgress) {
-    // Queue the prompt
+    // Queue the prompt and add to state so the user message appears in snapshots
     session.promptQueue.push(parsed);
+    if (parsed.text) {
+      session.stateBuilder.handleEvent({
+        type: "user",
+        message: { role: "user", content: parsed.text },
+      });
+    }
     emit({ type: "prompt:queue", folder: session.folderName, sessionId: session.id, depth: session.promptQueue.length });
     res.writeHead(202, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ queued: true, position: session.promptQueue.length }));
