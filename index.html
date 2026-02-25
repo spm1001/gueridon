@@ -167,6 +167,19 @@
     font-weight: 600;
   }
 
+  .msg-assistant blockquote {
+    border-left: 3px solid var(--text-dim);
+    margin: 8px 0;
+    padding: 2px 12px;
+    color: var(--text-mid);
+  }
+
+  .msg-assistant hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 12px 0;
+  }
+
   /* === Tool calls — pill chips === */
   .chip-grid {
     display: flex;
@@ -1077,6 +1090,7 @@
     </div>
   </div>
 
+<script src="/marked.js"></script>
 <script>
 // === Client error reporting ===
 // Captures unhandled errors and promise rejections, sends to bridge.
@@ -1754,145 +1768,8 @@ function esc(s) {
   return d.innerHTML;
 }
 
-// Inline markdown: code spans, bold, italic, strikethrough, links.
-// Escaped first (esc), so safe for innerHTML on user input too.
-function inline(s) {
-  s = esc(s);
-  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
-  s = s.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
-  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // Bare URLs — only those not already inside an href="..." or <a> tag
-  s = s.replace(/(?<!href="|">)(https?:\/\/[^\s<)]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-  return s;
-}
-
-// Minimal block-level markdown renderer for Claude's output patterns
-function md(text) {
-  if (!text) return '';
-
-  const lines = text.split('\n');
-  let out = '';
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Blank line — skip
-    if (line.trim() === '') { i++; continue; }
-
-    // Headers: # through ######
-    const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (headerMatch) {
-      const level = headerMatch[1].length;
-      out += `<h${level}>${inline(headerMatch[2])}</h${level}>`;
-      i++;
-      continue;
-    }
-
-    // Fenced code block
-    if (line.startsWith('```')) {
-      i++; // skip opening fence
-      let code = '';
-      while (i < lines.length && !lines[i].startsWith('```')) {
-        if (code) code += '\n';
-        code += lines[i];
-        i++;
-      }
-      if (i < lines.length) i++; // skip closing fence
-      out += `<pre><code>${esc(code)}</code></pre>`;
-      continue;
-    }
-
-    // Table: starts with |
-    if (line.startsWith('|')) {
-      // Collect all | lines
-      const tableLines = [];
-      while (i < lines.length && lines[i].startsWith('|')) {
-        tableLines.push(lines[i]);
-        i++;
-      }
-      if (tableLines.length >= 3) {
-        const headers = tableLines[0].split('|').map(h => h.trim()).filter(Boolean);
-        // skip separator row (index 1)
-        const bodyRows = tableLines.slice(2);
-        out += '<table><thead><tr>' +
-          headers.map(h => `<th>${inline(h)}</th>`).join('') +
-          '</tr></thead><tbody>';
-        for (const r of bodyRows) {
-          const cells = r.split('|').map(c => c.trim()).filter(Boolean);
-          out += '<tr>' + cells.map(c => `<td>${inline(c)}</td>`).join('') + '</tr>';
-        }
-        out += '</tbody></table>';
-      }
-      continue;
-    }
-
-    // Task list: - [x] or - [ ]
-    if (/^[-•*]\s+\[[ xX]\]\s/.test(line)) {
-      out += '<ul class="task-list">';
-      while (i < lines.length && /^[-•*]\s+\[[ xX]\]\s/.test(lines[i])) {
-        const checked = /^[-•*]\s+\[[xX]\]/.test(lines[i]);
-        const text = lines[i].replace(/^[-•*]\s+\[[ xX]\]\s*/, '');
-        out += `<li><input type="checkbox" class="task-checkbox" disabled ${checked ? 'checked' : ''}>${inline(text)}</li>`;
-        i++;
-      }
-      out += '</ul>';
-      continue;
-    }
-
-    // Unordered list item (-, •, or *) — spans blank lines between items
-    if (/^[-•*]\s/.test(line)) {
-      out += '<ul>';
-      while (i < lines.length) {
-        if (/^[-•*]\s/.test(lines[i])) {
-          out += `<li>${inline(lines[i].replace(/^[-•*]\s/, ''))}</li>`;
-          i++;
-        } else if (lines[i].trim() === '' && i + 1 < lines.length && /^[-•*]\s/.test(lines[i + 1])) {
-          i++; // skip blank line between list items
-        } else {
-          break;
-        }
-      }
-      out += '</ul>';
-      continue;
-    }
-
-    // Ordered list item — spans blank lines between consecutive items
-    if (/^\d+\. /.test(line)) {
-      out += '<ol>';
-      while (i < lines.length) {
-        if (/^\d+\. /.test(lines[i])) {
-          out += `<li>${inline(lines[i].replace(/^\d+\. /, ''))}</li>`;
-          i++;
-        } else if (lines[i].trim() === '' && i + 1 < lines.length && /^\d+\. /.test(lines[i + 1])) {
-          i++; // skip blank line between list items
-        } else {
-          break;
-        }
-      }
-      out += '</ol>';
-      continue;
-    }
-
-    // Paragraph — collect consecutive non-special lines
-    let para = '';
-    while (i < lines.length && lines[i].trim() !== '' &&
-           !lines[i].startsWith('|') &&
-           !/^[-•*]\s/.test(lines[i]) &&
-           !/^\d+\. /.test(lines[i]) &&
-           !/^#{1,6}\s/.test(lines[i]) &&
-           !lines[i].startsWith('```')) {
-      if (para) para += ' ';
-      para += lines[i];
-      i++;
-    }
-    if (para) out += `<p>${inline(para)}</p>`;
-  }
-
-  return out;
-}
+// Configure marked — GFM for tables/task lists/strikethrough, no <br> on single newlines
+marked.setOptions({ gfm: true, breaks: false });
 
 // === Output trimming for small screens ===
 // Transform pipeline: applied at block boundaries before rendering
@@ -1962,7 +1839,7 @@ function renderLocalCommand(content) {
       <span class="tool-chevron">&#x25B8;</span>
       <span class="local-cmd-summary">${esc(summary)}</span>
     </div>
-    <div class="local-cmd-body">${md(inner)}</div>
+    <div class="local-cmd-body">${marked.parse(inner)}</div>
   `;
 
   block.querySelector('.local-cmd-header').addEventListener('click', () => {
@@ -2066,13 +1943,13 @@ function renderMessages(messages) {
           div.textContent = msg.content;
         } else if (msg.role === 'user') {
           div.className = 'msg-user';
-          div.innerHTML = inline(msg.content);
+          div.innerHTML = marked.parseInline(msg.content);
           if (msg._msgId) div.dataset.msgId = msg._msgId;
           if (msg.pending) div.dataset.pending = 'true';
           else if (msg.queued) div.dataset.queued = 'true';
         } else {
           div.className = 'msg-assistant';
-          div.innerHTML = md(trimText(msg.content));
+          div.innerHTML = marked.parse(trimText(msg.content));
         }
         el.appendChild(div);
       }
@@ -2558,7 +2435,7 @@ sendBtn.addEventListener('click', () => {
     // Add message to DOM immediately as pending
     const bubble = document.createElement('div');
     bubble.className = 'msg-user';
-    bubble.innerHTML = inline(text);
+    bubble.innerHTML = marked.parseInline(text);
     bubble.dataset.msgId = msgId;
     bubble.dataset.pending = 'true';
     msgEl.appendChild(bubble);
