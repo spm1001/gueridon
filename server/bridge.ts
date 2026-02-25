@@ -909,7 +909,7 @@ async function handleSession(
   if (session.wasInterrupted) {
     session.wasInterrupted = false; // one-shot
     deliverPrompt(session, {
-      text: "The bridge was restarted and your session has been resumed. Review the conversation and continue where you left off.",
+      text: "[guéridon:system] The bridge was restarted and your session has been resumed. Review the conversation and continue where you left off.",
     });
     emit({ type: "session:auto-resume", folder: session.folderName, sessionId: session.id });
   }

@@ -21,6 +21,7 @@ export interface BBMessage {
   content: string | null;
   tool_calls?: BBToolCall[];
   thinking?: string;
+  synthetic?: boolean;
 }
 
 export interface BBToolCall {
@@ -552,7 +553,14 @@ export class StateBuilder {
 
     // String content = user text
     if (typeof content === "string") {
-      this.state.messages.push({ role: "user", content });
+      // Detect bridge-injected synthetic messages by prefix convention
+      const syntheticMatch = content.match(/^\[guéridon:\w+\]\s*/);
+      if (syntheticMatch) {
+        const stripped = content.slice(syntheticMatch[0].length);
+        this.state.messages.push({ role: "user", content: stripped, synthetic: true });
+      } else {
+        this.state.messages.push({ role: "user", content });
+      }
       return null;
     }
 

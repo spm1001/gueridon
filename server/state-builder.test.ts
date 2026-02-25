@@ -704,6 +704,51 @@ describe("StateBuilder", () => {
         content: "Hello Claude",
       });
     });
+
+    it("detects synthetic messages by [guéridon:*] prefix", () => {
+      const sb = makeBuilder();
+      sb.handleEvent({
+        type: "user",
+        message: {
+          role: "user",
+          content:
+            "[guéridon:system] The bridge was restarted and your session has been resumed.",
+        },
+      });
+
+      expect(sb.getState().messages).toHaveLength(1);
+      const msg = sb.getState().messages[0];
+      expect(msg.synthetic).toBe(true);
+      expect(msg.content).toBe(
+        "The bridge was restarted and your session has been resumed.",
+      );
+      expect(msg.role).toBe("user");
+    });
+
+    it("does not flag regular user messages as synthetic", () => {
+      const sb = makeBuilder();
+      sb.handleEvent({
+        type: "user",
+        message: { role: "user", content: "Hello Claude" },
+      });
+
+      expect(sb.getState().messages[0].synthetic).toBeUndefined();
+    });
+
+    it("strips [guéridon:upload] prefix for upload deposit notes", () => {
+      const sb = makeBuilder();
+      sb.handleEvent({
+        type: "user",
+        message: {
+          role: "user",
+          content: "[guéridon:upload] File deposited: report.pdf (2.3 MB)",
+        },
+      });
+
+      const msg = sb.getState().messages[0];
+      expect(msg.synthetic).toBe(true);
+      expect(msg.content).toBe("File deposited: report.pdf (2.3 MB)");
+    });
   });
 
   describe("live event ordering: assistant before content_block_stop (bb-lonego)", () => {
