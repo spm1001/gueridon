@@ -1118,10 +1118,10 @@ const MIME_EXTENSIONS: Record<string, string> = {
 
 async function depositFiles(req: IncomingMessage, folderPath: string): Promise<DepositResult> {
   const bodyBuf = await readBinaryBody(req);
-  // Buffer → Uint8Array with own ArrayBuffer for Web API compatibility
-  // (Buffer's .buffer is ArrayBufferLike which includes SharedArrayBuffer,
-  // but Request/File/Blob constructors expect plain ArrayBuffer)
-  const body = new Uint8Array(bodyBuf) as BlobPart;
+  // Buffer → Uint8Array with own ArrayBuffer for Web API compatibility.
+  // new Uint8Array(buffer) copies into a clean ArrayBuffer (not SharedArrayBuffer),
+  // which Request/File/Blob constructors accept natively in Node 18+. (gdn-vojeho)
+  const body = new Uint8Array(bodyBuf);
   const contentType = req.headers["content-type"] || "";
   const isMultipart = contentType.startsWith("multipart/");
 
