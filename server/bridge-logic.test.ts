@@ -6,9 +6,9 @@ import {
   isHandoffStale,
   validateFolderPath,
   buildCCArgs,
+  buildSystemPrompt,
   getActiveSessions,
   parseSessionJSONL,
-  CC_FLAGS,
   isStreamDelta,
   extractDeltaInfo,
   buildMergedDelta,
@@ -315,14 +315,29 @@ describe("buildCCArgs", () => {
     expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
-  it("includes the mobile system prompt", () => {
-    const args = buildCCArgs("x", false);
+  it("includes the mobile system prompt with machine context", () => {
+    const args = buildCCArgs("x", false, "/home/modha/Repos/gueridon");
     const promptIndex = args.indexOf("--append-system-prompt");
-    expect(args[promptIndex + 1]).toContain("mobile device");
-    expect(args[promptIndex + 1]).toContain("AskUserQuestion");
+    const prompt = args[promptIndex + 1];
+    expect(prompt).toContain("mobile device");
+    expect(prompt).toContain("AskUserQuestion");
+    expect(prompt).toContain("Do not SSH");
+    expect(prompt).toContain("/home/modha/Repos/gueridon");
   });
 
-  it("starts with CC_FLAGS and ends with session arg", () => {
+  it("system prompt works without folder", () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain("Do not SSH");
+    expect(prompt).toContain("mobile device");
+    expect(prompt).not.toContain("Working directory");
+  });
+
+  it("system prompt includes folder when provided", () => {
+    const prompt = buildSystemPrompt("/home/modha/Repos/gueridon");
+    expect(prompt).toContain("Working directory: /home/modha/Repos/gueridon");
+  });
+
+  it("ends with session arg", () => {
     const args = buildCCArgs("abc", false);
     // Session args are always last
     expect(args[args.length - 2]).toBe("--session-id");

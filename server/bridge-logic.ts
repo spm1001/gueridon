@@ -6,7 +6,7 @@
  */
 
 import { resolve, join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 
 // --- Configuration constants ---
 
@@ -34,7 +34,9 @@ const DISALLOWED_TOOLS = ["WebFetch", "TodoWrite", "NotebookEdit"];
 // Pass --mcp-config explicitly so bridge-spawned sessions have MCP access.
 const MCP_CONFIG_PATH = join(homedir(), ".claude", "settings.json");
 
-export const CC_FLAGS = [
+// Base flags without --append-system-prompt (added dynamically in buildCCArgs
+// so we can inject hostname and working directory).
+const CC_BASE_FLAGS = [
   "-p",
   "--verbose",
   "--input-format",
@@ -51,13 +53,22 @@ export const CC_FLAGS = [
   "default",
   "--mcp-config",
   MCP_CONFIG_PATH,
-  "--append-system-prompt",
-  "The user is on a mobile device using Guéridon. " +
-    "When you use AskUserQuestion, it will return an error — this is expected. " +
-    "The user sees your questions as tappable buttons and will respond with their selection " +
-    "in their next message. Do not apologize for the error or retry the tool. " +
-    "End your turn and wait for the user's response.",
 ];
+
+/** Build the --append-system-prompt value with machine context. */
+export function buildSystemPrompt(folder?: string): string {
+  const host = hostname();
+  const lines = [
+    `You are running on ${host}. This IS the production server. Do not SSH to ${host} — you are already here.`,
+    ...(folder ? [`Working directory: ${folder}`] : []),
+    "The user is on a mobile device using Guéridon. " +
+      "When you use AskUserQuestion, it will return an error — this is expected. " +
+      "The user sees your questions as tappable buttons and will respond with their selection " +
+      "in their next message. Do not apologize for the error or retry the tool. " +
+      "End your turn and wait for the user's response.",
+  ];
+  return lines.join("\n");
+}
 
 // --- Session resolution ---
 
@@ -170,9 +181,12 @@ export function validateFolderPath(
 export function buildCCArgs(
   sessionId: string,
   resume: boolean,
+  folder?: string,
 ): string[] {
   return [
-    ...CC_FLAGS,
+    ...CC_BASE_FLAGS,
+    "--append-system-prompt",
+    buildSystemPrompt(folder),
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
   ];
 }
