@@ -866,6 +866,10 @@ async function handleSession(
     deliverPrompt(session, {
       text: buildResumeInjection(reason),
     });
+    // Broadcast state so the synthetic resume message renders immediately
+    broadcastToSession(session, "state", {
+      ...session.stateBuilder.getState(),
+    });
     emit({ type: "session:auto-resume", folder: session.folderName, sessionId: session.id });
   }
 
@@ -986,6 +990,12 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
     const { depositFolder, manifest } = await depositFiles(req, folderPath);
     const note = buildDepositNote(depositFolder, manifest);
     deliverPrompt(session, { text: note });
+
+    // Broadcast state so the synthetic deposit message renders immediately
+    // as a system chip. Without this, clients only see it at turn end.
+    broadcastToSession(session, "state", {
+      ...session.stateBuilder.getState(),
+    });
 
     emit({ type: "upload:deposited", folder: depositFolder, files: manifest.file_count });
     res.writeHead(200, { "Content-Type": "application/json" });
