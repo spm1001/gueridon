@@ -1,6 +1,6 @@
 # Plan: Device Emulation & Inner Loop Speed
 
-> **Staleness note (2026-02):** This plan was written during the Vite+Lit era. Guéridon is now a single `index.html` with no build step — there's no Vite HMR, no `:5173` dev server. The passe device emulation and screenshot patterns remain valid; the dev sandbox (Phase 4) would need rethinking for the current architecture. Design iteration now happens in the `brisk-bear` repo using static state.json files.
+> **Staleness note (2026-02):** This plan was written during the Vite+Lit era. Guéridon is now a single `index.html` with no build step — there's no Vite HMR, no `:5173` dev server. The passe device emulation and screenshot patterns remain valid; the dev sandbox (Phase 4) would need rethinking for the current architecture.
 
 **Origin:** Comparing Guéridon with Shelley (boldsoftware/shelley) surfaced that
 Claude is blind during mobile UI iteration. The feedback loop is: edit → user

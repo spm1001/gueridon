@@ -24,7 +24,7 @@ system:init → stream_event:message_start → stream_event:content_block_start
 {
   "type": "system",
   "subtype": "init",
-  "cwd": "/home/modha/Repos/brisk-bear",
+  "cwd": "/home/modha/Repos/gueridon",
   "session_id": "8ca79bd7-...",
   "model": "claude-opus-4-6",
   "permissionMode": "bypassPermissions",

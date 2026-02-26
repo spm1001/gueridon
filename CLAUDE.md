@@ -15,15 +15,11 @@ One HTML file (`index.html`) served by the bridge. SSE for live events, POST for
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~258 tests, ~3s)
+npm test                     # Run all tests (~279 tests, ~3s)
 npm run test:watch           # Watch mode
 ```
 
 Phone URL: `https://tube.atlas-cloud.ts.net/` (Tailscale HTTPS termination).
-
-### Design iteration (brisk-bear repo)
-
-The UI is designed in the `brisk-bear` repo using static state.json files and passe screenshots. When the design is ready, `index.html` is copied here. See `brisk-bear/CLAUDE.md` for the iteration loop.
 
 ## Deployment
 
