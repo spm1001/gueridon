@@ -113,6 +113,8 @@ interface Session {
   initTimer: ReturnType<typeof setTimeout> | null;
   contextPct: number | null;
   turnStartedAt: number | null;
+  /** True if an ask-user push was already sent this turn — suppresses turn-complete push. */
+  pushedAskThisTurn: boolean;
   wasInterrupted?: boolean;
   /** Filename from share-sheet upload, used to enrich push notifications. */
   shareContext?: { filename: string };
@@ -541,9 +543,10 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
   if (delta) {
     broadcastToSession(session, "delta", delta);
     // Push notification when Claude asks a question and user isn't watching
-    if (delta.type === "ask_user") {
+    if (delta.type === "ask_user" && session.clients.size === 0) {
+      session.pushedAskThisTurn = true;
       pushAskUser(session.folderName).catch((err) =>
-        console.error("[push] ask_user notification failed:", err),
+        emit({ type: "push:send-fail", endpoint: "ask-user", error: String(err) }),
       );
     }
   }
@@ -621,12 +624,15 @@ async function onTurnComplete(session: Session): Promise<void> {
     toolCalls: lastMsg?.tool_calls?.length ?? 0,
   });
 
-  // Push notification when no SSE clients are watching (phone-in-pocket)
-  if (session.clients.size === 0) {
+  // Push notification when no SSE clients are watching (phone-in-pocket).
+  // Skip if an ask-user push was already sent this turn — user already knows
+  // Claude needs them, a "finished" buzz seconds later is noise.
+  if (session.clients.size === 0 && !session.pushedAskThisTurn) {
     pushTurnComplete(session.folderName, session.shareContext).catch((err) =>
       emit({ type: "push:send-fail", endpoint: "turn-complete", error: String(err) }),
     );
   }
+  session.pushedAskThisTurn = false;
 
   // Flush prompt queue — coalesce all queued prompts into a single delivery.
   // One turn instead of N serial roundtrips. Individual messages were already
@@ -758,6 +764,7 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
     initTimer: null,
     contextPct: null,
     turnStartedAt: null,
+    pushedAskThisTurn: false,
   };
 
   // Replay JSONL if resuming (async to avoid blocking on large files)
@@ -901,6 +908,7 @@ async function createSessionWithId(
     initTimer: null,
     contextPct: null,
     turnStartedAt: null,
+    pushedAskThisTurn: false,
   };
 
   if (resumable) {
