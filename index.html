@@ -1316,8 +1316,12 @@ function sseConnect() {
       pushSubscribe(data.vapidPublicKey);
     }
 
-    // Re-establish session from hash or previous state
+    // Re-establish session from hash or previous state.
+    // Clear stale messages — the POST /session response sends a fresh state snapshot.
+    // Without this, deltas arriving between reconnect and state snapshot accumulate
+    // on top of old messages, causing visual duplication.
     if (data.reconnect && sseCurrentFolder) {
+      liveState.messages = [];
       ssePostSession(sseCurrentFolder);
     } else if (location.hash.length > 1) {
       ssePostSession(location.hash.slice(1));
