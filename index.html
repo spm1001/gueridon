@@ -1228,9 +1228,11 @@ async function pushSubscribe(vapidPublicKey) {
     }
     // POST subscription to bridge
     if (bridgeUrl) {
+      const subHeaders = { 'Content-Type': 'application/json' };
+      if (ssePushToken) subHeaders['X-Push-Token'] = ssePushToken;
       await fetch(`${bridgeUrl}/push/subscribe`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: subHeaders,
         body: JSON.stringify(sub.toJSON()),
       });
       console.log('[push] Subscription sent to bridge');
@@ -1264,6 +1266,7 @@ function pushNotify(body, opts = {}) {
 let sseSource = null;
 let sseClientId = 'bb-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 let sseCurrentFolder = null; // folder name we're connected to
+let ssePushToken = null;     // bridge-issued token for push subscribe/unsubscribe auth (gdn-ricocu)
 let sseWatchdog = null;
 const SSE_WATCHDOG_MS = 65_000; // 60s silence = dead (pings every 30s + margin)
 
@@ -1294,6 +1297,9 @@ function sseConnect() {
     liveState.connection = 'connected';
     sseResetWatchdog();
     sseRender();
+
+    // Store bridge-issued push token for subscribe/unsubscribe auth (gdn-ricocu)
+    ssePushToken = data.pushToken || null;
 
     // Subscribe to push if bridge provides VAPID key
     if (data.vapidPublicKey) {
