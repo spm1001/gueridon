@@ -361,19 +361,6 @@
     font-size: 0.7rem;
   }
 
-  /* === Error toast === */
-  .error-toast {
-    margin: 0 14px 8px;
-    background: rgba(248, 113, 113, 0.15);
-    border: 1px solid var(--red);
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 0.82rem;
-    color: var(--red);
-    display: none;
-  }
-
-  .error-toast.visible { display: block; }
 
   /* === Input area === */
   .input-area {
@@ -1100,7 +1087,6 @@
 
   <div class="messages" id="messages"></div>
 
-  <div id="errorToast" class="error-toast"></div>
 
   <div class="slash-sheet-overlay" id="slashSheet">
     <div class="slash-sheet">
@@ -1287,7 +1273,6 @@ let liveState = {
   messages: [],
   connection: 'disconnected',
   status: 'idle',
-  error: null,
   switcher: null,
   _activity: null,
 };
@@ -1307,7 +1292,6 @@ function sseConnect() {
       return;
     }
     liveState.connection = 'connected';
-    liveState.error = null;
     sseResetWatchdog();
     sseRender();
 
@@ -1423,7 +1407,6 @@ function handleSSEState(data) {
     liveState.session = { ...liveState.session, ...data.session };
   }
   if (data.status) liveState.status = data.status;
-  if (data.error !== undefined) liveState.error = data.error;
   if (data.slashCommands !== undefined) liveState.slashCommands = data.slashCommands;
   if (data.status === 'idle') {
     liveState._activity = null;
@@ -2113,20 +2096,6 @@ function renderStatusBar(state) {
   const busy = connected && state.status === 'working';
   document.body.dataset.busy = busy;
 
-  // Error toast — auto-dismiss after 5s
-  const toast = document.getElementById('errorToast');
-  if (state.error) {
-    toast.textContent = state.error;
-    toast.classList.add('visible');
-    clearTimeout(toast._dismissTimer);
-    toast._dismissTimer = setTimeout(() => {
-      toast.classList.remove('visible');
-      liveState.error = null;
-    }, 5000);
-  } else {
-    toast.classList.remove('visible');
-  }
-
   updateSendButton();
 }
 
@@ -2665,19 +2634,15 @@ document.body.appendChild(fileInput);
 
 function uploadFiles(files) {
   if (!files.length) return;
-  if (!sseCurrentFolder || !bridgeUrl) {
-    showError('Connect to a folder first');
-    return;
-  }
+  if (!sseCurrentFolder || !bridgeUrl) return;
   const form = new FormData();
   for (const f of files) form.append('file', f);
   fetch(`${bridgeUrl}/upload/${encodeURIComponent(sseCurrentFolder)}`, {
     method: 'POST',
     body: form,
   }).then(r => r.json()).then(data => {
-    if (data.error) showError(data.error);
-    else showError(`${data.manifest.file_count} file${data.manifest.file_count > 1 ? 's' : ''} deposited`, 2000);
-  }).catch(() => showError('Upload failed'));
+    if (data.error) console.warn('[upload]', data.error);
+  }).catch(err => console.warn('[upload] failed:', err));
 }
 
 document.getElementById('fileBtn').addEventListener('click', () => {

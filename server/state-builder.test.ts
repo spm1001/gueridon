@@ -1247,7 +1247,6 @@ describe("StateBuilder", () => {
       expect(state.messages).toEqual([]);
       expect(state.connection).toBe("connected");
       expect(state.status).toBe("idle");
-      expect(state.error).toBeNull();
       expect(state.slashCommands).toBeNull();
     });
   });
@@ -1271,7 +1270,6 @@ describe("StateBuilder", () => {
       );
       const state = sb.getState();
       expect(state.status).toBe("idle");
-      expect(state.error).toBeNull();
       expect(state.messages).toEqual([
         { role: "assistant", content: "API error 400: Could not process image" },
       ]);

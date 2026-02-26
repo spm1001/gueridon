@@ -12,7 +12,6 @@ export interface BBState {
   messages: BBMessage[];
   connection: "connected" | "disconnected";
   status: "working" | "idle" | "error";
-  error: string | null;
   slashCommands: BBSlashCommand[] | null;
 }
 
@@ -161,7 +160,6 @@ export class StateBuilder {
       messages: [],
       connection: "connected",
       status: "idle",
-      error: null,
       slashCommands: null,
     };
   }
