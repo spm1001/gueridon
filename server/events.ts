@@ -68,6 +68,10 @@ export type BridgeEvent =
   // Client error reporting
   | { type: "client:error"; message: string; stack?: string; userAgent?: string; url?: string }
 
+  // Upload / share
+  | { type: "upload:deposited"; folder: string; files: number }
+  | { type: "share:created"; folder: string; files: number }
+
   // Request handling
   | { type: "request:rejected"; reason: string; method: string; url: string }
   | { type: "request:error"; action: string; error: string }
@@ -111,6 +115,8 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "push:expired-cleanup": "info",
   "folders:scan-error": "warn",
   "client:error": "warn",
+  "upload:deposited": "info",
+  "share:created": "info",
   "request:rejected": "warn",
   "request:error": "error",
   "server:start": "info",

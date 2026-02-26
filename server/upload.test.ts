@@ -6,6 +6,7 @@ import {
   sanitiseFilename,
   buildManifest,
   buildDepositNote,
+  buildShareDepositNote,
   depositFolderName,
 } from "./upload.js";
 
@@ -250,6 +251,65 @@ describe("buildDepositNote", () => {
     }], "warn1");
 
     const note = buildDepositNote("mise/upload--bad--warn1", m);
+    expect(note).toContain("⚠️");
+    expect(note).toContain("deposited as binary");
+  });
+});
+
+// ============================================================
+// buildShareDepositNote
+// ============================================================
+
+describe("buildShareDepositNote", () => {
+  it("uses [guéridon:share] prefix", () => {
+    const m = buildManifest([{
+      originalName: "whiteboard.jpg",
+      validation: { valid: true, effectiveMime: "image/jpeg", declaredMime: "image/jpeg", detectedMime: "image/jpeg", warning: null },
+      size: 45000,
+      depositedAs: "whiteboard.jpg",
+    }], "abc123");
+
+    const note = buildShareDepositNote("mise/upload--whiteboard--abc123", m);
+    expect(note).toMatch(/^\[guéridon:share\]/);
+    expect(note).toContain("iOS");
+    expect(note).toContain("whiteboard.jpg");
+    expect(note).toContain("Examine the content");
+  });
+
+  it("includes shared text when provided", () => {
+    const m = buildManifest([{
+      originalName: "screenshot.png",
+      validation: { valid: true, effectiveMime: "image/png", declaredMime: "image/png", detectedMime: "image/png", warning: null },
+      size: 8000,
+      depositedAs: "screenshot.png",
+    }], "txt1");
+
+    const note = buildShareDepositNote("mise/upload--screenshot--txt1", m, "https://example.com/article");
+    expect(note).toContain("Shared text:");
+    expect(note).toContain("https://example.com/article");
+  });
+
+  it("omits shared text section when not provided", () => {
+    const m = buildManifest([{
+      originalName: "photo.jpg",
+      validation: { valid: true, effectiveMime: "image/jpeg", declaredMime: "image/jpeg", detectedMime: "image/jpeg", warning: null },
+      size: 1234,
+      depositedAs: "photo.jpg",
+    }], "no-txt");
+
+    const note = buildShareDepositNote("mise/upload--photo--no-txt", m);
+    expect(note).not.toContain("Shared text:");
+  });
+
+  it("includes warnings when present", () => {
+    const m = buildManifest([{
+      originalName: "bad.png",
+      validation: { valid: true, effectiveMime: "application/octet-stream", declaredMime: "image/png", detectedMime: null, warning: "bad.png: deposited as binary" },
+      size: 6,
+      depositedAs: "bad.png",
+    }], "warn1");
+
+    const note = buildShareDepositNote("mise/upload--bad--warn1", m);
     expect(note).toContain("⚠️");
     expect(note).toContain("deposited as binary");
   });

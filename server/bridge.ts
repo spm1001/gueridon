@@ -52,7 +52,8 @@ import { getVapidPublicKey, pushTurnComplete, pushAskUser, addSubscription, remo
 import { emit } from "./event-bus.js";
 import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
-import { validateFile, sanitiseFilename, buildManifest, buildDepositNote, depositFolderName } from "./upload.js";
+import { validateFile, sanitiseFilename, buildManifest, buildDepositNote, buildShareDepositNote, depositFolderName } from "./upload.js";
+import { generateFolderName } from "./fun-names.js";
 
 // -- Types --
 
@@ -108,6 +109,8 @@ interface Session {
   contextPct: number | null;
   turnStartedAt: number | null;
   wasInterrupted?: boolean;
+  /** Filename from share-sheet upload, used to enrich push notifications. */
+  shareContext?: { filename: string };
 }
 
 // -- State --
@@ -549,7 +552,7 @@ function onTurnComplete(session: Session): void {
 
   // Push notification when no SSE clients are watching (phone-in-pocket)
   if (session.clients.size === 0) {
-    pushTurnComplete(session.folderName).catch((err) =>
+    pushTurnComplete(session.folderName, session.shareContext).catch((err) =>
       emit({ type: "push:send-fail", endpoint: "turn-complete", error: String(err) }),
     );
   }
@@ -737,10 +740,21 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB
+
 function readBinaryBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_UPLOAD_BYTES) {
+        req.destroy();
+        reject(new Error("Upload too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -1011,6 +1025,57 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
 
 // -- File upload --
 
+interface DepositResult {
+  depositFolder: string;
+  manifest: import("./upload.js").UploadManifest;
+  text?: string;
+}
+
+/**
+ * Parse multipart body, validate files, write to deposit folder.
+ * Reused by both handleUpload (mid-session) and handleShareUpload (new-session).
+ * Also extracts an optional "text" field for URL/text shares.
+ */
+async function depositFiles(req: IncomingMessage, folderPath: string): Promise<DepositResult> {
+  const body = await readBinaryBody(req);
+  const webReq = new Request("http://localhost/upload", {
+    method: "POST",
+    headers: { "content-type": req.headers["content-type"] || "" },
+    body,
+  });
+  const formData = await webReq.formData();
+
+  const shortId = randomUUID().slice(0, 12);
+  const fileEntries: Array<{ name: string; file: File }> = [];
+  let text: string | undefined;
+  for (const [key, value] of formData.entries()) {
+    if (value instanceof File) fileEntries.push({ name: value.name, file: value });
+    else if (key === "text" && typeof value === "string" && value.trim()) text = value.trim();
+  }
+  if (fileEntries.length === 0) {
+    throw new Error("No files in upload");
+  }
+
+  const depositFolder = depositFolderName(fileEntries[0].name, shortId);
+  const depositPath = join(folderPath, depositFolder);
+  mkdirSync(depositPath, { recursive: true });
+
+  const manifestFiles: Array<{ originalName: string; validation: ReturnType<typeof validateFile>; size: number; depositedAs: string }> = [];
+  for (const entry of fileEntries) {
+    const buf = Buffer.from(await entry.file.arrayBuffer());
+    const declaredMime = entry.file.type || "application/octet-stream";
+    const validation = validateFile(buf, declaredMime, entry.name);
+    const safeName = sanitiseFilename(entry.name);
+    await writeFile(join(depositPath, safeName), buf);
+    manifestFiles.push({ originalName: entry.name, validation, size: buf.length, depositedAs: safeName });
+  }
+
+  const manifest = buildManifest(manifestFiles, shortId);
+  await writeFile(join(depositPath, "manifest.json"), JSON.stringify(manifest, null, 2));
+
+  return { depositFolder, manifest, text };
+}
+
 async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPath: string): Promise<void> {
   const session = sessions.get(folderPath);
   if (!session) {
@@ -1018,41 +1083,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
     return;
   }
   try {
-    const body = await readBinaryBody(req);
-    const webReq = new Request("http://localhost/upload", {
-      method: "POST",
-      headers: { "content-type": req.headers["content-type"] || "" },
-      body,
-    });
-    const formData = await webReq.formData();
-
-    const shortId = randomUUID().slice(0, 12);
-    const fileEntries: Array<{ name: string; file: File }> = [];
-    for (const [, value] of formData.entries()) {
-      if (value instanceof File) fileEntries.push({ name: value.name, file: value });
-    }
-    if (fileEntries.length === 0) {
-      res.writeHead(400).end(JSON.stringify({ error: "No files in upload" }));
-      return;
-    }
-
-    const depositFolder = depositFolderName(fileEntries[0].name, shortId);
-    const depositPath = join(folderPath, depositFolder);
-    mkdirSync(depositPath, { recursive: true });
-
-    const manifestFiles: Array<{ originalName: string; validation: ReturnType<typeof validateFile>; size: number; depositedAs: string }> = [];
-    for (const entry of fileEntries) {
-      const buf = Buffer.from(await entry.file.arrayBuffer());
-      const declaredMime = entry.file.type || "application/octet-stream";
-      const validation = validateFile(buf, declaredMime, entry.name);
-      const safeName = sanitiseFilename(entry.name);
-      await writeFile(join(depositPath, safeName), buf);
-      manifestFiles.push({ originalName: entry.name, validation, size: buf.length, depositedAs: safeName });
-    }
-
-    const manifest = buildManifest(manifestFiles, shortId);
-    await writeFile(join(depositPath, "manifest.json"), JSON.stringify(manifest, null, 2));
-
+    const { depositFolder, manifest } = await depositFiles(req, folderPath);
     const note = buildDepositNote(depositFolder, manifest);
     deliverPrompt(session, { text: note });
 
@@ -1060,7 +1091,44 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ folder: depositFolder, manifest, warnings: manifest.warnings }));
   } catch (err: any) {
-    res.writeHead(500).end(JSON.stringify({ error: err.message || "Upload failed" }));
+    const status = err.message === "No files in upload" ? 400 : 500;
+    res.writeHead(status).end(JSON.stringify({ error: err.message || "Upload failed" }));
+  }
+}
+
+/**
+ * Handle share-sheet upload: create folder, deposit files, spawn CC, deliver directive.
+ * No existing session required — creates everything from scratch.
+ */
+async function handleShareUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const folderName = await generateFolderName(SCAN_ROOT);
+    const folderPath = join(SCAN_ROOT, folderName);
+    mkdirSync(folderPath, { recursive: true });
+
+    // Marker for future cleanup identification
+    await writeFile(
+      join(folderPath, ".gueridon-share"),
+      JSON.stringify({ source: "share-sheet", createdAt: new Date().toISOString() }),
+    );
+
+    const { depositFolder, manifest, text } = await depositFiles(req, folderPath);
+
+    const sessionId = randomUUID();
+    const session = await createSessionWithId(folderPath, sessionId, false);
+    session.shareContext = { filename: manifest.title };
+
+    const note = buildShareDepositNote(depositFolder, manifest, text);
+    deliverPrompt(session, { text: note });
+
+    emit({ type: "share:created", folder: folderName, files: manifest.file_count });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ folder: folderName, sessionId, depositFolder, manifest }));
+  } catch (err: any) {
+    const status = err.message === "No files in upload" ? 400
+      : err.message === "Upload too large" ? 413
+      : 500;
+    res.writeHead(status).end(JSON.stringify({ error: err.message || "Share upload failed" }));
   }
 }
 
@@ -1101,7 +1169,7 @@ const server = createServer(async (req, res) => {
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Client-ID");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Client-ID, X-Gueridon-Mode");
 
   if (req.method === "OPTIONS") {
     res.writeHead(204).end();
@@ -1254,6 +1322,17 @@ const server = createServer(async (req, res) => {
     } catch {
       res.writeHead(400).end(JSON.stringify({ error: "Invalid body" }));
     }
+    return;
+  }
+
+  // POST /upload — share-sheet new-session upload
+  if (req.method === "POST" && url.pathname === "/upload") {
+    const mode = req.headers["x-gueridon-mode"];
+    if (mode !== "new-session") {
+      res.writeHead(400).end(JSON.stringify({ error: "POST /upload requires X-Gueridon-Mode: new-session header" }));
+      return;
+    }
+    await handleShareUpload(req, res);
     return;
   }
 

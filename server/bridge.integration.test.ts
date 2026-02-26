@@ -157,9 +157,11 @@ describe("bridge HTTP smoke tests", () => {
     expect(res.headers.get("content-type")).toContain("application/javascript");
   });
 
-  it("POST /upload without folder returns 404", async () => {
+  it("POST /upload without X-Gueridon-Mode header returns 400", async () => {
     const res = await fetch(`${baseUrl}/upload`, { method: "POST" });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/X-Gueridon-Mode/);
   });
 
   it("POST /upload/:folder with path traversal returns 400", async () => {
@@ -248,6 +250,83 @@ describe("bridge HTTP smoke tests", () => {
     expect(data.manifest.files[0].declared_mime).toBe("image/png");
     expect(data.warnings).toHaveLength(1);
     expect(data.warnings[0]).toMatch(/deposited as binary/);
+  });
+
+  // -- Share-sheet upload (gdn-rovole) --
+
+  it("POST /upload with new-session creates folder and deposits files", async () => {
+    const form = new FormData();
+    form.append("file", new File(["share sheet content"], "note.txt", { type: "text/plain" }));
+
+    const res = await fetch(`${baseUrl}/upload`, {
+      method: "POST",
+      headers: { "X-Gueridon-Mode": "new-session" },
+      body: form,
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    // Folder should be an alliterative name
+    expect(data.folder).toMatch(/^[a-z]+-[a-z]+$/);
+    expect(data.sessionId).toBeTruthy();
+    expect(data.depositFolder).toMatch(/^mise\/upload--note--/);
+    expect(data.manifest.file_count).toBe(1);
+
+    // Verify folder exists on disk
+    expect(existsSync(join(tempDir, data.folder))).toBe(true);
+
+    // Verify .gueridon-share marker
+    const markerPath = join(tempDir, data.folder, ".gueridon-share");
+    expect(existsSync(markerPath)).toBe(true);
+    const marker = JSON.parse(readFileSync(markerPath, "utf-8"));
+    expect(marker.source).toBe("share-sheet");
+
+    // Verify deposit files on disk
+    const depositPath = join(tempDir, data.folder, data.depositFolder);
+    expect(existsSync(join(depositPath, "note.txt"))).toBe(true);
+    expect(existsSync(join(depositPath, "manifest.json"))).toBe(true);
+  });
+
+  it("POST /upload with new-session and no files returns 400", async () => {
+    const form = new FormData();
+    const res = await fetch(`${baseUrl}/upload`, {
+      method: "POST",
+      headers: { "X-Gueridon-Mode": "new-session" },
+      body: form,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /upload/:folder still works after share-sheet route added", async () => {
+    const folderName = "test-upload-regression";
+    mkdirSync(join(tempDir, folderName), { recursive: true });
+    await fetch(`${baseUrl}/session/${folderName}`, { method: "POST" });
+
+    const form = new FormData();
+    form.append("file", new File(["hello"], "test.txt", { type: "text/plain" }));
+
+    const res = await fetch(`${baseUrl}/upload/${folderName}`, {
+      method: "POST",
+      body: form,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("share-sheet folder appears in /folders listing", async () => {
+    const form = new FormData();
+    form.append("file", new File(["data"], "report.csv", { type: "text/csv" }));
+
+    const shareRes = await fetch(`${baseUrl}/upload`, {
+      method: "POST",
+      headers: { "X-Gueridon-Mode": "new-session" },
+      body: form,
+    });
+    const { folder: newFolder } = await shareRes.json();
+
+    const foldersRes = await fetch(`${baseUrl}/folders`);
+    const { folders } = await foldersRes.json();
+    const names = folders.map((f: any) => f.name);
+    expect(names).toContain(newFolder);
   });
 
   it("SSE /events delivers hello event", async () => {

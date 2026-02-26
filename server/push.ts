@@ -119,12 +119,15 @@ export async function sendPush(payload: {
   }
 }
 
-/** Send "turn complete" push. */
-export function pushTurnComplete(folder: string): Promise<void> {
+/** Send "turn complete" push. Enriches body for share-sheet sessions. */
+export function pushTurnComplete(folder: string, shareContext?: { filename: string }): Promise<void> {
   const name = folder.split("/").pop() || folder;
+  const body = shareContext
+    ? `Processed ${shareContext.filename} in ${name}`
+    : `Claude finished in ${name}`;
   return sendPush({
     title: "Guéridon",
-    body: `Claude finished in ${name}`,
+    body,
     tag: `gueridon-done-${name}`,
     folder,
     vibrate: [200],

@@ -242,6 +242,25 @@ export function buildDepositNote(folder: string, manifest: UploadManifest): stri
 }
 
 /**
+ * Build the directive deposit note for share-sheet uploads.
+ * CC is alone with the file and should examine it proactively.
+ * Prefixed with [guéridon:share] for synthetic message detection.
+ */
+export function buildShareDepositNote(folder: string, manifest: UploadManifest, text?: string): string {
+  const listing = manifest.files
+    .map((f) => `  - ${f.deposited_as} (${f.mime_type}, ${f.size_bytes} bytes)`)
+    .join("\n");
+
+  const warningLines = manifest.warnings.length > 0
+    ? "\n\n⚠️ " + manifest.warnings.join("\n⚠️ ")
+    : "";
+
+  const textLines = text ? `\n\nShared text:\n${text}` : "";
+
+  return `[guéridon:share] The user shared this via iOS. Files deposited at ${folder}/\n\n${listing}${warningLines}${textLines}\n\nmanifest.json has full metadata. Examine the content and provide a helpful response.`;
+}
+
+/**
  * Compute the deposit folder name for a set of uploaded files.
  * Returns just the relative path (e.g. "mise/upload--photo--a3f2c1d4-beef").
  * Caller creates the directory and writes files into it.
