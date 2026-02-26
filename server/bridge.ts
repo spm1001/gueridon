@@ -162,6 +162,29 @@ function persistSessions(): void {
   }, 500);
 }
 
+/** Walk /proc to collect all descendant PIDs (children, grandchildren, etc). */
+function getDescendantPids(pid: number): number[] {
+  const descendants: number[] = [];
+  const queue = [pid];
+  while (queue.length > 0) {
+    const p = queue.shift()!;
+    try {
+      const childrenStr = readFileSync(`/proc/${p}/task/${p}/children`, "utf-8").trim();
+      if (!childrenStr) continue;
+      for (const c of childrenStr.split(/\s+/)) {
+        const cpid = parseInt(c, 10);
+        if (cpid && cpid !== pid) {
+          descendants.push(cpid);
+          queue.push(cpid);
+        }
+      }
+    } catch {
+      // Process gone or /proc not available
+    }
+  }
+  return descendants;
+}
+
 /** Reap orphaned CC processes from a previous bridge instance. */
 function reapOrphans(): void {
   if (!existsSync(SESSION_FILE)) return;
@@ -182,12 +205,28 @@ function reapOrphans(): void {
     }
     try {
       process.kill(rec.pid, 0); // check alive
-      emit({ type: "orphan:reap", pid: rec.pid, folder: basename(rec.folder), sessionId: rec.sessionId });
-      process.kill(rec.pid, "SIGTERM");
-      reaped++;
     } catch {
-      // already dead
+      continue; // already dead
     }
+    // Collect child PIDs before killing parent (children re-parent to init on parent death)
+    const children = getDescendantPids(rec.pid);
+    emit({ type: "orphan:reap", pid: rec.pid, folder: basename(rec.folder), sessionId: rec.sessionId, children: children.length });
+    const allPids = [rec.pid, ...children];
+    for (const p of allPids) {
+      try { process.kill(p, "SIGTERM"); } catch { /* already dead */ }
+    }
+    reaped++;
+
+    // Escalate: SIGKILL after KILL_ESCALATION_MS for anything that survived
+    setTimeout(() => {
+      for (const p of allPids) {
+        try {
+          process.kill(p, 0); // still alive?
+          process.kill(p, "SIGKILL");
+          emit({ type: "orphan:sigkill", pid: p });
+        } catch { /* already dead */ }
+      }
+    }, KILL_ESCALATION_MS);
   }
 
   try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
@@ -1416,8 +1455,8 @@ function shutdown(signal: string): void {
   clientsById.clear();
   sessions.clear();
 
-  // Clean session file — graceful shutdown means no orphans
-  try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
+  // Leave SESSION_FILE intact — KillMode=process means CC children may
+  // survive this shutdown. The next bridge's reapOrphans() needs the file.
 
   // Give kill escalation time to fire if needed, then exit
   setTimeout(() => process.exit(0), KILL_ESCALATION_MS + 500).unref();
