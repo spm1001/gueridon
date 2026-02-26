@@ -144,6 +144,12 @@ export class StateBuilder {
   // the reset; during replay, message_start never fires so handleAssistant must.
   private replaying = false;
 
+  // True after handleAssistant pushes a new message. content_block_stop only
+  // patches state.messages when this is true, preventing blocks from a new
+  // inner API call from overwriting the previous message. Reset by
+  // onMessageStart and the inner-API-call mini-reset in onContentBlockStart.
+  private currentMessagePushed = false;
+
   // Dedup & context
   private seenMessageIds = new Set<string>();
   private contextWindow = DEFAULT_CONTEXT_WINDOW;
@@ -258,6 +264,7 @@ export class StateBuilder {
     this.toolBlockToCallIndex.clear();
     this.askUserBlockIndices.clear();
     this.askUserBlockToolId.clear();
+    this.currentMessagePushed = false;
     return { type: "message_start" };
   }
 
@@ -267,6 +274,25 @@ export class StateBuilder {
     if (!block) return null;
 
     const blockType = block.type as string;
+
+    // Detect new inner API call within the same CC turn. During multi-tool turns,
+    // CC makes multiple API calls (think → tool → result → think again) but only
+    // emits message_start for the FIRST call. Subsequent calls reuse block indices
+    // starting from 0. If blockTypes already has this index, we're in a new API
+    // call — clear streaming accumulation to prevent text/thinking/tool leakage.
+    if (this.blockTypes.has(index)) {
+      this.currentText = "";
+      this.textBlocks.clear();
+      this.thinkingBlocks.clear();
+      this.currentToolCalls = [];
+      this.pendingToolJson.clear();
+      this.blockTypes.clear();
+      this.toolBlockToCallIndex.clear();
+      this.askUserBlockIndices.clear();
+      this.askUserBlockToolId.clear();
+      this.currentMessagePushed = false;
+    }
+
     this.blockTypes.set(index, blockType);
 
     if (blockType === "text") {
@@ -353,14 +379,14 @@ export class StateBuilder {
       }
       this.currentText = allTexts.join("\n\n");
 
-      // Also patch the committed assistant message in state.messages.
-      // With extended thinking, handleAssistant fires (and commits) after the
-      // thinking block but BEFORE the text block completes. The second assistant
-      // event is deduped. Without this patch, the state snapshot at turn end
-      // has content: null and overwrites the client's delta-updated view.
-      const lastMsg = this.state.messages[this.state.messages.length - 1];
-      if (lastMsg?.role === "assistant") {
-        lastMsg.content = this.currentText || lastMsg.content;
+      // Patch the committed assistant message — but only if handleAssistant
+      // already pushed it. Without this guard, blocks from a new inner API call
+      // (after mini-reset) would overwrite the PREVIOUS message's content.
+      if (this.currentMessagePushed) {
+        const lastMsg = this.state.messages[this.state.messages.length - 1];
+        if (lastMsg?.role === "assistant") {
+          lastMsg.content = this.currentText || lastMsg.content;
+        }
       }
       return { type: "content", index, text: this.currentText };
     }
@@ -394,15 +420,14 @@ export class StateBuilder {
         }
       }
 
-      // Patch the committed assistant message's tool_calls — handleAssistant may
-      // have fired before content_block_stop (CC sends assistant before block stops
-      // on 2nd+ turns). Without this, the state snapshot at turn end has no tools.
-      const lastMsg = this.state.messages[this.state.messages.length - 1];
-      if (lastMsg?.role === "assistant") {
-        // Snapshot currentToolCalls into the committed message
-        lastMsg.tool_calls = [...this.currentToolCalls];
-        // Keep lastCommittedToolCalls in sync so handleUser can update results
-        this.lastCommittedToolCalls = lastMsg.tool_calls;
+      // Patch the committed assistant message's tool_calls — but only if
+      // handleAssistant already pushed it (same guard as text patching).
+      if (this.currentMessagePushed) {
+        const lastMsg = this.state.messages[this.state.messages.length - 1];
+        if (lastMsg?.role === "assistant") {
+          lastMsg.tool_calls = [...this.currentToolCalls];
+          this.lastCommittedToolCalls = lastMsg.tool_calls;
+        }
       }
 
       return { type: "tool_start", index: callIndex, name: call.name, input: call.input };
@@ -421,10 +446,12 @@ export class StateBuilder {
       }
       const combined = allThinking.join("\n\n");
 
-      // Patch committed assistant message
-      const lastMsg = this.state.messages[this.state.messages.length - 1];
-      if (lastMsg?.role === "assistant") {
-        lastMsg.thinking = combined;
+      // Patch committed assistant message (same guard as text/tool patching)
+      if (this.currentMessagePushed) {
+        const lastMsg = this.state.messages[this.state.messages.length - 1];
+        if (lastMsg?.role === "assistant") {
+          lastMsg.thinking = combined;
+        }
       }
 
       return { type: "thinking_content", text: combined };
@@ -524,6 +551,7 @@ export class StateBuilder {
       ...(thinking && { thinking }),
     };
     this.state.messages.push(msg);
+    this.currentMessagePushed = true;
 
     // Save this message's tool calls so handleUser can attach results to them.
     // toolIdToIndex is intentionally NOT cleared here — handleUser needs it next,

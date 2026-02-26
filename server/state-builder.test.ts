@@ -1066,6 +1066,173 @@ describe("StateBuilder", () => {
     });
   });
 
+  describe("multi-tool turn: streaming state leakage (gdn-duzumi)", () => {
+    it("second API call within same turn does not duplicate first call's text", () => {
+      // Scenario: Claude thinks, writes text, calls Task tool.
+      // Tool result comes back. Claude responds again (new msg_id).
+      // BUG: if message_start doesn't fire between API calls,
+      // currentText/currentToolCalls leak into the second handleAssistant push.
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+
+      // --- API call 1: thinking + text + tool_use ---
+      sb.handleEvent(messageStart());
+
+      // Thinking block (index 0)
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "Let me plan this."));
+
+      // First partial assistant event (after thinking block, before text)
+      sb.handleEvent(
+        assistantMessage("msg_api1", [
+          { type: "thinking", thinking: "Let me plan this." },
+        ]),
+      );
+      sb.handleEvent(blockStop(0)); // thinking stop
+
+      // Text block (index 1)
+      sb.handleEvent(textBlockStart(1));
+      sb.handleEvent(textDelta(1, "I'll use the Task tool to help."));
+
+      // Second partial assistant event (same ID — deduped)
+      sb.handleEvent(
+        assistantMessage("msg_api1", [
+          { type: "thinking", thinking: "Let me plan this." },
+          { type: "text", text: "I'll use the Task tool to help." },
+        ]),
+      );
+      sb.handleEvent(blockStop(1)); // text stop
+
+      // Tool use block (index 2)
+      sb.handleEvent(toolBlockStart(2, "Task", "toolu_task1"));
+      sb.handleEvent(inputJsonDelta(2, '{"prompt": "do something"}'));
+
+      // Third partial assistant event (same ID — deduped)
+      sb.handleEvent(
+        assistantMessage("msg_api1", [
+          { type: "thinking", thinking: "Let me plan this." },
+          { type: "text", text: "I'll use the Task tool to help." },
+          { type: "tool_use", id: "toolu_task1", name: "Task", input: { prompt: "do something" } },
+        ]),
+      );
+      sb.handleEvent(blockStop(2)); // tool stop
+
+      // Tool result
+      sb.handleEvent(toolResult("toolu_task1", "Task completed successfully"));
+
+      // --- API call 2: Claude responds after tool result ---
+      // KEY: no message_start fires here in the live CC stream
+      // (message_start fires per CC turn, not per inner API call)
+
+      // Thinking block (index 0 — reused indices for new API call)
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "Now I can summarize."));
+
+      // NEW assistant event — different msg_id, passes dedup
+      sb.handleEvent(
+        assistantMessage("msg_api2", [
+          { type: "thinking", thinking: "Now I can summarize." },
+        ]),
+      );
+      sb.handleEvent(blockStop(0));
+
+      // Text block (index 1)
+      sb.handleEvent(textBlockStart(1));
+      sb.handleEvent(textDelta(1, "Here's what the task found."));
+      sb.handleEvent(
+        assistantMessage("msg_api2", [
+          { type: "thinking", thinking: "Now I can summarize." },
+          { type: "text", text: "Here's what the task found." },
+        ]),
+      );
+      sb.handleEvent(blockStop(1));
+
+      sb.handleEvent(resultEvent());
+
+      // --- Assertions ---
+      const state = sb.getState();
+      const assistantMsgs = state.messages.filter(m => m.role === "assistant");
+
+      // Should have exactly 2 assistant messages (one per API call)
+      expect(assistantMsgs).toHaveLength(2);
+
+      // First message: text about Task, with Task tool call
+      expect(assistantMsgs[0].content).toBe("I'll use the Task tool to help.");
+      expect(assistantMsgs[0].thinking).toBe("Let me plan this.");
+      expect(assistantMsgs[0].tool_calls).toHaveLength(1);
+      expect(assistantMsgs[0].tool_calls![0].name).toBe("Task");
+
+      // Second message: summary text, NO tool calls, NO leaked text from first
+      expect(assistantMsgs[1].content).toBe("Here's what the task found.");
+      expect(assistantMsgs[1].thinking).toBe("Now I can summarize.");
+      expect(assistantMsgs[1].tool_calls).toBeUndefined();
+
+      // The critical check: second message must NOT contain first message's text
+      expect(assistantMsgs[1].content).not.toContain("I'll use the Task tool");
+    });
+
+    it("handles multiple sequential tool calls without duplication", () => {
+      // Scenario: Claude calls Read, then Grep, then responds.
+      // Each inner API call produces a new msg_id.
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+
+      // --- API call 1: text + Read tool ---
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Let me read that file."));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(toolBlockStart(1, "Read", "toolu_read1"));
+      sb.handleEvent(inputJsonDelta(1, '{"file_path": "/src/app.ts"}'));
+      sb.handleEvent(blockStop(1));
+      sb.handleEvent(
+        assistantMessage("msg_read", [
+          { type: "text", text: "Let me read that file." },
+          { type: "tool_use", id: "toolu_read1", name: "Read", input: { file_path: "/src/app.ts" } },
+        ]),
+      );
+      sb.handleEvent(toolResult("toolu_read1", "file contents"));
+
+      // --- API call 2: text + Grep tool (no message_start) ---
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Now searching for the function."));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(toolBlockStart(1, "Grep", "toolu_grep1"));
+      sb.handleEvent(inputJsonDelta(1, '{"pattern": "handleEvent"}'));
+      sb.handleEvent(blockStop(1));
+      sb.handleEvent(
+        assistantMessage("msg_grep", [
+          { type: "text", text: "Now searching for the function." },
+          { type: "tool_use", id: "toolu_grep1", name: "Grep", input: { pattern: "handleEvent" } },
+        ]),
+      );
+      sb.handleEvent(toolResult("toolu_grep1", "match found"));
+
+      // --- API call 3: final text response (no message_start) ---
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Found it on line 42."));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(
+        assistantMessage("msg_final", [
+          { type: "text", text: "Found it on line 42." },
+        ]),
+      );
+
+      sb.handleEvent(resultEvent());
+
+      const state = sb.getState();
+      const assistantMsgs = state.messages.filter(m => m.role === "assistant");
+
+      expect(assistantMsgs).toHaveLength(3);
+      expect(assistantMsgs[0].content).toBe("Let me read that file.");
+      expect(assistantMsgs[0].tool_calls).toHaveLength(1);
+      expect(assistantMsgs[1].content).toBe("Now searching for the function.");
+      expect(assistantMsgs[1].tool_calls).toHaveLength(1);
+      expect(assistantMsgs[2].content).toBe("Found it on line 42.");
+      expect(assistantMsgs[2].tool_calls).toBeUndefined();
+    });
+  });
+
   describe("initial state", () => {
     it("starts with correct defaults", () => {
       const sb = makeBuilder();
