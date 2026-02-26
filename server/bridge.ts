@@ -44,6 +44,7 @@ import {
   hasExitMarker,
   writeExitMarker,
   getSessionJSONLPath,
+  tailRead,
   SCAN_ROOT,
 } from "./folders.js";
 
@@ -85,6 +86,7 @@ interface SSEClient {
   res: ServerResponse;
   folder: string | null; // null = lobby mode
   eventSeq: number;      // monotonic event counter for Last-Event-ID
+  pushToken: string;     // random token for authenticating push subscribe/unsubscribe (gdn-ricocu)
 }
 
 interface Session {
@@ -118,6 +120,7 @@ interface Session {
 const sessions = new Map<string, Session>();       // keyed by folder path
 const allClients = new Set<SSEClient>();
 const clientsById = new Map<string, SSEClient>();
+const validPushTokens = new Set<string>(); // gdn-ricocu: tokens issued to SSE clients
 
 const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
 const GRACE_MS = parseInt(process.env.GRACE_MS || "300000", 10);
@@ -280,13 +283,15 @@ function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): 
   const lastEventId = req.headers["last-event-id"] as string | undefined;
   const reconnect = !!lastEventId;
 
-  const client: SSEClient = { res, folder: null, eventSeq: 0 };
+  const pushToken = randomUUID().replace(/-/g, ""); // compact hex token (gdn-ricocu)
+  const client: SSEClient = { res, folder: null, eventSeq: 0, pushToken };
   allClients.add(client);
   clientsById.set(clientId, client);
+  validPushTokens.add(pushToken);
   emit({ type: "sse:connect", clientId });
 
   const vapidPublicKey = getVapidPublicKey();
-  sendSSE(client, "hello", { version: 1, clientId, reconnect, ...(vapidPublicKey ? { vapidPublicKey } : {}) });
+  sendSSE(client, "hello", { version: 1, clientId, reconnect, pushToken, ...(vapidPublicKey ? { vapidPublicKey } : {}) });
 
   // Send folders asynchronously
   scanFolders(buildActiveSessionsMap()).then((folders) =>
@@ -297,6 +302,7 @@ function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): 
     emit({ type: "sse:disconnect", clientId, folder: client.folder });
     allClients.delete(client);
     clientsById.delete(clientId);
+    validPushTokens.delete(client.pushToken);
     if (client.folder) detachFromSession(client);
   });
 
@@ -551,20 +557,23 @@ function flushPendingDeltas(session: Session): void {
 
 // -- Turn completion --
 
-function onTurnComplete(session: Session): void {
+async function onTurnComplete(session: Session): Promise<void> {
   const durationMs = session.turnStartedAt ? Date.now() - session.turnStartedAt : 0;
   session.turnInProgress = false;
   session.turnStartedAt = null;
 
-  // Recover local command output (CC writes to JSONL, not stdout)
+  // Recover local command output (CC writes to JSONL, not stdout).
+  // Reads only the last 8KB async instead of the entire file sync. (gdn-webuje)
   if (!session.hadContentThisTurn) {
     try {
       const jsonlPath = getSessionJSONLPath(session.folder, session.id);
-      const content = readFileSync(jsonlPath, "utf-8");
-      const localOutput = extractLocalCommandOutput(content);
-      if (localOutput) {
-        const wrapper = JSON.parse(localOutput);
-        session.stateBuilder.handleEvent(wrapper.event);
+      const tail = await tailRead(jsonlPath, 8192);
+      if (tail) {
+        const localOutput = extractLocalCommandOutput(tail);
+        if (localOutput) {
+          const wrapper = JSON.parse(localOutput);
+          session.stateBuilder.handleEvent(wrapper.event);
+        }
       }
     } catch { /* JSONL may not exist yet */ }
   }
@@ -1210,15 +1219,31 @@ const STATIC_FILES: Record<string, { file: string; mime: string }> = {
   "/marked.js": { file: "node_modules/marked/lib/marked.umd.js", mime: "application/javascript" },
 };
 
+// CSP: restrict what index.html can load (gdn-tilozu).
+// 'unsafe-inline' required for inline <script> and <style> in index.html.
+// connect-src 'self' allows SSE + POST to same origin only.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
+].join("; ");
+
 function serveStatic(pathname: string, res: ServerResponse): boolean {
   const entry = STATIC_FILES[pathname];
   if (!entry) return false;
   try {
     const content = readFileSync(join(PROJECT_ROOT, entry.file), "utf-8");
-    res.writeHead(200, {
+    const headers: Record<string, string> = {
       "Content-Type": entry.mime,
       "Cache-Control": "no-cache",
-    });
+    };
+    // Apply CSP only to the HTML page (not to JS/JSON/SVG resources)
+    if (entry.mime.startsWith("text/html")) {
+      headers["Content-Security-Policy"] = CSP;
+    }
+    res.writeHead(200, headers);
     res.end(content);
     return true;
   } catch {
@@ -1228,11 +1253,36 @@ function serveStatic(pathname: string, res: ServerResponse): boolean {
 
 // -- HTTP server --
 
+// CORS: only accept requests from known origins (gdn-kukohe).
+// Same-origin requests omit the Origin header — allow those unconditionally.
+const ALLOWED_ORIGINS = new Set([
+  `https://${process.env.TAILSCALE_HOSTNAME || "tube.atlas-cloud.ts.net"}`,
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+]);
+
+function setCorsHeaders(req: IncomingMessage, res: ServerResponse): boolean {
+  const origin = req.headers.origin;
+  if (!origin) {
+    // Same-origin request (browser omits Origin header) — allow
+    return true;
+  }
+  if (ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Client-ID, X-Gueridon-Mode, X-Push-Token");
+    res.setHeader("Vary", "Origin");
+    return true;
+  }
+  // Unknown origin — reject
+  return false;
+}
+
 const server = createServer(async (req, res) => {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Client-ID, X-Gueridon-Mode");
+  if (!setCorsHeaders(req, res)) {
+    res.writeHead(403).end("Forbidden: origin not allowed");
+    return;
+  }
 
   if (req.method === "OPTIONS") {
     res.writeHead(204).end();
@@ -1331,8 +1381,13 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  // POST /push/subscribe — store push subscription
+  // POST /push/subscribe — store push subscription (gdn-ricocu: token required)
   if (req.method === "POST" && url.pathname === "/push/subscribe") {
+    const pushToken = req.headers["x-push-token"] as string | undefined;
+    if (!pushToken || !validPushTokens.has(pushToken)) {
+      res.writeHead(401).end(JSON.stringify({ error: "Invalid or missing push token" }));
+      return;
+    }
     try {
       const body = await readBody(req);
       const sub = JSON.parse(body);
@@ -1349,8 +1404,13 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // POST /push/unsubscribe — remove push subscription
+  // POST /push/unsubscribe — remove push subscription (gdn-ricocu: token required)
   if (req.method === "POST" && url.pathname === "/push/unsubscribe") {
+    const pushToken = req.headers["x-push-token"] as string | undefined;
+    if (!pushToken || !validPushTokens.has(pushToken)) {
+      res.writeHead(401).end(JSON.stringify({ error: "Invalid or missing push token" }));
+      return;
+    }
     try {
       const body = await readBody(req);
       const { endpoint } = JSON.parse(body);

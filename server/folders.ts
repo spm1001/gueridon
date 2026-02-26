@@ -4,6 +4,32 @@ import { homedir } from "node:os";
 import type { ActiveSessionInfo } from "./bridge-logic.js";
 import { emit } from "./event-bus.js";
 
+// --- Shared tail-read utility ---
+
+/**
+ * Read the last `bytes` of a file asynchronously.
+ * Returns the tail as a UTF-8 string. If the file is smaller than `bytes`,
+ * returns the entire file contents. Returns null if the file doesn't exist
+ * or can't be read.
+ */
+export async function tailRead(filePath: string, bytes = 8192): Promise<string | null> {
+  let fh;
+  try {
+    fh = await fsOpen(filePath, "r");
+    const s = await fh.stat();
+    if (!s.isFile() || s.size === 0) return null;
+    const readSize = Math.min(bytes, s.size);
+    const offset = s.size - readSize;
+    const buf = Buffer.alloc(readSize);
+    await fh.read(buf, 0, readSize, offset);
+    return buf.toString("utf-8");
+  } catch {
+    return null;
+  } finally {
+    await fh?.close();
+  }
+}
+
 // --- Types ---
 
 export type FolderState = "active" | "paused" | "closed" | "fresh";
@@ -186,15 +212,8 @@ export async function getSessionsForFolder(
       let contextPct: number | null = null;
       let humanInteraction = false;
 
-      const tailSize = 4096;
-      const fileSize = s.size;
-      const offset = Math.max(0, fileSize - tailSize);
-
-      const fh = await fsOpen(filePath, "r");
-      try {
-        const buf = Buffer.alloc(Math.min(tailSize, fileSize));
-        await fh.read(buf, 0, buf.length, offset);
-        const tail = buf.toString("utf-8");
+      const tail = await tailRead(filePath, 4096);
+      if (tail) {
         // Split into lines; first line may be partial if we seeked mid-line
         const lines = tail.split("\n");
 
@@ -226,16 +245,14 @@ export async function getSessionsForFolder(
             continue; // partial line or non-JSON
           }
         }
-      } finally {
-        await fh.close();
       }
 
       // For large sessions where the tail might miss early user events,
       // also check the head (first ~2KB) for user text
-      if (!humanInteraction && fileSize > tailSize) {
+      if (!humanInteraction && s.size > 4096) {
         const headFh = await fsOpen(filePath, "r");
         try {
-          const headBuf = Buffer.alloc(Math.min(2048, fileSize));
+          const headBuf = Buffer.alloc(Math.min(2048, s.size));
           await headFh.read(headBuf, 0, headBuf.length, 0);
           const head = headBuf.toString("utf-8");
           const headLines = head.split("\n");
@@ -372,20 +389,19 @@ export async function scanFolders(
     return [];
   }
 
-  const folders: FolderInfo[] = [];
+  // Process all folders concurrently (gdn-fisimu). Each folder's stat,
+  // session lookup, handoff, and exit marker checks run in parallel.
+  const visible = entries.filter((name) => !name.startsWith("."));
 
-  for (const name of entries) {
-    // Skip hidden directories
-    if (name.startsWith(".")) continue;
-
+  async function processFolder(name: string): Promise<FolderInfo | null> {
     const fullPath = join(SCAN_ROOT, name);
 
     // stat follows symlinks — includes things like claude-config -> ~/.claude
     try {
       const s = await stat(fullPath);
-      if (!s.isDirectory()) continue;
+      if (!s.isDirectory()) return null;
     } catch {
-      continue; // skip broken symlinks or permission errors
+      return null; // skip broken symlinks or permission errors
     }
 
     // Fetch all sessions for this folder (used in all branches)
@@ -395,7 +411,7 @@ export async function scanFolders(
     const activeInfo = activeSessions.get(fullPath);
     if (activeInfo) {
       const handoff = await getLatestHandoff(fullPath);
-      folders.push({
+      return {
         name,
         path: fullPath,
         state: "active",
@@ -405,22 +421,16 @@ export async function scanFolders(
         handoffPurpose: handoff?.purpose ?? null,
         contextPct: activeInfo.contextPct,
         sessions: folderSessions,
-      });
-      continue;
+      };
     }
 
     // Check .exit marker, handoff, and session files.
-    // .exit = deliberate close via /exit command (definitive).
-    // Handoff = intentional close via /close (existing signal).
-    // Session files without either = abandoned mid-work (paused).
-    // Session .jsonl files persist forever — they're not cleaned up by /close.
     const session = await getLatestSession(fullPath);
     const exited = session ? await hasExitMarker(fullPath, session.id) : false;
     const handoff = await getLatestHandoff(fullPath);
 
     if (exited) {
-      // Deliberately closed via /exit — definitive closed state
-      folders.push({
+      return {
         name,
         path: fullPath,
         state: "closed",
@@ -430,11 +440,9 @@ export async function scanFolders(
         handoffPurpose: handoff?.purpose ?? null,
         contextPct: null,
         sessions: folderSessions,
-      });
+      };
     } else if (handoff && (!session || handoff.sessionId === session.id)) {
-      // Handoff matches latest session (or no session) → intentionally closed.
-      // Stale handoff from session N doesn't block session N+1 from showing as paused.
-      folders.push({
+      return {
         name,
         path: fullPath,
         state: "closed",
@@ -444,10 +452,9 @@ export async function scanFolders(
         handoffPurpose: handoff.purpose,
         contextPct: null,
         sessions: folderSessions,
-      });
+      };
     } else if (session) {
-      // Session files but no handoff — abandoned without /close (truly paused)
-      folders.push({
+      return {
         name,
         path: fullPath,
         state: "paused",
@@ -457,9 +464,9 @@ export async function scanFolders(
         handoffPurpose: null,
         contextPct: null,
         sessions: folderSessions,
-      });
+      };
     } else {
-      folders.push({
+      return {
         name,
         path: fullPath,
         state: "fresh",
@@ -469,8 +476,17 @@ export async function scanFolders(
         handoffPurpose: null,
         contextPct: null,
         sessions: folderSessions,
-      });
+      };
     }
+  }
+
+  const results = await Promise.allSettled(visible.map(processFolder));
+  const folders: FolderInfo[] = [];
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      folders.push(result.value);
+    }
+    // rejected promises (broken folders) silently skipped
   }
 
   // Sort: active first, paused (most recent), closed (alphabetical), fresh (alphabetical)

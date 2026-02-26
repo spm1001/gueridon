@@ -56,6 +56,7 @@ async function waitForReady(
 describe("bridge HTTP smoke tests", () => {
   let child: ChildProcess;
   let baseUrl: string;
+  let port: number;
   let tempDir: string;
   const stderrLines: string[] = [];
 
@@ -70,7 +71,7 @@ describe("bridge HTTP smoke tests", () => {
     tempDir = mkdtempSync(join(tmpdir(), "gdn-smoke-"));
     mkdirSync(join(tempDir, ".config", "gueridon"), { recursive: true });
 
-    const port = await findFreePort();
+    port = await findFreePort();
     baseUrl = `http://127.0.0.1:${port}`;
 
     child = spawn("npx", ["tsx", "server/bridge.ts"], {
@@ -140,9 +141,18 @@ describe("bridge HTTP smoke tests", () => {
     expect(res.status).toBe(404);
   });
 
-  it("CORS headers are present", async () => {
-    const res = await fetch(baseUrl);
-    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+  it("CORS: same-origin request has no ACAO header, cross-origin allowed origin gets reflected", async () => {
+    // Same-origin (no Origin header) — no ACAO header set
+    const sameOrigin = await fetch(baseUrl);
+    expect(sameOrigin.headers.get("access-control-allow-origin")).toBeNull();
+
+    // Allowed origin — reflected back
+    const allowed = await fetch(baseUrl, { headers: { Origin: `http://localhost:${port}` } });
+    expect(allowed.headers.get("access-control-allow-origin")).toBe(`http://localhost:${port}`);
+
+    // Unknown origin — rejected
+    const unknown = await fetch(baseUrl, { headers: { Origin: "https://evil.example.com" } });
+    expect(unknown.status).toBe(403);
   });
 
   it("GET /manifest.json serves JSON", async () => {
@@ -380,5 +390,35 @@ describe("bridge HTTP smoke tests", () => {
     const helloData = JSON.parse(helloMatch![1]);
     expect(helloData).toHaveProperty("version", 1);
     expect(helloData).toHaveProperty("clientId");
+    expect(helloData).toHaveProperty("pushToken");
+    expect(typeof helloData.pushToken).toBe("string");
+    expect(helloData.pushToken.length).toBeGreaterThan(0);
+  });
+
+  it("push subscribe rejects without valid token (gdn-ricocu)", async () => {
+    // No token → 401
+    const noToken = await fetch(`${baseUrl}/push/subscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://example.com/push" }),
+    });
+    expect(noToken.status).toBe(401);
+
+    // Bad token → 401
+    const badToken = await fetch(`${baseUrl}/push/subscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Push-Token": "not-a-real-token" },
+      body: JSON.stringify({ endpoint: "https://example.com/push" }),
+    });
+    expect(badToken.status).toBe(401);
+  });
+
+  it("push unsubscribe rejects without valid token (gdn-ricocu)", async () => {
+    const res = await fetch(`${baseUrl}/push/unsubscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://example.com/push" }),
+    });
+    expect(res.status).toBe(401);
   });
 });

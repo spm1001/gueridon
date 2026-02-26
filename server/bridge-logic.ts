@@ -147,7 +147,15 @@ export function resolveSessionForFolder(
 /**
  * Check if a handoff is stale: the session was resumed after the handoff was written.
  * Returns true if the handoff should be ignored (JSONL modified after handoff). (gdn-sekeca)
+ *
+ * Requires a minimum time gap (5 minutes) to avoid false positives: /close writes
+ * the handoff mid-turn, then CC finishes the turn writing more JSONL events seconds
+ * later. That small mtime delta is normal same-turn completion, not a stale handoff.
+ * A genuinely stale handoff (session resumed and worked in) would show minutes or
+ * hours of JSONL activity after the handoff. (gdn-zatuho)
  */
+export const HANDOFF_STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
 export function isHandoffStale(
   handoffSessionId: string | null,
   handoffMtime: Date | null,
@@ -155,7 +163,9 @@ export function isHandoffStale(
   sessionMtime: Date | null,
 ): boolean {
   if (!handoffSessionId || !handoffMtime || !sessionId || !sessionMtime) return false;
-  return handoffSessionId === sessionId && sessionMtime > handoffMtime;
+  if (handoffSessionId !== sessionId) return false;
+  const deltaMs = sessionMtime.getTime() - handoffMtime.getTime();
+  return deltaMs > HANDOFF_STALE_THRESHOLD_MS;
 }
 
 // --- Path validation ---
@@ -463,16 +473,26 @@ export interface QueuedPrompt {
  * Returns null if the queue is empty.
  *
  * Single message: passed through unchanged.
- * Multiple messages: concatenated with numbered markers so CC can distinguish them.
+ * Multiple messages: text is concatenated with numbered markers so CC can
+ * distinguish them; content arrays from all prompts are merged in order.
  */
 export function coalescePrompts(queue: QueuedPrompt[]): QueuedPrompt | null {
   if (queue.length === 0) return null;
   if (queue.length === 1) return queue[0];
 
-  // Extract text from each prompt (content arrays not yet supported for coalescing)
+  // Number and concatenate text from each prompt
   const texts = queue.map((p) => p.text || "");
   const numbered = texts.map((t, i) => `[${i + 1}/${texts.length}] ${t}`);
-  return { text: numbered.join("\n\n") };
+
+  // Merge content arrays from all prompts (preserves file references, tool results)
+  const allContent: unknown[] = [];
+  for (const p of queue) {
+    if (p.content) allContent.push(...p.content);
+  }
+
+  const result: QueuedPrompt = { text: numbered.join("\n\n") };
+  if (allContent.length > 0) result.content = allContent;
+  return result;
 }
 
 /**

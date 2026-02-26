@@ -15,6 +15,7 @@ import {
   isUserTextEcho,
   extractLocalCommandOutput,
   coalescePrompts,
+  HANDOFF_STALE_THRESHOLD_MS,
   LOCAL_CMD_TAIL_LINES,
   CONFLATION_INTERVAL_MS,
   type SessionProcessInfo,
@@ -212,35 +213,47 @@ describe("resolveSessionForFolder", () => {
   });
 });
 
-// --- isHandoffStale (gdn-sekeca) ---
-// A handoff is stale when the session was resumed after the handoff was written.
+// --- isHandoffStale (gdn-sekeca, gdn-zatuho) ---
+// A handoff is stale when the session was resumed well after the handoff was written.
+// Small mtime deltas (same-turn CC writes after /close) are NOT stale — they're
+// normal same-turn completion. Only gaps > HANDOFF_STALE_THRESHOLD_MS count.
 
 describe("isHandoffStale", () => {
-  const earlier = new Date("2026-02-24T06:39:00Z");
-  const later   = new Date("2026-02-24T06:41:00Z");
+  const base = new Date("2026-02-24T06:39:00Z");
+  const sameTurnLater = new Date(base.getTime() + 30_000); // 30 seconds later
+  const wellLater = new Date(base.getTime() + HANDOFF_STALE_THRESHOLD_MS + 60_000); // well past threshold
 
-  it("returns true when handoff matches session and JSONL is newer", () => {
-    expect(isHandoffStale("sess-1", earlier, "sess-1", later)).toBe(true);
+  it("returns true when handoff matches session and JSONL is much newer (genuinely stale)", () => {
+    expect(isHandoffStale("sess-1", base, "sess-1", wellLater)).toBe(true);
+  });
+
+  it("returns false when JSONL is only seconds newer (same-turn completion, gdn-zatuho)", () => {
+    expect(isHandoffStale("sess-1", base, "sess-1", sameTurnLater)).toBe(false);
   });
 
   it("returns false when handoff matches session and handoff is newer", () => {
-    expect(isHandoffStale("sess-1", later, "sess-1", earlier)).toBe(false);
+    expect(isHandoffStale("sess-1", wellLater, "sess-1", base)).toBe(false);
   });
 
   it("returns false when handoff matches session and times are equal", () => {
-    expect(isHandoffStale("sess-1", earlier, "sess-1", earlier)).toBe(false);
+    expect(isHandoffStale("sess-1", base, "sess-1", base)).toBe(false);
   });
 
   it("returns false when handoff does not match session", () => {
-    expect(isHandoffStale("sess-old", earlier, "sess-new", later)).toBe(false);
+    expect(isHandoffStale("sess-old", base, "sess-new", wellLater)).toBe(false);
   });
 
   it("returns false when handoff is null", () => {
-    expect(isHandoffStale(null, null, "sess-1", later)).toBe(false);
+    expect(isHandoffStale(null, null, "sess-1", wellLater)).toBe(false);
   });
 
   it("returns false when session is null", () => {
-    expect(isHandoffStale("sess-1", earlier, null, null)).toBe(false);
+    expect(isHandoffStale("sess-1", base, null, null)).toBe(false);
+  });
+
+  it("returns false when delta is exactly at threshold (not strictly greater)", () => {
+    const atThreshold = new Date(base.getTime() + HANDOFF_STALE_THRESHOLD_MS);
+    expect(isHandoffStale("sess-1", base, "sess-1", atThreshold)).toBe(false);
   });
 });
 
@@ -1260,5 +1273,56 @@ describe("coalescePrompts", () => {
       { content: [{ type: "text", text: "content array" }] },
     ]);
     expect(result!.text).toBe("[1/2] has text\n\n[2/2] ");
+    expect(result!.content).toEqual([{ type: "text", text: "content array" }]);
+  });
+
+  it("preserves content arrays from all merged prompts", () => {
+    const fileRef1 = { type: "image", source: { type: "base64", data: "abc" } };
+    const fileRef2 = { type: "image", source: { type: "base64", data: "def" } };
+    const result = coalescePrompts([
+      { text: "first", content: [fileRef1] },
+      { text: "second", content: [fileRef2] },
+    ]);
+    expect(result!.text).toBe("[1/2] first\n\n[2/2] second");
+    expect(result!.content).toEqual([fileRef1, fileRef2]);
+  });
+
+  it("merges content arrays when only some prompts have content", () => {
+    const fileRef = { type: "image", source: { type: "base64", data: "abc" } };
+    const result = coalescePrompts([
+      { text: "just text" },
+      { text: "with file", content: [fileRef] },
+      { text: "more text" },
+    ]);
+    expect(result!.text).toContain("[1/3]");
+    expect(result!.content).toEqual([fileRef]);
+  });
+
+  it("omits content key when no prompts have content arrays", () => {
+    const result = coalescePrompts([
+      { text: "first" },
+      { text: "second" },
+    ]);
+    expect(result).toEqual({ text: "[1/2] first\n\n[2/2] second" });
+    expect(result).not.toHaveProperty("content");
+  });
+
+  it("preserves content array for single prompt passthrough", () => {
+    const fileRef = { type: "tool_result", content: "result data" };
+    const msg = { text: "upload", content: [fileRef] };
+    const result = coalescePrompts([msg]);
+    expect(result).toBe(msg); // identity — same object
+    expect(result!.content).toEqual([fileRef]);
+  });
+
+  it("handles content-only prompts (no text at all)", () => {
+    const fileRef1 = { type: "image", data: "img1" };
+    const fileRef2 = { type: "image", data: "img2" };
+    const result = coalescePrompts([
+      { content: [fileRef1] },
+      { content: [fileRef2] },
+    ]);
+    expect(result!.content).toEqual([fileRef1, fileRef2]);
+    expect(result!.text).toBe("[1/2] \n\n[2/2] ");
   });
 });
