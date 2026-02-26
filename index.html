@@ -124,6 +124,7 @@
   }
 
   .msg-assistant pre {
+    position: relative;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -140,6 +141,27 @@
     padding: 0;
     border-radius: 0;
     font-size: inherit;
+  }
+
+  .code-copy-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+    z-index: 1;
+  }
+
+  .code-copy-btn:active {
+    opacity: 1;
+    color: var(--accent);
   }
 
   .msg-assistant ul, .msg-assistant ol {
@@ -242,6 +264,7 @@
   }
 
   .chip .c-detail {
+    position: relative;
     display: none;
     font-family: var(--mono);
     font-size: 0.6rem;
@@ -1771,6 +1794,26 @@ function esc(s) {
 // Configure marked — GFM for tables/task lists/strikethrough, no <br> on single newlines
 marked.setOptions({ gfm: true, breaks: false });
 
+// Inject copy buttons into <pre> blocks inside a container element
+function addCopyButtons(container) {
+  for (const pre of container.querySelectorAll('pre')) {
+    if (pre.querySelector('.code-copy-btn')) continue;
+    const btn = document.createElement('button');
+    btn.className = 'code-copy-btn';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const code = pre.querySelector('code');
+      const text = (code || pre).textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      });
+    });
+    pre.appendChild(btn);
+  }
+}
+
 // === Output trimming for small screens ===
 // Transform pipeline: applied at block boundaries before rendering
 
@@ -1846,6 +1889,7 @@ function renderLocalCommand(content) {
     block.dataset.expanded = block.dataset.expanded === 'true' ? 'false' : 'true';
   });
 
+  addCopyButtons(block);
   return block;
 }
 
@@ -1900,6 +1944,18 @@ function renderChip(tc) {
     (tc.input ? `<span class="c-path">${esc(tc.input)}</span>` : '') +
     `<div class="c-detail">${esc(detail)}</div>`;
 
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'code-copy-btn';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(detail).then(() => {
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+  });
+  chip.querySelector('.c-detail').appendChild(copyBtn);
+
   chip.addEventListener('click', () => {
     chip.classList.toggle('expanded');
   });
@@ -1950,6 +2006,7 @@ function renderMessages(messages) {
         } else {
           div.className = 'msg-assistant';
           div.innerHTML = marked.parse(trimText(msg.content));
+          addCopyButtons(div);
         }
         el.appendChild(div);
       }
