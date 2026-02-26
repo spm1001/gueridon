@@ -1,3 +1,5 @@
+> **Staleness note (2026-02):** Implementation section references `ws-transport.ts` and `main.ts` — both deleted. The decision (single connection path, no `?session=` URL param) still holds and is implemented in the current SSE+POST transport.
+
 # Single Connection Path Decision (2026-02-10)
 
 ## Context

@@ -15,11 +15,11 @@ One HTML file (`index.html`) served by the bridge. SSE for live events, POST for
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~200 tests, <1s)
+npm test                     # Run all tests (~258 tests, ~3s)
 npm run test:watch           # Watch mode
 ```
 
-Phone URL: `https://kube.atlas-cloud.ts.net/` (Tailscale HTTPS termination).
+Phone URL: `https://tube.atlas-cloud.ts.net/` (Tailscale HTTPS termination).
 
 ### Design iteration (brisk-bear repo)
 
@@ -27,7 +27,7 @@ The UI is designed in the `brisk-bear` repo using static state.json files and pa
 
 ## Deployment
 
-Runs on **kube** (Debian Linux, Tailscale). Single systemd service.
+Runs on **tube** (Debian Linux, Tailscale). Single systemd service.
 
 ```bash
 sudo systemctl restart gueridon    # Restart bridge
@@ -53,7 +53,12 @@ The bridge is split across several modules in `server/`:
 | `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape |
 | `folders.ts` | Folder scanning, session discovery, handoff reading |
 | `push.ts` | Web Push (VAPID) notification delivery |
-| `fun-names.ts` | Alliterative folder name generator (exported, not yet wired into production) |
+| `upload.ts` | Upload validation, MIME detection via magic bytes, mise-style file deposit |
+| `event-bus.ts` | Typed event emitter decoupling event production from consumption |
+| `events.ts` | `BridgeEvent` type definitions, severity level mapping |
+| `logger.ts` | JSON-lines structured logger subscribed to event bus |
+| `status-buffer.ts` | Circular buffer of recent events for the `/status` debug endpoint |
+| `fun-names.ts` | Alliterative folder name generator for share-sheet uploads |
 
 **Endpoints:**
 | Method | Path | Purpose |
@@ -67,12 +72,16 @@ The bridge is split across several modules in `server/`:
 | POST | `/exit/:folder` | Deliberate session close |
 | POST | `/push/subscribe` | Register push subscription |
 | POST | `/push/unsubscribe` | Remove push subscription |
+| GET | `/status` | Debug endpoint (sessions, memory, recent events) |
+| POST | `/client-error` | Mobile error reporting (rate-limited) |
+| POST | `/upload` | Share-sheet new-session upload |
+| POST | `/upload/:folder` | Multipart file upload to active session |
 
 **Key design:**
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
 - **StateBuilder** (`server/state-builder.ts`): See module table above. Emits SSE deltas during streaming, full state snapshots at turn end.
 - **Delta conflation:** Text deltas accumulated and flushed on timer (not per-token). Reduces SSE traffic without visible latency.
-- **Static serving:** index.html, sw.js, manifest.json, icons — no-cache headers, same port as API.
+- **Static serving:** index.html, sw.js, manifest.json, marked.js, icons — no-cache headers, same port as API.
 - **Lazy spawn:** CC process starts on first prompt, not on connect.
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
 - **Orphan reaping:** On startup, reads sse-sessions.json, SIGTERMs any live CC processes from the previous bridge instance.
@@ -85,18 +94,20 @@ claude -p --verbose \
   --output-format stream-json \
   --include-partial-messages \
   --replay-user-messages \
-  --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,WebSearch,Task,TaskOutput,TaskStop,Skill,AskUserQuestion,EnterPlanMode,ExitPlanMode,EnterWorktree,ToolSearch" \
+  --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,WebSearch,Task,TaskOutput,TaskStop,Skill,AskUserQuestion,EnterPlanMode,ExitPlanMode,EnterWorktree,ToolSearch,mcp__*" \
   --disallowedTools "WebFetch,TodoWrite,NotebookEdit" \
   --permission-mode default \
+  --mcp-config ~/.claude/settings.json \
   --session-id <uuid> \
   --append-system-prompt "The user is on a mobile device using Guéridon. ..."
 ```
 
 - `--verbose` is mandatory for stream-json mode.
-- `--allowed-tools` lists all tools permissively. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
+- `--allowed-tools` lists all tools permissively, including `mcp__*` for all MCP tools. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
+- `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`.
 - `--disallowedTools` hides tools from the model entirely: WebFetch (returns AI summaries, use curl instead), TodoWrite (use bon), NotebookEdit (no notebooks).
 - `--permission-mode default` respects settings.json allow/deny lists.
-- `--append-system-prompt` coaches CC about AskUserQuestion error behavior — the tool returns an error on mobile, but the user sees tappable buttons and responds in their next message. Full text in `CC_FLAGS` in `bridge-logic.ts`.
+- `--append-system-prompt` is built dynamically by `buildSystemPrompt()` in `bridge-logic.ts`. Includes: machine context (hostname, "this IS the production server, do not SSH here"), working directory, and AskUserQuestion coaching (tool returns error on mobile, user sees tappable buttons).
 - `--session-id <uuid>` for fresh sessions; `--resume <uuid>` for resuming after process kill. Decided by `resolveSessionForFolder()` in `bridge-logic.ts`.
 - **Local commands (`/context`, `/cost`, `/compact`) produce NO stdout.** Bridge reads JSONL tail on empty-result turns to recover output.
 - **Input format** (critical): `{"type":"user","message":{"role":"user","content":"..."}}`
@@ -127,19 +138,15 @@ Full list: https://code.claude.com/docs/en/settings
 
 ## Frontend
 
-Single HTML file: CSS, HTML, JS — no splitting, no build, no dependencies.
+Single HTML file: CSS, HTML, JS — no splitting, no build. Uses `marked` library (served from node_modules as `/marked.js`).
 
 - Dark theme only
-- Hand-rolled block-level markdown parser
+- Markdown rendering via `marked.parse()` / `marked.parseInline()`
 - Collapsible tool calls (consecutive successful calls coalesce)
 - Enter never submits (mobile newlines), submit is the button
 - Chunk-level updates (not token-level)
 - Session switcher with per-folder session list
 - Push notifications via service worker
-
-## Stale Code
-
-`cli/bridge-client.ts`, `cli/gdn.ts`, and `scripts/test-bridge.ts` (~1,500 lines) use a WebSocket protocol that no longer exists — the bridge is SSE+POST. They compile but cannot run. The `gdn` script in `package.json` also points at this dead code. Delete or rewrite when the testing cluster (gdn-puzoni) begins.
 
 ## Key Docs
 

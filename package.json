@@ -7,8 +7,7 @@
   "scripts": {
     "start": "tsx server/bridge.ts",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "gdn": "tsx cli/gdn.ts"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "marked": "^17.0.3",

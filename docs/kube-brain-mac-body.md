@@ -1,3 +1,5 @@
+> **Staleness note (2026-02):** Hostname is now **tube** (not kube). Transport is SSE+POST, not WebSocket. URLs like `ws://kube:3001` are historical. The architectural vision (remote brain, local body) is still the active model.
+
 # Kube as Brain, Mac as Body
 
 ## The Problem
