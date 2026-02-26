@@ -85,6 +85,7 @@ The bridge is split across several modules in `server/`:
 - **Lazy spawn:** CC process starts on first prompt, not on connect.
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
 - **Orphan reaping:** On startup, reads sse-sessions.json, SIGTERMs any live CC processes from the previous bridge instance.
+- **Outrider prompt:** When the first queued prompt arrives during an active turn, the bridge injects a steering message into CC's stdin ("The user has sent a follow-up message. Finish your current work..."). CC sees this as a user message and wraps up before processing the queue. These appear in JSONL transcripts as phantom user messages — they are bridge-generated, not user-typed.
 
 ## CC Process Flags
 
