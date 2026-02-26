@@ -264,10 +264,9 @@ body {
 }
 
 .chip .c-detail .code-copy-btn {
-  position: sticky;
-  top: 0;
-  float: right;
-  margin-right: -44px;
+  position: absolute;
+  top: 4px;
+  right: 4px;
 }
 
 .chip.expanded .c-detail { display: block; }
