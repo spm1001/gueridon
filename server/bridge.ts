@@ -11,7 +11,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import { readFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,8 +33,11 @@ import {
   resolveSessionForFolder,
   isHandoffStale,
   coalescePrompts,
+  classifyRestart,
+  buildResumeInjection,
   type PendingDelta,
   type SessionProcessInfo,
+  type ShutdownContext,
 } from "./bridge-logic.js";
 
 import {
@@ -126,6 +129,26 @@ const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
 const GRACE_MS = parseInt(process.env.GRACE_MS || "300000", 10);
 const INIT_TIMEOUT_MS = 30_000;
 let clientErrorTimestamps: number[] = [];
+
+// -- Shutdown context (gdn-bokimo) --
+// Written during graceful shutdown so the next bridge can classify the restart.
+// Absence of this file on startup → crash (shutdown() never ran).
+
+const SHUTDOWN_FILE = join(homedir(), ".config", "gueridon", "shutdown.json");
+
+/** Loaded once at startup, consumed by resume logic, then file is deleted. */
+let lastShutdownCtx: ShutdownContext | null = null;
+
+function loadShutdownContext(): void {
+  try {
+    if (!existsSync(SHUTDOWN_FILE)) return; // crash or first start
+    lastShutdownCtx = JSON.parse(readFileSync(SHUTDOWN_FILE, "utf-8"));
+    unlinkSync(SHUTDOWN_FILE); // consume — one-shot
+  } catch {
+    // Corrupted file — treat as crash (null context)
+  }
+}
+loadShutdownContext();
 
 // -- Orphan reaping --
 
@@ -960,8 +983,9 @@ async function handleSession(
   // so Claude picks up without the user having to nudge.
   if (session.wasInterrupted) {
     session.wasInterrupted = false; // one-shot
+    const reason = classifyRestart(lastShutdownCtx, session.folder);
     deliverPrompt(session, {
-      text: "[guéridon:system] The bridge was restarted and your session has been resumed. Review the conversation and continue where you left off.",
+      text: buildResumeInjection(reason),
     });
     emit({ type: "session:auto-resume", folder: session.folderName, sessionId: session.id });
   }
@@ -1492,6 +1516,24 @@ pingTimer.unref(); // don't prevent clean shutdown
 
 function shutdown(signal: string): void {
   emit({ type: "server:shutdown", signal });
+
+  // Persist shutdown context so the next bridge can classify the restart (gdn-bokimo).
+  // Must happen before killing processes — turnInProgress is the key signal.
+  const activeTurnFolders: string[] = [];
+  for (const session of sessions.values()) {
+    if (session.turnInProgress) activeTurnFolders.push(session.folder);
+  }
+  try {
+    mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+    const ctx: ShutdownContext = {
+      signal,
+      timestamp: new Date().toISOString(),
+      activeTurnFolders,
+    };
+    writeFileSync(SHUTDOWN_FILE, JSON.stringify(ctx, null, 2));
+  } catch (err) {
+    emit({ type: "server:persist-error", error: String(err) });
+  }
 
   // Stop accepting new connections
   server.close();

@@ -712,7 +712,7 @@ describe("StateBuilder", () => {
         message: {
           role: "user",
           content:
-            "[guéridon:system] The bridge was restarted and your session has been resumed.",
+            "[guéridon:system] The bridge was restarted externally and your session has been resumed. Review the conversation and continue where you left off.",
         },
       });
 
@@ -720,7 +720,7 @@ describe("StateBuilder", () => {
       const msg = sb.getState().messages[0];
       expect(msg.synthetic).toBe(true);
       expect(msg.content).toBe(
-        "The bridge was restarted and your session has been resumed.",
+        "The bridge was restarted externally and your session has been resumed. Review the conversation and continue where you left off.",
       );
       expect(msg.role).toBe("user");
     });

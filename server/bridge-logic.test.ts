@@ -15,11 +15,15 @@ import {
   isUserTextEcho,
   extractLocalCommandOutput,
   coalescePrompts,
+  classifyRestart,
+  buildResumeInjection,
   HANDOFF_STALE_THRESHOLD_MS,
+  SHUTDOWN_STALE_MS,
   LOCAL_CMD_TAIL_LINES,
   CONFLATION_INTERVAL_MS,
   type SessionProcessInfo,
   type PendingDelta,
+  type ShutdownContext,
 } from "./bridge-logic.js";
 
 // --- resolveSessionForFolder ---
@@ -1324,5 +1328,83 @@ describe("coalescePrompts", () => {
     ]);
     expect(result!.content).toEqual([fileRef1, fileRef2]);
     expect(result!.text).toBe("[1/2] \n\n[2/2] ");
+  });
+});
+
+// --- classifyRestart (gdn-bokimo) ---
+
+describe("classifyRestart", () => {
+  const now = new Date("2026-02-26T21:00:00Z");
+  const recentShutdown: ShutdownContext = {
+    signal: "SIGTERM",
+    timestamp: new Date(now.getTime() - 5_000).toISOString(), // 5 seconds ago
+    activeTurnFolders: ["/home/modha/Repos/gueridon"],
+  };
+
+  it("returns 'crash' when no shutdown context exists", () => {
+    expect(classifyRestart(null, "/any/folder", now)).toBe("crash");
+  });
+
+  it("returns 'self-caused' when folder had active turn at shutdown", () => {
+    expect(classifyRestart(recentShutdown, "/home/modha/Repos/gueridon", now)).toBe("self-caused");
+  });
+
+  it("returns 'external' when folder was idle at shutdown", () => {
+    expect(classifyRestart(recentShutdown, "/home/modha/Repos/other", now)).toBe("external");
+  });
+
+  it("returns 'crash' when shutdown context is stale (> 24 hours)", () => {
+    const staleCtx: ShutdownContext = {
+      signal: "SIGTERM",
+      timestamp: new Date(now.getTime() - SHUTDOWN_STALE_MS - 1000).toISOString(),
+      activeTurnFolders: ["/home/modha/Repos/gueridon"],
+    };
+    expect(classifyRestart(staleCtx, "/home/modha/Repos/gueridon", now)).toBe("crash");
+  });
+
+  it("returns 'external' when shutdown context is exactly at threshold", () => {
+    const atThreshold: ShutdownContext = {
+      signal: "SIGTERM",
+      timestamp: new Date(now.getTime() - SHUTDOWN_STALE_MS).toISOString(),
+      activeTurnFolders: [],
+    };
+    // At threshold, not over — still valid
+    expect(classifyRestart(atThreshold, "/any/folder", now)).toBe("external");
+  });
+
+  it("handles multiple active turn folders", () => {
+    const multi: ShutdownContext = {
+      signal: "SIGTERM",
+      timestamp: now.toISOString(),
+      activeTurnFolders: ["/a", "/b", "/c"],
+    };
+    expect(classifyRestart(multi, "/b", now)).toBe("self-caused");
+    expect(classifyRestart(multi, "/d", now)).toBe("external");
+  });
+});
+
+describe("buildResumeInjection", () => {
+  it("mentions mid-turn for self-caused", () => {
+    const msg = buildResumeInjection("self-caused");
+    expect(msg).toContain("mid-turn");
+    expect(msg).toContain("likely caused this");
+  });
+
+  it("mentions externally for external", () => {
+    const msg = buildResumeInjection("external");
+    expect(msg).toContain("externally");
+    expect(msg).toContain("continue where you left off");
+  });
+
+  it("mentions crashed for crash", () => {
+    const msg = buildResumeInjection("crash");
+    expect(msg).toContain("crashed");
+    expect(msg).toContain("recovered");
+  });
+
+  it("all messages start with [guéridon:system] prefix", () => {
+    for (const reason of ["crash", "self-caused", "external"] as const) {
+      expect(buildResumeInjection(reason)).toMatch(/^\[guéridon:system\]/);
+    }
   });
 });

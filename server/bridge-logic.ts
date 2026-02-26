@@ -70,6 +70,70 @@ export function buildSystemPrompt(folder?: string): string {
   return lines.join("\n");
 }
 
+// --- Restart classification (gdn-bokimo) ---
+
+export type RestartReason = "crash" | "self-caused" | "external";
+
+export interface ShutdownContext {
+  signal: string;
+  timestamp: string;
+  activeTurnFolders: string[];
+}
+
+/**
+ * Classify why a session was interrupted, based on shutdown context
+ * persisted by the previous bridge instance.
+ *
+ * - crash: no shutdown context (shutdown() never ran — SIGKILL, OOM, etc.)
+ * - self-caused: shutdown context exists AND this folder had a turn in progress
+ *   (Claude was mid-turn when SIGTERM arrived — its actions likely caused it)
+ * - external: shutdown context exists AND this folder was idle
+ *   (user or systemd restarted the bridge while Claude was waiting)
+ *
+ * The 24-hour staleness guard prevents ancient shutdown files from confusing
+ * a fresh start (e.g. bridge was down for days, then restarted).
+ */
+export const SHUTDOWN_STALE_MS = 24 * 60 * 60 * 1000;
+
+export function classifyRestart(
+  shutdownCtx: ShutdownContext | null,
+  folder: string,
+  now: Date = new Date(),
+): RestartReason {
+  if (!shutdownCtx) return "crash";
+
+  // Stale shutdown file — treat as crash (bridge was down too long)
+  const shutdownTime = new Date(shutdownCtx.timestamp);
+  if (now.getTime() - shutdownTime.getTime() > SHUTDOWN_STALE_MS) return "crash";
+
+  if (shutdownCtx.activeTurnFolders.includes(folder)) return "self-caused";
+  return "external";
+}
+
+/**
+ * Build the resume injection message based on restart classification.
+ */
+export function buildResumeInjection(reason: RestartReason): string {
+  switch (reason) {
+    case "self-caused":
+      return (
+        "[guéridon:system] The bridge was restarted while you were mid-turn — " +
+        "your last action likely caused this (e.g. systemctl restart, deployment). " +
+        "Review what you were doing and verify it took effect before continuing."
+      );
+    case "external":
+      return (
+        "[guéridon:system] The bridge was restarted externally and your session has been resumed. " +
+        "Review the conversation and continue where you left off."
+      );
+    case "crash":
+      return (
+        "[guéridon:system] The bridge crashed and your session has been recovered. " +
+        "Context may be incomplete — review the conversation before continuing."
+      );
+  }
+}
+
 // --- Session resolution ---
 
 export interface SessionResolution {
