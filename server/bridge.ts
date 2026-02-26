@@ -1084,7 +1084,11 @@ const MIME_EXTENSIONS: Record<string, string> = {
 };
 
 async function depositFiles(req: IncomingMessage, folderPath: string): Promise<DepositResult> {
-  const body = await readBinaryBody(req);
+  const bodyBuf = await readBinaryBody(req);
+  // Buffer → Uint8Array with own ArrayBuffer for Web API compatibility
+  // (Buffer's .buffer is ArrayBufferLike which includes SharedArrayBuffer,
+  // but Request/File/Blob constructors expect plain ArrayBuffer)
+  const body = new Uint8Array(bodyBuf) as BlobPart;
   const contentType = req.headers["content-type"] || "";
   const isMultipart = contentType.startsWith("multipart/");
 

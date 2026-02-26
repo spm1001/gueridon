@@ -10,8 +10,9 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "useDefineForClassFields": true
   },
-  "include": ["server", "cli"]
+  "include": ["server"]
 }

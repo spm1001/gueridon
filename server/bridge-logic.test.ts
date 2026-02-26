@@ -355,7 +355,7 @@ describe("getActiveSessions", () => {
 
   it("includes session with running process and activity state", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: false, clientCount: 0 }],
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: false, clientCount: 0, contextPct: null }],
     ]);
     const active = getActiveSessions(sessions);
     const info = active.get("/repos/myproject");
@@ -365,7 +365,7 @@ describe("getActiveSessions", () => {
 
   it("marks working when turnInProgress is true", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: true, clientCount: 0 }],
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: null }, turnInProgress: true, clientCount: 0, contextPct: null }],
     ]);
     const info = getActiveSessions(sessions).get("/repos/myproject");
     expect(info?.activity).toBe("working");
@@ -373,21 +373,21 @@ describe("getActiveSessions", () => {
 
   it("excludes session with exited process and no clients", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: { exitCode: 0 }, turnInProgress: false, clientCount: 0 }],
+      ["sid-1", { folder: "/repos/myproject", process: { exitCode: 0 }, turnInProgress: false, clientCount: 0, contextPct: null }],
     ]);
     expect(getActiveSessions(sessions).size).toBe(0);
   });
 
   it("excludes session with null process and no clients", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: null, turnInProgress: false, clientCount: 0 }],
+      ["sid-1", { folder: "/repos/myproject", process: null, turnInProgress: false, clientCount: 0, contextPct: null }],
     ]);
     expect(getActiveSessions(sessions).size).toBe(0);
   });
 
   it("includes session with connected clients but no process (reconnect before first prompt)", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["sid-1", { folder: "/repos/myproject", process: null, turnInProgress: false, clientCount: 1 }],
+      ["sid-1", { folder: "/repos/myproject", process: null, turnInProgress: false, clientCount: 1, contextPct: null }],
     ]);
     const active = getActiveSessions(sessions);
     const info = active.get("/repos/myproject");
@@ -397,11 +397,11 @@ describe("getActiveSessions", () => {
 
   it("handles mixed sessions correctly", () => {
     const sessions = new Map<string, SessionProcessInfo>([
-      ["active-1", { folder: "/repos/a", process: { exitCode: null }, turnInProgress: true, clientCount: 1 }],
-      ["exited-2", { folder: "/repos/b", process: { exitCode: 1 }, turnInProgress: false, clientCount: 0 }],
-      ["unspawned-3", { folder: "/repos/c", process: null, turnInProgress: false, clientCount: 0 }],
-      ["active-4", { folder: "/repos/d", process: { exitCode: null }, turnInProgress: false, clientCount: 0 }],
-      ["reconnected-5", { folder: "/repos/e", process: null, turnInProgress: false, clientCount: 2 }],
+      ["active-1", { folder: "/repos/a", process: { exitCode: null }, turnInProgress: true, clientCount: 1, contextPct: null }],
+      ["exited-2", { folder: "/repos/b", process: { exitCode: 1 }, turnInProgress: false, clientCount: 0, contextPct: null }],
+      ["unspawned-3", { folder: "/repos/c", process: null, turnInProgress: false, clientCount: 0, contextPct: null }],
+      ["active-4", { folder: "/repos/d", process: { exitCode: null }, turnInProgress: false, clientCount: 0, contextPct: null }],
+      ["reconnected-5", { folder: "/repos/e", process: null, turnInProgress: false, clientCount: 2, contextPct: null }],
     ]);
     const active = getActiveSessions(sessions);
     expect(active.size).toBe(3);
@@ -1053,7 +1053,7 @@ describe("resolveSessionForFolder reuse", () => {
     const existing = { id: "existing-uuid", resumable: true };
     const result = resolveSessionForFolder(
       existing,
-      { id: "existing-uuid", jsonlPath: "/some/path" },
+      { id: "existing-uuid" },
       "existing-uuid",
       false,
       () => "should-not-be-called",
@@ -1067,7 +1067,7 @@ describe("resolveSessionForFolder reuse", () => {
     const existing = { id: "existing-uuid", resumable: true };
     const result = resolveSessionForFolder(
       existing,
-      { id: "existing-uuid", jsonlPath: "/some/path" },
+      { id: "existing-uuid" },
       null,
       false,
       () => { uuidCalled = true; return "new-uuid"; },

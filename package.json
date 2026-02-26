@@ -6,7 +6,7 @@
   "description": "Mobile web UI for Claude Code",
   "scripts": {
     "start": "tsx server/bridge.ts",
-    "test": "vitest run",
+    "test": "tsc --noEmit && vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -14,6 +14,8 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@types/node": "^25.3.2",
+    "@types/web-push": "^3.6.4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"

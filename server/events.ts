@@ -34,6 +34,7 @@ export type BridgeEvent =
   // Prompt delivery
   | { type: "prompt:deliver"; folder: string; sessionId: string }
   | { type: "prompt:queue"; folder: string; sessionId: string; depth: number }
+  | { type: "prompt:outrider"; folder: string; sessionId: string }
 
   // Process management
   | { type: "init:timeout"; folder: string; sessionId: string; pid: number }
@@ -43,8 +44,13 @@ export type BridgeEvent =
 
   // Orphan reaping
   | { type: "orphan:skip"; pid: number; folder: string; ageHours: number }
-  | { type: "orphan:reap"; pid: number; folder: string; sessionId: string }
+  | { type: "orphan:reap"; pid: number; folder: string; sessionId: string; children: number }
+  | { type: "orphan:sigkill"; pid: number }
   | { type: "orphan:summary"; reaped: number }
+
+  // Session interruption & resume
+  | { type: "session:interrupted"; folder: string; sessionId: string; midTurn: boolean }
+  | { type: "session:auto-resume"; folder: string; sessionId: string }
 
   // Handoff staleness
   | { type: "handoff:stale"; folder: string; sessionId: string }
@@ -96,13 +102,17 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "grace:expire": "info",
   "prompt:deliver": "info",
   "prompt:queue": "debug",
+  "prompt:outrider": "debug",
   "init:timeout": "error",
   "process:kill": "warn",
   "process:stdin-error": "error",
   "process:non-json": "debug",
   "orphan:skip": "debug",
   "orphan:reap": "info",
+  "orphan:sigkill": "warn",
   "orphan:summary": "info",
+  "session:interrupted": "info",
+  "session:auto-resume": "info",
   "handoff:stale": "info",
   "replay:ok": "info",
   "replay:fail": "warn",

@@ -317,7 +317,7 @@ describe("scanFolders", () => {
     addDir(REPOS, ["alpha"]);
     addFolder("alpha");
 
-    const active = new Map([[join(REPOS, "alpha"), { sessionId: "active-sess-id", activity: "waiting" as const }]]);
+    const active = new Map([[join(REPOS, "alpha"), { sessionId: "active-sess-id", activity: "waiting" as const, contextPct: null }]]);
     const result = await scanFolders(active);
 
     expect(result[0].state).toBe("active");
@@ -335,7 +335,7 @@ describe("scanFolders", () => {
       },
     });
 
-    const active = new Map([[join(REPOS, "alpha"), { sessionId: "new-sess", activity: "working" as const }]]);
+    const active = new Map([[join(REPOS, "alpha"), { sessionId: "new-sess", activity: "working" as const, contextPct: null }]]);
     const result = await scanFolders(active);
 
     expect(result[0].state).toBe("active");
@@ -472,7 +472,7 @@ describe("scanFolders", () => {
     });
     addFolder("active-proj");
 
-    const active = new Map([[join(REPOS, "active-proj"), { sessionId: "a-sess", activity: "waiting" as const }]]);
+    const active = new Map([[join(REPOS, "active-proj"), { sessionId: "a-sess", activity: "waiting" as const, contextPct: null }]]);
     const result = await scanFolders(active);
 
     expect(result.map((f) => f.state)).toEqual([
