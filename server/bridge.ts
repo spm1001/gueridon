@@ -56,7 +56,9 @@ import { getVapidPublicKey, pushTurnComplete, pushAskUser, addSubscription, remo
 import { emit } from "./event-bus.js";
 import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
-import { validateFile, sanitiseFilename, buildManifest, buildDepositNote, buildShareDepositNote, depositFolderName } from "./upload.js";
+import { buildDepositNote, buildShareDepositNote } from "./upload.js";
+import { depositFiles } from "./deposit.js";
+import { persistSessions, reapOrphans } from "./orphan.js";
 import { generateFolderName } from "./fun-names.js";
 
 // -- Types --
@@ -151,117 +153,6 @@ function loadShutdownContext(): void {
   }
 }
 loadShutdownContext();
-
-// -- Orphan reaping --
-
-const SESSION_FILE = join(homedir(), ".config", "gueridon", "sse-sessions.json");
-
-interface SessionRecord {
-  sessionId: string;
-  folder: string;
-  pid: number;
-  spawnedAt: number;
-}
-
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** Debounced write of active sessions to disk. */
-function persistSessions(): void {
-  if (persistTimer) return;
-  persistTimer = setTimeout(async () => {
-    persistTimer = null;
-    const records: SessionRecord[] = [];
-    for (const s of sessions.values()) {
-      if (s.process?.pid) {
-        records.push({
-          sessionId: s.id,
-          folder: s.folder,
-          pid: s.process.pid,
-          spawnedAt: s.spawnedAt ?? Date.now(),
-        });
-      }
-    }
-    try {
-      mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
-      await writeFile(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
-    } catch (err) {
-      emit({ type: "server:persist-error", error: String(err) });
-    }
-  }, 500);
-}
-
-/** Walk /proc to collect all descendant PIDs (children, grandchildren, etc). */
-function getDescendantPids(pid: number): number[] {
-  const descendants: number[] = [];
-  const queue = [pid];
-  while (queue.length > 0) {
-    const p = queue.shift()!;
-    try {
-      const childrenStr = readFileSync(`/proc/${p}/task/${p}/children`, "utf-8").trim();
-      if (!childrenStr) continue;
-      for (const c of childrenStr.split(/\s+/)) {
-        const cpid = parseInt(c, 10);
-        if (cpid && cpid !== pid) {
-          descendants.push(cpid);
-          queue.push(cpid);
-        }
-      }
-    } catch {
-      // Process gone or /proc not available
-    }
-  }
-  return descendants;
-}
-
-/** Reap orphaned CC processes from a previous bridge instance. */
-function reapOrphans(): void {
-  if (!existsSync(SESSION_FILE)) return;
-
-  let records: SessionRecord[];
-  try {
-    records = JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
-  } catch {
-    return;
-  }
-
-  const MAX_AGE_MS = 24 * 60 * 60 * 1000;
-  let reaped = 0;
-  for (const rec of records) {
-    if (rec.spawnedAt && Date.now() - rec.spawnedAt > MAX_AGE_MS) {
-      emit({ type: "orphan:skip", pid: rec.pid, folder: basename(rec.folder), ageHours: Math.round((Date.now() - rec.spawnedAt) / 3600000) });
-      continue;
-    }
-    try {
-      process.kill(rec.pid, 0); // check alive
-    } catch {
-      continue; // already dead
-    }
-    // Collect child PIDs before killing parent (children re-parent to init on parent death)
-    const children = getDescendantPids(rec.pid);
-    emit({ type: "orphan:reap", pid: rec.pid, folder: basename(rec.folder), sessionId: rec.sessionId, children: children.length });
-    const allPids = [rec.pid, ...children];
-    for (const p of allPids) {
-      try { process.kill(p, "SIGTERM"); } catch { /* already dead */ }
-    }
-    reaped++;
-
-    // Escalate: SIGKILL after KILL_ESCALATION_MS for anything that survived
-    setTimeout(() => {
-      for (const p of allPids) {
-        try {
-          process.kill(p, 0); // still alive?
-          process.kill(p, "SIGKILL");
-          emit({ type: "orphan:sigkill", pid: p });
-        } catch { /* already dead */ }
-      }
-    }, KILL_ESCALATION_MS);
-  }
-
-  try { unlinkSync(SESSION_FILE); } catch { /* ignore */ }
-  if (reaped > 0) {
-    emit({ type: "orphan:summary", reaped });
-  }
-}
 
 // -- SSE helpers --
 
@@ -422,7 +313,7 @@ function spawnCC(session: Session): void {
   session.stderrBuffer = [];
   wireProcess(session);
   emit({ type: "session:spawn", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
-  persistSessions();
+  persistSessions(sessions.values());
 
   // Init timeout: if CC doesn't emit an init event within 30s, kill it.
   // This catches hung resumes (observed: 90s stall on third concurrent resume).
@@ -487,7 +378,7 @@ function wireProcess(session: Session): void {
     broadcastToSession(session, "state", {
       ...session.stateBuilder.getState(),
     });
-    persistSessions();
+    persistSessions(sessions.values());
   });
 }
 
@@ -818,26 +709,6 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB
-
-function readBinaryBody(req: IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_UPLOAD_BYTES) {
-        req.destroy();
-        reject(new Error("Upload too large"));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-}
-
 // -- Folder path resolution --
 
 function resolveFolder(folderParam: string): string | null {
@@ -875,7 +746,7 @@ async function tearDownSession(session: Session): Promise<void> {
   }
   session.clients.clear();
   sessions.delete(session.folder);
-  persistSessions();
+  persistSessions(sessions.values());
 }
 
 /**
@@ -1105,82 +976,6 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
 
 // -- File upload --
 
-interface DepositResult {
-  depositFolder: string;
-  manifest: import("./upload.js").UploadManifest;
-  text?: string;
-}
-
-/**
- * Parse multipart body, validate files, write to deposit folder.
- * Reused by both handleUpload (mid-session) and handleShareUpload (new-session).
- * Also extracts an optional "text" field for URL/text shares.
- */
-/** Map common MIME types to file extensions for raw binary uploads. */
-const MIME_EXTENSIONS: Record<string, string> = {
-  "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif",
-  "image/webp": "webp", "image/bmp": "bmp", "image/svg+xml": "svg",
-  "application/pdf": "pdf", "text/plain": "txt", "text/csv": "csv",
-  "application/json": "json",
-};
-
-async function depositFiles(req: IncomingMessage, folderPath: string): Promise<DepositResult> {
-  const bodyBuf = await readBinaryBody(req);
-  // Buffer → Uint8Array with own ArrayBuffer for Web API compatibility.
-  // new Uint8Array(buffer) copies into a clean ArrayBuffer (not SharedArrayBuffer),
-  // which Request/File/Blob constructors accept natively in Node 18+. (gdn-vojeho)
-  const body = new Uint8Array(bodyBuf);
-  const contentType = req.headers["content-type"] || "";
-  const isMultipart = contentType.startsWith("multipart/");
-
-  const shortId = randomUUID().slice(0, 12);
-  const fileEntries: Array<{ name: string; file: File }> = [];
-  let text: string | undefined;
-
-  if (isMultipart) {
-    // Standard multipart/form-data (Guéridon frontend, curl -F)
-    const webReq = new Request("http://localhost/upload", {
-      method: "POST",
-      headers: { "content-type": contentType },
-      body,
-    });
-    const formData = await webReq.formData();
-    for (const [key, value] of formData.entries()) {
-      if (value instanceof File) fileEntries.push({ name: value.name, file: value });
-      else if (key === "text" && typeof value === "string" && value.trim()) text = value.trim();
-    }
-  } else {
-    // Raw binary (iOS Shortcuts sends Content-Type: image/png with raw bytes)
-    const mime = contentType.split(";")[0].trim() || "application/octet-stream";
-    const ext = MIME_EXTENSIONS[mime] || "bin";
-    const filename = `upload-${shortId.slice(0, 6)}.${ext}`;
-    fileEntries.push({ name: filename, file: new File([body], filename, { type: mime }) });
-  }
-
-  if (fileEntries.length === 0) {
-    throw new Error("No files in upload");
-  }
-
-  const depositFolder = depositFolderName(fileEntries[0].name, shortId);
-  const depositPath = join(folderPath, depositFolder);
-  mkdirSync(depositPath, { recursive: true });
-
-  const manifestFiles: Array<{ originalName: string; validation: ReturnType<typeof validateFile>; size: number; depositedAs: string }> = [];
-  for (const entry of fileEntries) {
-    const buf = Buffer.from(await entry.file.arrayBuffer());
-    const declaredMime = entry.file.type || "application/octet-stream";
-    const validation = validateFile(buf, declaredMime, entry.name);
-    const safeName = sanitiseFilename(entry.name);
-    await writeFile(join(depositPath, safeName), buf);
-    manifestFiles.push({ originalName: entry.name, validation, size: buf.length, depositedAs: safeName });
-  }
-
-  const manifest = buildManifest(manifestFiles, shortId);
-  await writeFile(join(depositPath, "manifest.json"), JSON.stringify(manifest, null, 2));
-
-  return { depositFolder, manifest, text };
-}
-
 async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPath: string): Promise<void> {
   const session = sessions.get(folderPath);
   if (!session) {
@@ -1244,6 +1039,7 @@ const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const STATIC_FILES: Record<string, { file: string; mime: string }> = {
   "/": { file: "index.html", mime: "text/html; charset=utf-8" },
   "/index.html": { file: "index.html", mime: "text/html; charset=utf-8" },
+  "/style.css": { file: "style.css", mime: "text/css; charset=utf-8" },
   "/sw.js": { file: "sw.js", mime: "application/javascript" },
   "/manifest.json": { file: "manifest.json", mime: "application/json" },
   "/icon-192.svg": { file: "icon-192.svg", mime: "image/svg+xml" },

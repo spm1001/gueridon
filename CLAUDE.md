@@ -48,8 +48,10 @@ The bridge is split across several modules in `server/`:
 | `bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
 | `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape |
 | `folders.ts` | Folder scanning, session discovery, handoff reading |
+| `deposit.ts` | Multipart/binary upload parsing, file validation, mise-style deposit to disk |
+| `orphan.ts` | Orphan CC process reaping, debounced session persistence |
 | `push.ts` | Web Push (VAPID) notification delivery |
-| `upload.ts` | Upload validation, MIME detection via magic bytes, mise-style file deposit |
+| `upload.ts` | Upload validation, MIME detection via magic bytes, manifest building |
 | `event-bus.ts` | Typed event emitter decoupling event production from consumption |
 | `events.ts` | `BridgeEvent` type definitions, severity level mapping |
 | `logger.ts` | JSON-lines structured logger subscribed to event bus |
@@ -77,7 +79,7 @@ The bridge is split across several modules in `server/`:
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
 - **StateBuilder** (`server/state-builder.ts`): See module table above. Emits SSE deltas during streaming, full state snapshots at turn end.
 - **Delta conflation:** Text deltas accumulated and flushed on timer (not per-token). Reduces SSE traffic without visible latency.
-- **Static serving:** index.html, sw.js, manifest.json, marked.js, icons — no-cache headers, same port as API.
+- **Static serving:** index.html, style.css, sw.js, manifest.json, marked.js, icons — no-cache headers, same port as API.
 - **Lazy spawn:** CC process starts on first prompt, not on connect.
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
 - **Orphan reaping:** On startup, reads sse-sessions.json, SIGTERMs any live CC processes from the previous bridge instance.
@@ -135,7 +137,7 @@ Full list: https://code.claude.com/docs/en/settings
 
 ## Frontend
 
-Single HTML file: CSS, HTML, JS — no splitting, no build. Uses `marked` library (served from node_modules as `/marked.js`).
+`index.html` (HTML + JS) and `style.css` — no build step. Uses `marked` library (served from node_modules as `/marked.js`).
 
 - Dark theme only
 - Markdown rendering via `marked.parse()` / `marked.parseInline()`
