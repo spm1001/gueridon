@@ -1036,22 +1036,43 @@ interface DepositResult {
  * Reused by both handleUpload (mid-session) and handleShareUpload (new-session).
  * Also extracts an optional "text" field for URL/text shares.
  */
+/** Map common MIME types to file extensions for raw binary uploads. */
+const MIME_EXTENSIONS: Record<string, string> = {
+  "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif",
+  "image/webp": "webp", "image/bmp": "bmp", "image/svg+xml": "svg",
+  "application/pdf": "pdf", "text/plain": "txt", "text/csv": "csv",
+  "application/json": "json",
+};
+
 async function depositFiles(req: IncomingMessage, folderPath: string): Promise<DepositResult> {
   const body = await readBinaryBody(req);
-  const webReq = new Request("http://localhost/upload", {
-    method: "POST",
-    headers: { "content-type": req.headers["content-type"] || "" },
-    body,
-  });
-  const formData = await webReq.formData();
+  const contentType = req.headers["content-type"] || "";
+  const isMultipart = contentType.startsWith("multipart/");
 
   const shortId = randomUUID().slice(0, 12);
   const fileEntries: Array<{ name: string; file: File }> = [];
   let text: string | undefined;
-  for (const [key, value] of formData.entries()) {
-    if (value instanceof File) fileEntries.push({ name: value.name, file: value });
-    else if (key === "text" && typeof value === "string" && value.trim()) text = value.trim();
+
+  if (isMultipart) {
+    // Standard multipart/form-data (Guéridon frontend, curl -F)
+    const webReq = new Request("http://localhost/upload", {
+      method: "POST",
+      headers: { "content-type": contentType },
+      body,
+    });
+    const formData = await webReq.formData();
+    for (const [key, value] of formData.entries()) {
+      if (value instanceof File) fileEntries.push({ name: value.name, file: value });
+      else if (key === "text" && typeof value === "string" && value.trim()) text = value.trim();
+    }
+  } else {
+    // Raw binary (iOS Shortcuts sends Content-Type: image/png with raw bytes)
+    const mime = contentType.split(";")[0].trim() || "application/octet-stream";
+    const ext = MIME_EXTENSIONS[mime] || "bin";
+    const filename = `upload-${shortId.slice(0, 6)}.${ext}`;
+    fileEntries.push({ name: filename, file: new File([body], filename, { type: mime }) });
   }
+
   if (fileEntries.length === 0) {
     throw new Error("No files in upload");
   }
@@ -1175,6 +1196,7 @@ const server = createServer(async (req, res) => {
     res.writeHead(204).end();
     return;
   }
+
 
   const url = new URL(req.url!, `http://localhost`);
 

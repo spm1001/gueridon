@@ -287,6 +287,24 @@ describe("bridge HTTP smoke tests", () => {
     expect(existsSync(join(depositPath, "manifest.json"))).toBe(true);
   });
 
+  it("POST /upload with raw binary (iOS Shortcut style) creates folder", async () => {
+    const pngHeader = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+    const res = await fetch(`${baseUrl}/upload`, {
+      method: "POST",
+      headers: {
+        "X-Gueridon-Mode": "new-session",
+        "Content-Type": "image/png",
+      },
+      body: pngHeader,
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.folder).toMatch(/^[a-z]+-[a-z]+$/);
+    expect(data.manifest.files[0].mime_type).toBe("image/png");
+    expect(data.manifest.files[0].deposited_as).toMatch(/\.png$/);
+  });
+
   it("POST /upload with new-session and no files returns 400", async () => {
     const form = new FormData();
     const res = await fetch(`${baseUrl}/upload`, {
