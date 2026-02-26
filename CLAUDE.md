@@ -15,7 +15,7 @@ One HTML file (`index.html`) served by the bridge. SSE for live events, POST for
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~279 tests, ~3s)
+npm test                     # Run all tests (~280 tests, ~3s)
 npm run test:watch           # Watch mode
 ```
 

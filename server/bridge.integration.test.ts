@@ -395,6 +395,76 @@ describe("bridge HTTP smoke tests", () => {
     expect(helloData.pushToken.length).toBeGreaterThan(0);
   });
 
+  it("upload broadcasts state with synthetic deposit message via SSE (gdn-hovolu)", async () => {
+    // Set up: create folder + session
+    const folderName = "test-upload-sse-broadcast";
+    mkdirSync(join(tempDir, folderName), { recursive: true });
+
+    // Open SSE connection
+    const sseRes = await fetch(`${baseUrl}/events?clientId=hovolu-test`);
+    const reader = sseRes.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    // Wait for hello + folders events
+    const readUntil = async (marker: string, timeoutMs: number): Promise<void> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.includes(marker)) return;
+      }
+    };
+
+    await readUntil("event: hello", 5_000);
+
+    // Bind to session via POST (with X-Client-ID so bridge attaches the SSE client)
+    await fetch(`${baseUrl}/session/${folderName}`, {
+      method: "POST",
+      headers: { "X-Client-ID": "hovolu-test" },
+    });
+
+    // Wait for the state snapshot from session bind
+    await readUntil("event: state", 5_000);
+
+    // Clear buffer — we only care about events after the upload
+    buffer = "";
+
+    // Upload a file
+    const form = new FormData();
+    form.append("file", new File(["test content"], "hovolu.txt", { type: "text/plain" }));
+    const uploadRes = await fetch(`${baseUrl}/upload/${folderName}`, {
+      method: "POST",
+      body: form,
+    });
+    expect(uploadRes.status).toBe(200);
+
+    // Read SSE events — expect a state broadcast with the synthetic message
+    await readUntil("event: state", 5_000);
+
+    // Parse all state events from the buffer
+    const stateMatches = [...buffer.matchAll(/event: state\ndata: (.+)\n/g)];
+    expect(stateMatches.length).toBeGreaterThan(0);
+
+    // Find a state event containing our synthetic deposit message
+    let foundSynthetic = false;
+    for (const match of stateMatches) {
+      const data = JSON.parse(match[1]);
+      const messages = data.messages || [];
+      for (const msg of messages) {
+        if (msg.role === "user" && msg.synthetic === true) {
+          // Verify the prefix was stripped (should not contain [guéridon:deposit])
+          expect(msg.content).not.toMatch(/\[guéridon:/);
+          foundSynthetic = true;
+        }
+      }
+    }
+    expect(foundSynthetic).toBe(true);
+
+    reader.cancel();
+  });
+
   it("push subscribe rejects without valid token (gdn-ricocu)", async () => {
     // No token → 401
     const noToken = await fetch(`${baseUrl}/push/subscribe`, {
