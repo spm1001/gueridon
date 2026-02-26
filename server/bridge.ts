@@ -52,6 +52,7 @@ import { getVapidPublicKey, pushTurnComplete, pushAskUser, addSubscription, remo
 import { emit } from "./event-bus.js";
 import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
+import { validateFile, sanitiseFilename, buildManifest, buildDepositNote, depositFolderName } from "./upload.js";
 
 // -- Types --
 
@@ -736,21 +737,10 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10MB — screenshots are typically 1-3MB
-
 function readBinaryBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    let size = 0;
-    req.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_UPLOAD_BYTES) {
-        req.destroy();
-        reject(new Error("Upload too large"));
-        return;
-      }
-      chunks.push(chunk);
-    });
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -1019,6 +1009,61 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
   res.end(JSON.stringify({ exited: true }));
 }
 
+// -- File upload --
+
+async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPath: string): Promise<void> {
+  const session = sessions.get(folderPath);
+  if (!session) {
+    res.writeHead(400).end(JSON.stringify({ error: "No active session for folder" }));
+    return;
+  }
+  try {
+    const body = await readBinaryBody(req);
+    const webReq = new Request("http://localhost/upload", {
+      method: "POST",
+      headers: { "content-type": req.headers["content-type"] || "" },
+      body,
+    });
+    const formData = await webReq.formData();
+
+    const shortId = randomUUID().slice(0, 12);
+    const fileEntries: Array<{ name: string; file: File }> = [];
+    for (const [, value] of formData.entries()) {
+      if (value instanceof File) fileEntries.push({ name: value.name, file: value });
+    }
+    if (fileEntries.length === 0) {
+      res.writeHead(400).end(JSON.stringify({ error: "No files in upload" }));
+      return;
+    }
+
+    const depositFolder = depositFolderName(fileEntries[0].name, shortId);
+    const depositPath = join(folderPath, depositFolder);
+    mkdirSync(depositPath, { recursive: true });
+
+    const manifestFiles: Array<{ originalName: string; validation: ReturnType<typeof validateFile>; size: number; depositedAs: string }> = [];
+    for (const entry of fileEntries) {
+      const buf = Buffer.from(await entry.file.arrayBuffer());
+      const declaredMime = entry.file.type || "application/octet-stream";
+      const validation = validateFile(buf, declaredMime, entry.name);
+      const safeName = sanitiseFilename(entry.name);
+      await writeFile(join(depositPath, safeName), buf);
+      manifestFiles.push({ originalName: entry.name, validation, size: buf.length, depositedAs: safeName });
+    }
+
+    const manifest = buildManifest(manifestFiles, shortId);
+    await writeFile(join(depositPath, "manifest.json"), JSON.stringify(manifest, null, 2));
+
+    const note = buildDepositNote(depositFolder, manifest);
+    deliverPrompt(session, { text: note });
+
+    emit({ type: "upload:deposited", folder: depositFolder, files: manifest.file_count });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ folder: depositFolder, manifest, warnings: manifest.warnings }));
+  } catch (err: any) {
+    res.writeHead(500).end(JSON.stringify({ error: err.message || "Upload failed" }));
+  }
+}
+
 // -- Static file serving --
 
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1212,28 +1257,16 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // POST /upload — receive files (screenshots from iOS Shortcut)
-  if (req.method === "POST" && url.pathname === "/upload") {
-    try {
-      const buf = await readBinaryBody(req);
-      if (buf.length === 0) {
-        res.writeHead(400).end(JSON.stringify({ error: "Empty body" }));
-        return;
-      }
-      const ct = req.headers["content-type"] || "";
-      const ext = ct.includes("png") ? ".png" : ct.includes("jpeg") || ct.includes("jpg") ? ".jpg" : ct.includes("webp") ? ".webp" : ".bin";
-      const name = `screenshot-${Date.now()}-${randomUUID().slice(0, 6)}${ext}`;
-      const dir = join(homedir(), "Taildrop");
-      mkdirSync(dir, { recursive: true });
-      const filePath = join(dir, name);
-      await writeFile(filePath, buf);
-      emit({ type: "upload:received", file: name, bytes: buf.length });
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ file: filePath, name, size: buf.length }));
-    } catch (err: any) {
-      res.writeHead(err.message === "Upload too large" ? 413 : 500);
-      res.end(JSON.stringify({ error: err.message || "Upload failed" }));
+  // POST /upload/:folder — multipart file upload → validate → mise deposit → auto-inject
+  const uploadMatch = url.pathname.match(/^\/upload\/(.+)$/);
+  if (req.method === "POST" && uploadMatch) {
+    const folderParam = decodeURIComponent(uploadMatch[1]);
+    const folderPath = resolveFolder(folderParam);
+    if (!folderPath) {
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid folder" }));
+      return;
     }
+    await handleUpload(req, res, folderPath);
     return;
   }
 

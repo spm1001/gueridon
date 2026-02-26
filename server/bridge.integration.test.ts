@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -155,6 +155,99 @@ describe("bridge HTTP smoke tests", () => {
     const res = await fetch(`${baseUrl}/sw.js`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/javascript");
+  });
+
+  it("POST /upload without folder returns 404", async () => {
+    const res = await fetch(`${baseUrl}/upload`, { method: "POST" });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /upload/:folder with path traversal returns 400", async () => {
+    const res = await fetch(`${baseUrl}/upload/${encodeURIComponent("../../etc")}`, {
+      method: "POST",
+      body: new FormData(),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/invalid folder/i);
+  });
+
+  it("POST /upload/:folder with no session returns 400", async () => {
+    // Create a real folder under SCAN_ROOT but don't create a session
+    const folderName = "test-upload-no-session";
+    mkdirSync(join(tempDir, folderName), { recursive: true });
+
+    const res = await fetch(`${baseUrl}/upload/${folderName}`, {
+      method: "POST",
+      body: new FormData(),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/no active session/i);
+  });
+
+  it("POST /upload/:folder deposits files and returns manifest", async () => {
+    // Create project folder
+    const folderName = "test-upload-happy";
+    const folderPath = join(tempDir, folderName);
+    mkdirSync(folderPath, { recursive: true });
+
+    // Create a session (no SSE client needed — client will be undefined)
+    const sessionRes = await fetch(`${baseUrl}/session/${folderName}`, {
+      method: "POST",
+    });
+    expect(sessionRes.status).toBe(200);
+
+    // Build multipart with a text file
+    const form = new FormData();
+    form.append("file", new File(["hello world"], "test.txt", { type: "text/plain" }));
+
+    const uploadRes = await fetch(`${baseUrl}/upload/${folderName}`, {
+      method: "POST",
+      body: form,
+    });
+    expect(uploadRes.status).toBe(200);
+
+    const data = await uploadRes.json();
+    expect(data.folder).toMatch(/^mise\/upload--test--/);
+    expect(data.manifest.type).toBe("upload");
+    expect(data.manifest.file_count).toBe(1);
+    expect(data.manifest.files[0].original_name).toBe("test.txt");
+    expect(data.manifest.files[0].mime_type).toBe("text/plain");
+    expect(data.warnings).toEqual([]);
+
+    // Verify files on disk
+    const depositPath = join(folderPath, data.folder);
+    expect(existsSync(join(depositPath, "test.txt"))).toBe(true);
+    expect(existsSync(join(depositPath, "manifest.json"))).toBe(true);
+
+    const manifest = JSON.parse(readFileSync(join(depositPath, "manifest.json"), "utf-8"));
+    expect(manifest.files[0].deposited_as).toBe("test.txt");
+  });
+
+  it("POST /upload/:folder validates image MIME via magic bytes", async () => {
+    const folderName = "test-upload-mime";
+    const folderPath = join(tempDir, folderName);
+    mkdirSync(folderPath, { recursive: true });
+
+    await fetch(`${baseUrl}/session/${folderName}`, { method: "POST" });
+
+    // Send garbage bytes declared as image/png
+    const garbageBytes = new Uint8Array([0x00, 0x01, 0x02, 0x03]);
+    const form = new FormData();
+    form.append("file", new File([garbageBytes], "fake.png", { type: "image/png" }));
+
+    const res = await fetch(`${baseUrl}/upload/${folderName}`, {
+      method: "POST",
+      body: form,
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.manifest.files[0].mime_type).toBe("application/octet-stream");
+    expect(data.manifest.files[0].declared_mime).toBe("image/png");
+    expect(data.warnings).toHaveLength(1);
+    expect(data.warnings[0]).toMatch(/deposited as binary/);
   });
 
   it("SSE /events delivers hello event", async () => {

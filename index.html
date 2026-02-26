@@ -2585,6 +2585,47 @@ slashBtn.addEventListener('click', openSlashSheet);
 slashSheet.addEventListener('click', (e) => {
   if (e.target === slashSheet) slashSheet.classList.remove('open');
 });
+
+// === File upload ===
+const fileInput = document.createElement('input');
+fileInput.type = 'file';
+fileInput.accept = 'image/*,.txt,.md,.json,.csv,.pdf,.doc,.docx';
+fileInput.multiple = true;
+fileInput.style.display = 'none';
+document.body.appendChild(fileInput);
+
+function uploadFiles(files) {
+  if (!files.length) return;
+  if (!sseCurrentFolder || !bridgeUrl) {
+    showError('Connect to a folder first');
+    return;
+  }
+  const form = new FormData();
+  for (const f of files) form.append('file', f);
+  fetch(`${bridgeUrl}/upload/${encodeURIComponent(sseCurrentFolder)}`, {
+    method: 'POST',
+    body: form,
+  }).then(r => r.json()).then(data => {
+    if (data.error) showError(data.error);
+    else showError(`${data.manifest.file_count} file${data.manifest.file_count > 1 ? 's' : ''} deposited`, 2000);
+  }).catch(() => showError('Upload failed'));
+}
+
+document.getElementById('fileBtn').addEventListener('click', () => {
+  fileInput.click();
+});
+
+fileInput.addEventListener('change', () => {
+  uploadFiles(fileInput.files);
+  fileInput.value = '';
+});
+
+// Drag and drop on message area
+msgEl.addEventListener('dragover', (e) => e.preventDefault());
+msgEl.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadFiles(e.dataTransfer.files);
+});
 </script>
 </body>
 </html>
