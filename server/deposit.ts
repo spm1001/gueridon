@@ -30,7 +30,7 @@ export const MIME_EXTENSIONS: Record<string, string> = {
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB
 
-export function readBinaryBody(req: IncomingMessage): Promise<Buffer> {
+function readBinaryBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;

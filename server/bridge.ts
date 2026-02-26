@@ -1364,7 +1364,7 @@ function shutdown(signal: string): void {
   clientsById.clear();
   sessions.clear();
 
-  // Leave SESSION_FILE intact — KillMode=process means CC children may
+  // Leave sse-sessions.json intact — KillMode=process means CC children may
   // survive this shutdown. The next bridge's reapOrphans() needs the file.
 
   // Give kill escalation time to fire if needed, then exit
