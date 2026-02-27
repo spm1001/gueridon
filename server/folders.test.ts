@@ -438,6 +438,7 @@ describe("scanFolders", () => {
     expect(result[0].sessionId).toBeNull();
     expect(result[0].lastActive).toBeNull();
     expect(result[0].handoffPurpose).toBeNull();
+    expect(result[0].humanSessionCount).toBe(0);
   });
 
   it("falls back to handoff mtime when closed folder has no session files", async () => {
@@ -504,5 +505,25 @@ describe("scanFolders", () => {
 
     const result = await scanFolders(new Map());
     expect(result.map((f) => f.name)).toEqual(["alpha", "mu", "zeta"]);
+  });
+
+  it("humanSessionCount is present on all folder states", async () => {
+    addDir(REPOS, ["active-proj", "paused-proj", "closed-proj", "fresh-proj"]);
+    addFolder("active-proj");
+    addFolder("paused-proj", {
+      session: { id: "p-sess", mtime: new Date("2026-01-15") },
+    });
+    addFolder("closed-proj", {
+      handoff: { sessionId: "h-sess", purpose: "Done", mtime: new Date("2026-01-05") },
+    });
+    addFolder("fresh-proj");
+
+    const active = new Map([[join(REPOS, "active-proj"), { sessionId: "a-sess", activity: "waiting" as const, contextPct: null }]]);
+    const result = await scanFolders(active);
+
+    for (const f of result) {
+      expect(f).toHaveProperty("humanSessionCount");
+      expect(typeof f.humanSessionCount).toBe("number");
+    }
   });
 });

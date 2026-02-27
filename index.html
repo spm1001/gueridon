@@ -320,9 +320,9 @@ function sseResetWatchdog() {
 }
 
 function mapFolderState(state) {
-  if (state === 'active') return 'active';
-  if (state === 'fresh' || state === 'idle') return 'dormant';
-  return 'old';
+  if (state === 'active' || state === 'paused') return 'now';
+  if (state === 'closed') return 'previous';
+  return 'fresh';
 }
 
 function handleSSEFolders(folders) {
@@ -331,6 +331,8 @@ function handleSSEFolders(folders) {
       id: f.path || f.name,
       project: f.name,
       status: mapFolderState(f.state),
+      backendState: f.state,
+      humanSessionCount: f.humanSessionCount || 0,
       updated: f.lastActive,
       last_message: f.handoffPurpose || '',
       context_pct: f.contextPct || 0,
@@ -1111,22 +1113,25 @@ function renderSwitcher(state) {
 
   backdrop.dataset.open = 'true';
   switcher.dataset.open = 'true';
+  document.body.dataset.switcherOpen = '';
   list.innerHTML = '';
 
   const currentId = state.session ? state.session.id : null;
   const sessions = state.switcher.sessions || [];
   const filter = document.getElementById('switcherSearch').value.trim().toLowerCase();
 
-  // Group: current/ended first, then active, dormant, old
-  const groups = { active: [], dormant: [], old: [] };
+  // Group: current first, then Now (active+paused), Previous (closed with history), fresh hidden
+  const groups = { now: [], previous: [] };
+  const freshPool = [];
   let top = null; // current session or most recently ended
 
   for (const s of sessions) {
     if (filter && !s.project.toLowerCase().includes(filter)) continue;
     if (s.project === sseCurrentFolder) { top = s; continue; }
     if (s.status === 'ended' && !top) { top = s; continue; }
-    if (groups[s.status]) groups[s.status].push(s);
-    else groups.old.push(s);
+    if (s.status === 'now') groups.now.push(s);
+    else if (s.status === 'previous' && s.humanSessionCount > 0) groups.previous.push(s);
+    else freshPool.push(s);
   }
 
   function timeAgo(iso) {
@@ -1152,7 +1157,7 @@ function renderSwitcher(state) {
     const isExpanded = switcherExpandedFolder === s.project;
     const item = document.createElement('div');
     item.className = 'switcher-item';
-    item.dataset.status = s.status;
+    item.dataset.status = s.backendState || s.status;
     if (isCurrent) item.dataset.current = 'true';
 
     // Main row: body (clickable → connect) + chevron (clickable → expand)
@@ -1162,7 +1167,7 @@ function renderSwitcher(state) {
     const body = document.createElement('div');
     body.className = 'switcher-item-body';
     body.innerHTML = `
-      <span class="switcher-dot" data-status="${s.status}"></span>
+      <span class="switcher-dot" data-status="${s.backendState || s.status}"></span>
       <div class="switcher-info">
         <div class="switcher-project">${esc(s.project)}</div>
         <div class="switcher-last-msg">${esc(s.last_message || '')}</div>
@@ -1206,6 +1211,17 @@ function renderSwitcher(state) {
       const sessionsDiv = document.createElement('div');
       sessionsDiv.className = 'switcher-sessions';
 
+      // New Session button — top of list so you don't scroll through old sessions
+      const newRow = document.createElement('div');
+      newRow.className = 'switcher-new-session';
+      newRow.innerHTML = '+ New Session';
+      newRow.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sseConnectFolder({ name: s.project, path: s.id }, 'new');
+        closeSwitcher();
+      });
+      sessionsDiv.appendChild(newRow);
+
       // Filter to human-interactive sessions only (hide subagent spam)
       const humanSessions = s.sessions.filter(sess => sess.humanInteraction !== false);
       const hiddenCount = s.sessions.length - humanSessions.length;
@@ -1216,7 +1232,7 @@ function renderSwitcher(state) {
         const sessionRow = document.createElement('div');
         sessionRow.className = 'switcher-session-row';
         sessionRow.innerHTML = `
-          <span class="switcher-dot" data-status="${sess.closed ? 'ended' : 'dormant'}"></span>
+          <span class="switcher-dot" data-status="${sess.closed ? 'closed' : 'paused'}"></span>
           <span class="switcher-session-id">${esc(sess.id.slice(0, 8))}</span>
           <span class="switcher-session-model">${esc(shortModel(sess.model))}</span>
           <span class="switcher-context" data-level="${sessionLevel}">${sessionPct ? sessionPct + '%' : ''}</span>
@@ -1229,17 +1245,6 @@ function renderSwitcher(state) {
         });
         sessionsDiv.appendChild(sessionRow);
       }
-
-      // New Session button
-      const newRow = document.createElement('div');
-      newRow.className = 'switcher-new-session';
-      newRow.innerHTML = '+ New Session';
-      newRow.addEventListener('click', (e) => {
-        e.stopPropagation();
-        sseConnectFolder({ name: s.project, path: s.id }, 'new');
-        closeSwitcher();
-      });
-      sessionsDiv.appendChild(newRow);
 
       if (hiddenCount > 0) {
         const hidden = document.createElement('div');
@@ -1256,28 +1261,30 @@ function renderSwitcher(state) {
 
   if (top) list.appendChild(makeItem(top, true));
 
-  if (groups.active.length) {
+  if (groups.now.length) {
     const label = document.createElement('div');
     label.className = 'switcher-section';
-    label.textContent = 'Active';
+    label.textContent = 'Now';
     list.appendChild(label);
-    for (const s of groups.active) list.appendChild(makeItem(s, false));
+    for (const s of groups.now) list.appendChild(makeItem(s, false));
   }
 
-  if (groups.dormant.length) {
+  if (groups.previous.length) {
     const label = document.createElement('div');
     label.className = 'switcher-section';
-    label.textContent = 'Dormant';
+    label.textContent = 'Previous';
     list.appendChild(label);
-    for (const s of groups.dormant) list.appendChild(makeItem(s, false));
+    for (const s of groups.previous) list.appendChild(makeItem(s, false));
   }
 
-  if (groups.old.length) {
+  // Fresh pool: only show when filtering or when nothing else exists
+  const showFresh = freshPool.length && (filter || (!groups.now.length && !groups.previous.length && !top));
+  if (showFresh) {
     const label = document.createElement('div');
     label.className = 'switcher-section';
-    label.textContent = 'Recent';
+    label.textContent = filter ? 'Other' : 'All Projects';
     list.appendChild(label);
-    for (const s of groups.old) list.appendChild(makeItem(s, false));
+    for (const s of freshPool) list.appendChild(makeItem(s, false));
   }
 }
 
@@ -1288,43 +1295,54 @@ function closeSwitcher() {
   document.getElementById('switcher').dataset.open = 'false';
   document.getElementById('switcherBackdrop').dataset.open = 'false';
   document.getElementById('switcherSearch').value = '';
+  delete document.body.dataset.switcherOpen;
 }
 
 // Switcher: open/close uses client-side state, search re-filters without refetching
 document.getElementById('switcherClose').addEventListener('click', closeSwitcher);
 document.getElementById('switcherBackdrop').addEventListener('click', closeSwitcher);
 
-// Swipe-down-to-dismiss on switcher
+// Swipe-down-to-dismiss on switcher (handle + header area)
 {
   const switcherEl = document.getElementById('switcher');
   let swipeStartY = null;
   let swipeStartTranslate = 0;
   const handleEl = switcherEl.querySelector('.switcher-handle');
+  const headerEl = switcherEl.querySelector('.switcher-header');
 
-  handleEl.addEventListener('touchstart', (e) => {
-    swipeStartY = e.touches[0].clientY;
-    swipeStartTranslate = 0;
-    switcherEl.style.transition = 'none';
-  }, { passive: true });
+  // Tap handle to dismiss
+  handleEl.addEventListener('click', closeSwitcher);
 
-  handleEl.addEventListener('touchmove', (e) => {
-    if (swipeStartY === null) return;
-    const dy = e.touches[0].clientY - swipeStartY;
-    if (dy > 0) {
-      swipeStartTranslate = dy;
-      switcherEl.style.transform = `translateY(${dy}px)`;
-    }
-  }, { passive: true });
+  // Swipe from handle or header area
+  for (const el of [handleEl, headerEl]) {
+    el.addEventListener('touchstart', (e) => {
+      swipeStartY = e.touches[0].clientY;
+      swipeStartTranslate = 0;
+      switcherEl.style.transition = 'none';
+    }, { passive: true });
 
-  handleEl.addEventListener('touchend', () => {
-    switcherEl.style.transition = '';
-    if (swipeStartTranslate > 80) {
-      closeSwitcher();
-    } else {
-      switcherEl.style.transform = '';
-    }
-    swipeStartY = null;
-  });
+    el.addEventListener('touchmove', (e) => {
+      if (swipeStartY === null) return;
+      const dy = e.touches[0].clientY - swipeStartY;
+      if (dy > 0) {
+        swipeStartTranslate = dy;
+        switcherEl.style.transform = `translateY(${dy}px)`;
+      }
+    }, { passive: true });
+
+    el.addEventListener('touchend', () => {
+      switcherEl.style.transition = '';
+      if (swipeStartTranslate > 80) {
+        // Animate to bottom, then close state after transition
+        switcherEl.style.transform = 'translateY(100%)';
+        closeSwitcher();
+        setTimeout(() => { switcherEl.style.transform = ''; }, 300);
+      } else {
+        switcherEl.style.transform = '';
+      }
+      swipeStartY = null;
+    });
+  }
 
   // Tap empty space below list items dismisses (the switcher itself, not just backdrop)
   document.getElementById('switcherList').addEventListener('click', (e) => {

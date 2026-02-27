@@ -47,6 +47,7 @@ export interface FolderInfo {
   handoffPurpose: string | null; // from latest handoff .md
   contextPct: number | null; // last-known context usage % (from result event)
   sessions: SessionListItem[]; // all sessions for this folder (most recent first)
+  humanSessionCount: number; // sessions where user actually typed (not subagent-only)
 }
 
 
@@ -407,6 +408,8 @@ export async function scanFolders(
     // Fetch all sessions for this folder (used in all branches)
     const folderSessions = await getSessionsForFolder(fullPath);
 
+    const humanSessionCount = folderSessions.filter(s => s.humanInteraction).length;
+
     // Check runtime state first (active processes)
     const activeInfo = activeSessions.get(fullPath);
     if (activeInfo) {
@@ -421,6 +424,7 @@ export async function scanFolders(
         handoffPurpose: handoff?.purpose ?? null,
         contextPct: activeInfo.contextPct,
         sessions: folderSessions,
+        humanSessionCount,
       };
     }
 
@@ -440,6 +444,7 @@ export async function scanFolders(
         handoffPurpose: handoff?.purpose ?? null,
         contextPct: null,
         sessions: folderSessions,
+        humanSessionCount,
       };
     } else if (handoff && (!session || handoff.sessionId === session.id)) {
       return {
@@ -452,6 +457,7 @@ export async function scanFolders(
         handoffPurpose: handoff.purpose,
         contextPct: null,
         sessions: folderSessions,
+        humanSessionCount,
       };
     } else if (session) {
       return {
@@ -464,6 +470,7 @@ export async function scanFolders(
         handoffPurpose: null,
         contextPct: null,
         sessions: folderSessions,
+        humanSessionCount,
       };
     } else {
       return {
@@ -476,6 +483,7 @@ export async function scanFolders(
         handoffPurpose: null,
         contextPct: null,
         sessions: folderSessions,
+        humanSessionCount,
       };
     }
   }

@@ -759,11 +759,25 @@ body[data-connection="disconnected"] .btn-file {
 }
 
 .switcher-handle {
+  width: 100%;
+  padding: 12px 0;
+  display: flex;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: none; /* We handle swipe manually */
+}
+
+/* Lock body scroll when switcher is open */
+body[data-switcher-open] {
+  overflow: hidden;
+}
+
+.switcher-handle::after {
+  content: '';
   width: 36px;
   height: 4px;
   background: var(--text-dim);
   border-radius: 2px;
-  margin: 8px auto 4px;
   opacity: 0.4;
 }
 
@@ -808,6 +822,7 @@ body[data-connection="disconnected"] .btn-file {
 .switcher-list {
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain; /* Don't chain scroll to body when list hits boundary */
   padding: 4px 14px 20px;
 }
 
@@ -840,8 +855,9 @@ body[data-connection="disconnected"] .btn-file {
 }
 
 .switcher-dot[data-status="active"] { background: var(--green); }
-.switcher-dot[data-status="dormant"] { background: var(--amber); opacity: 0.5; }
-.switcher-dot[data-status="old"] { background: var(--text-dim); opacity: 0.3; }
+.switcher-dot[data-status="paused"] { background: var(--amber); }
+.switcher-dot[data-status="closed"] { background: var(--text-dim); opacity: 0.5; }
+.switcher-dot[data-status="fresh"]  { background: var(--border); }
 
 .switcher-info {
   flex: 1;
@@ -853,7 +869,8 @@ body[data-connection="disconnected"] .btn-file {
   font-size: 0.93rem;
 }
 
-.switcher-item[data-status="old"] .switcher-project {
+.switcher-item[data-status="closed"] .switcher-project,
+.switcher-item[data-status="fresh"] .switcher-project {
   color: var(--text-dim);
 }
 

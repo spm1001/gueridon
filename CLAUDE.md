@@ -15,7 +15,7 @@ One HTML file (`index.html`) served by the bridge. SSE for live events, POST for
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~291 tests, ~3s)
+npm test                     # Run all tests (~293 tests, ~3s)
 npm run test:watch           # Watch mode
 ```
 
@@ -35,6 +35,15 @@ journalctl -u gueridon -f          # Tail logs
 - **HTTPS terminated by `tailscale serve`** — bridge listens on HTTP :3001.
 - **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
 - **Session persistence** — `~/.config/gueridon/sse-sessions.json` tracks active CC PIDs so the bridge can reap orphans after restart.
+
+### Self-deployment (working on guéridon from guéridon)
+
+When Claude is running as a CC child of the bridge, `sudo systemctl restart gueridon` kills the bridge, the new bridge reaps the CC process, and the client reconnects with `--resume`. This means:
+
+1. **Chain test + restart in one command:** `npm test 2>&1 | tail -5 && sudo systemctl restart gueridon`. This ensures the restart happens in the same Bash call. Do NOT run test and restart as separate tool calls — the session will resume between them and you'll lose the restart intent.
+2. **After session resume, the deploy is done.** The `[guéridon:system] The bridge was restarted...` message confirms it. Do NOT restart again — that was the deploy.
+3. **Don't announce before restarting.** Sending a text response ("I'll restart now") triggers a bridge→client→CC round-trip. If the bridge restarts during that round-trip, the session resumes and you may loop. Just run the command.
+4. **Test count is in the output** — `npm test` reports current count (~293). Update the "Running" section if it changes significantly.
 
 See `docs/deploy-guide.md` for VAPID key setup, Tailscale plumbing, and first-time install.
 
@@ -147,7 +156,7 @@ Full list: https://code.claude.com/docs/en/settings
 - Collapsible tool calls (consecutive successful calls coalesce)
 - Enter never submits (mobile newlines), submit is the button
 - Chunk-level updates (not token-level)
-- Session switcher with per-folder session list
+- Session switcher: Now (active+paused) / Previous (closed with history) groups, fresh folders hidden unless searching. Per-folder session list with "+ New Session" at top. Swipe-down or tap handle to dismiss.
 - Push notifications via service worker
 - Upload staging: files deposit as pills below textarea, sent with prompt on send
 - `renderUserBubble()` detects `[guéridon:upload]` blocks in user messages and renders as `📎 filename` references (both optimistic bubbles and server-state re-renders)
