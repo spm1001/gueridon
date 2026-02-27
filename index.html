@@ -46,6 +46,7 @@
 
   <div class="input-area">
     <textarea class="input-field" placeholder="Message Claude..." rows="1"></textarea>
+    <div class="staged-deposits" id="stagedDeposits"></div>
     <div class="btn-bar">
       <button class="btn-circle btn-file" aria-label="Attach" id="fileBtn">+</button>
       <button class="btn-circle btn-slash" aria-label="Commands" id="slashBtn">/</button>
@@ -676,6 +677,8 @@ function sseConnectFolder(folder, sessionId) {
   liveState.status = 'idle';
   liveState._activity = null;
   location.hash = name;
+  stagedDeposits = [];
+  renderStagedDeposits();
   ssePostSession(name, sessionId);
   sseRender();
 }
@@ -919,6 +922,32 @@ function renderChip(tc) {
   return chip;
 }
 
+// Parse deposit notes out of user message content → 📎 file refs + remaining text
+function renderUserBubble(content) {
+  const DEPOSIT_END = 'manifest.json has full metadata. Read the files if relevant to our conversation.';
+  let remaining = content;
+  const fileNames = [];
+
+  while (remaining.includes('[gu\u00E9ridon:upload]')) {
+    const start = remaining.indexOf('[gu\u00E9ridon:upload]');
+    const endIdx = remaining.indexOf(DEPOSIT_END, start);
+    if (endIdx === -1) break;
+
+    const block = remaining.slice(start, endIdx + DEPOSIT_END.length);
+    const filePattern = /  - (\S+) \(/g;
+    let m;
+    while ((m = filePattern.exec(block)) !== null) fileNames.push(m[1]);
+
+    remaining = remaining.slice(0, start) + remaining.slice(endIdx + DEPOSIT_END.length);
+  }
+
+  remaining = remaining.replace(/^\n+/, '').replace(/\n+$/, '');
+  let html = '';
+  if (fileNames.length > 0) html += `<div class="msg-files">\u{1F4CE} ${fileNames.join(', ')}</div>`;
+  if (remaining) html += marked.parseInline(remaining);
+  return html;
+}
+
 function renderMessages(messages) {
   // Dupe tripwire: detect consecutive assistant messages with identical content
   for (let i = 1; i < messages.length; i++) {
@@ -964,7 +993,7 @@ function renderMessages(messages) {
           div.textContent = msg.content;
         } else if (msg.role === 'user') {
           div.className = 'msg-user';
-          div.innerHTML = marked.parseInline(msg.content);
+          div.innerHTML = renderUserBubble(msg.content);
           if (msg._msgId) div.dataset.msgId = msg._msgId;
           if (msg.pending) div.dataset.pending = 'true';
           else if (msg.queued) div.dataset.queued = 'true';
@@ -1375,6 +1404,8 @@ ta.addEventListener('keydown', (e) => {
 // Update send button state based on current text and connection/busy state
 function updateSendButton() {
   const hasText = ta.value.trim().length > 0;
+  const hasDeposits = stagedDeposits.length > 0;
+  const hasContent = hasText || hasDeposits;
   const isDisconnected = document.body.dataset.connection === 'disconnected';
   const isBusy = document.body.dataset.busy === 'true';
 
@@ -1387,15 +1418,15 @@ function updateSendButton() {
   } else if (isDisconnected && isLive) {
     // Live mode disconnected — allow send (queues as pending in WS, disabled in SSE)
     sendBtn.dataset.stop = 'false';
-    sendBtn.dataset.active = hasText ? 'true' : 'false';
+    sendBtn.dataset.active = hasContent ? 'true' : 'false';
     sendBtn.innerHTML = '&#x2191;';
-  } else if (isBusy && !hasText) {
+  } else if (isBusy && !hasContent) {
     sendBtn.dataset.stop = 'true';
     delete sendBtn.dataset.active;
     sendBtn.innerHTML = '&#x25A0;'; // stop
   } else {
     sendBtn.dataset.stop = 'false';
-    sendBtn.dataset.active = hasText ? 'true' : 'false';
+    sendBtn.dataset.active = hasContent ? 'true' : 'false';
     sendBtn.innerHTML = '&#x2191;'; // send
   }
 }
@@ -1403,6 +1434,9 @@ function updateSendButton() {
 // Undo state — tracks the last sent message so it can be recalled
 let undoTimer = null;
 let undoEl = null;
+
+// Staged deposits — files deposited on disk but not yet sent as prompt
+let stagedDeposits = [];
 
 function clearUndo() {
   if (undoTimer) clearTimeout(undoTimer);
@@ -1427,23 +1461,41 @@ sendBtn.addEventListener('click', () => {
 
   const isBusy = document.body.dataset.busy === 'true';
   const hasText = ta.value.trim().length > 0;
+  const hasDeposits = stagedDeposits.length > 0;
+  const hasContent = hasText || hasDeposits;
 
-  if (isBusy && !hasText) {
+  if (isBusy && !hasContent) {
     // Stop — abort Claude's current turn
     if (bridgeUrl && sseCurrentFolder) {
       ssePostAbort(sseCurrentFolder);
     }
-  } else if (hasText) {
+  } else if (hasContent) {
     // Clear any previous undo
     clearUndo();
 
-    const text = ta.value.trim();
+    // Compose prompt: deposit notes first, then user text
+    const parts = [];
+    stagedDeposits.forEach(dep => {
+      parts.push(buildDepositNoteClient(dep.folder, dep.manifest));
+    });
+    const userText = ta.value.trim();
+    if (userText) parts.push(userText);
+    const text = parts.join('\n\n');
+
     const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
 
     // Add message to DOM immediately as pending
     const bubble = document.createElement('div');
     bubble.className = 'msg-user';
-    bubble.innerHTML = marked.parseInline(text);
+    let bubbleHTML = '';
+    if (hasDeposits) {
+      const fileRefs = stagedDeposits.flatMap(dep =>
+        dep.manifest.files.map(f => f.deposited_as)
+      );
+      bubbleHTML += `<div class="msg-files">\u{1F4CE} ${fileRefs.join(', ')}</div>`;
+    }
+    if (userText) bubbleHTML += marked.parseInline(userText);
+    bubble.innerHTML = bubbleHTML;
     bubble.dataset.msgId = msgId;
     bubble.dataset.pending = 'true';
     msgEl.appendChild(bubble);
@@ -1484,6 +1536,10 @@ sendBtn.addEventListener('click', () => {
       msgEl.appendChild(undo);
       undoEl = undo;
 
+      // Capture state for undo restore
+      const savedText = ta.value.trim();
+      const savedDeposits = [...stagedDeposits];
+
       undo.querySelector('button').addEventListener('click', () => {
         // Remove from liveState
         const li = liveState.messages.findIndex(m => m._msgId === msgId);
@@ -1494,7 +1550,9 @@ sendBtn.addEventListener('click', () => {
         undoEl = null;
         if (undoTimer) clearTimeout(undoTimer);
         undoTimer = null;
-        ta.value = text;
+        ta.value = savedText;
+        stagedDeposits = savedDeposits;
+        renderStagedDeposits();
         ta.style.height = 'auto';
         ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
         ta.focus();
@@ -1503,6 +1561,10 @@ sendBtn.addEventListener('click', () => {
 
       // No timer — undo stays until message is flushed
     }
+
+    // Clear staging
+    stagedDeposits = [];
+    renderStagedDeposits();
 
     // Scroll to bottom and reset scroll tracking
     userScrolledUp = false;
@@ -1602,17 +1664,76 @@ fileInput.multiple = true;
 fileInput.style.display = 'none';
 document.body.appendChild(fileInput);
 
+// Replicate server/upload.ts:buildDepositNote exactly — if this drifts,
+// staged vs non-staged uploads produce different prompts for CC.
+function buildDepositNoteClient(folder, manifest) {
+  const listing = manifest.files
+    .map(f => `  - ${f.deposited_as} (${f.mime_type}, ${f.size_bytes} bytes)`)
+    .join('\n');
+  const warningLines = manifest.warnings.length > 0
+    ? '\n\n\u26A0\uFE0F ' + manifest.warnings.join('\n\u26A0\uFE0F ')
+    : '';
+  return `[gu\u00E9ridon:upload] Files deposited at ${folder}/\n\n${listing}${warningLines}\n\nmanifest.json has full metadata. Read the files if relevant to our conversation.`;
+}
+
+function showStagedError(msg) {
+  const container = document.getElementById('stagedDeposits');
+  const el = document.createElement('div');
+  el.className = 'staged-error';
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+function renderStagedDeposits() {
+  const container = document.getElementById('stagedDeposits');
+  const errors = [...container.querySelectorAll('.staged-error')];
+  container.innerHTML = '';
+  errors.forEach(e => container.appendChild(e));
+
+  stagedDeposits.forEach((dep, i) => {
+    const pill = document.createElement('span');
+    pill.className = 'staged-pill';
+    const files = dep.manifest.files;
+    const label = files.length === 1
+      ? files[0].deposited_as
+      : `${files[0].deposited_as} +${files.length - 1}`;
+    pill.innerHTML = `<span class="staged-name">${label}</span><button class="staged-x" aria-label="Remove">\u00D7</button>`;
+    pill.querySelector('.staged-x').addEventListener('click', () => {
+      stagedDeposits.splice(i, 1);
+      renderStagedDeposits();
+      updateSendButton();
+    });
+    container.appendChild(pill);
+  });
+}
+
 function uploadFiles(files) {
   if (!files.length) return;
   if (!sseCurrentFolder || !bridgeUrl) return;
+  const fileBtn = document.getElementById('fileBtn');
+  const targetFolder = sseCurrentFolder;
   const form = new FormData();
   for (const f of files) form.append('file', f);
-  fetch(`${bridgeUrl}/upload/${encodeURIComponent(sseCurrentFolder)}`, {
+
+  fileBtn.classList.add('uploading');
+  fetch(`${bridgeUrl}/upload/${encodeURIComponent(targetFolder)}?stage=true`, {
     method: 'POST',
     body: form,
-  }).then(r => r.json()).then(data => {
-    if (data.error) console.warn('[upload]', data.error);
-  }).catch(err => console.warn('[upload] failed:', err));
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        showStagedError(data.error);
+        return;
+      }
+      if (sseCurrentFolder !== targetFolder) return;
+      stagedDeposits.push({ folder: data.folder, manifest: data.manifest });
+      renderStagedDeposits();
+      updateSendButton();
+    })
+    .catch(() => showStagedError('Upload failed'))
+    .finally(() => fileBtn.classList.remove('uploading'));
 }
 
 document.getElementById('fileBtn').addEventListener('click', () => {

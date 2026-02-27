@@ -596,11 +596,24 @@ export class StateBuilder {
 
     // String content = user text
     if (typeof content === "string") {
-      // Detect bridge-injected synthetic messages by prefix convention
+      // Detect bridge-injected synthetic messages by prefix convention.
+      // Detect bridge-injected synthetic messages by [guéridon:*] prefix.
+      // Exception: staged uploads contain deposit note(s) followed by user
+      // text — these are real user messages rendered by the client.
       const syntheticMatch = content.match(/^\[guéridon:\w+\]\s*/);
       if (syntheticMatch) {
-        const stripped = content.slice(syntheticMatch[0].length);
-        this.state.messages.push({ role: "user", content: stripped, synthetic: true });
+        const DEPOSIT_SUFFIX = "manifest.json has full metadata. Read the files if relevant to our conversation.";
+        const suffixIdx = content.indexOf(DEPOSIT_SUFFIX);
+        const hasUserText = suffixIdx !== -1 &&
+          content.slice(suffixIdx + DEPOSIT_SUFFIX.length).trim().length > 0;
+        if (hasUserText) {
+          // Staged upload with user text — keep full content
+          this.state.messages.push({ role: "user", content });
+        } else {
+          // Pure bridge-injected message — strip prefix, mark synthetic
+          const stripped = content.slice(syntheticMatch[0].length);
+          this.state.messages.push({ role: "user", content: stripped, synthetic: true });
+        }
       } else {
         this.state.messages.push({ role: "user", content });
       }

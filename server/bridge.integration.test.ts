@@ -465,6 +465,91 @@ describe("bridge HTTP smoke tests", () => {
     reader.cancel();
   });
 
+  // -- Staged upload (gdn-wohani) --
+
+  it("POST /upload/:folder?stage=true deposits files without auto-inject", async () => {
+    const folderName = "test-upload-staged";
+    const folderPath = join(tempDir, folderName);
+    mkdirSync(folderPath, { recursive: true });
+
+    await fetch(`${baseUrl}/session/${folderName}`, { method: "POST" });
+
+    // Upload with ?stage=true
+    const form = new FormData();
+    form.append("file", new File(["staged content"], "staged.txt", { type: "text/plain" }));
+    const uploadRes = await fetch(`${baseUrl}/upload/${folderName}?stage=true`, {
+      method: "POST",
+      body: form,
+    });
+    expect(uploadRes.status).toBe(200);
+
+    // Response shape matches non-staged (folder, manifest, warnings)
+    const data = await uploadRes.json();
+    expect(data.folder).toMatch(/^mise\/upload--staged--/);
+    expect(data.manifest.file_count).toBe(1);
+    expect(data.manifest.files[0].deposited_as).toBe("staged.txt");
+    expect(data.warnings).toEqual([]);
+
+    // Files exist on disk
+    const depositPath = join(folderPath, data.folder);
+    expect(existsSync(join(depositPath, "staged.txt"))).toBe(true);
+    expect(existsSync(join(depositPath, "manifest.json"))).toBe(true);
+  });
+
+  it("POST /upload/:folder without ?stage still auto-injects (regression)", async () => {
+    const folderName = "test-upload-no-stage";
+    const folderPath = join(tempDir, folderName);
+    mkdirSync(folderPath, { recursive: true });
+
+    const sseRes = await fetch(`${baseUrl}/events?clientId=nostage-test`);
+    const reader = sseRes.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const readUntil = async (marker: string, timeoutMs: number): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.includes(marker)) return true;
+      }
+      return false;
+    };
+
+    await readUntil("event: hello", 5_000);
+    await fetch(`${baseUrl}/session/${folderName}`, {
+      method: "POST",
+      headers: { "X-Client-ID": "nostage-test" },
+    });
+    await readUntil("event: state", 5_000);
+    buffer = "";
+
+    // Upload WITHOUT ?stage=true — should auto-inject
+    const form = new FormData();
+    form.append("file", new File(["auto content"], "auto.txt", { type: "text/plain" }));
+    const uploadRes = await fetch(`${baseUrl}/upload/${folderName}`, {
+      method: "POST",
+      body: form,
+    });
+    expect(uploadRes.status).toBe(200);
+
+    // Should get a state broadcast with synthetic deposit message
+    const found = await readUntil("event: state", 5_000);
+    expect(found).toBe(true);
+
+    const stateMatches = [...buffer.matchAll(/event: state\ndata: (.+)\n/g)];
+    const hasSynthetic = stateMatches.some((match) => {
+      const state = JSON.parse(match[1]);
+      return (state.messages || []).some(
+        (m: any) => m.role === "user" && m.synthetic === true,
+      );
+    });
+    expect(hasSynthetic).toBe(true);
+
+    reader.cancel();
+  });
+
   it("push subscribe rejects without valid token (gdn-ricocu)", async () => {
     // No token → 401
     const noToken = await fetch(`${baseUrl}/push/subscribe`, {
