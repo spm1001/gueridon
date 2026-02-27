@@ -286,22 +286,17 @@ export function buildCCArgs(
  */
 export function parseSessionJSONL(content: string): string[] {
   const lines = content.split("\n");
-  const result: string[] = [];
-
-  // Group assistant lines by message.id to merge content blocks
-  let currentAssistantId: string | null = null;
-  let currentAssistantMsg: any = null;
   let lastUsage: any = null;
 
-  function flushAssistant() {
-    if (currentAssistantMsg) {
-      result.push(
-        JSON.stringify({ source: "cc", event: { type: "assistant", message: currentAssistantMsg } }),
-      );
-      currentAssistantId = null;
-      currentAssistantMsg = null;
-    }
-  }
+  // Merge assistant messages by ID across the full JSONL — user events
+  // (tool_results) interleave freely and must not break the merge.
+  // We collect an ordered list of entries and deduplicate assistant IDs
+  // via a Map so the same ID always merges, regardless of interleaving.
+
+  type Entry = { type: "user" | "assistant"; msg: any; order: number };
+  const assistantById = new Map<string, Entry>();
+  const entries: Entry[] = [];
+  let order = 0;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -315,46 +310,43 @@ export function parseSessionJSONL(content: string): string[] {
     }
 
     if (parsed.type === "user") {
-      // Skip meta messages (internal CC bookkeeping)
       if (parsed.isMeta) continue;
       const msg = parsed.message;
       if (!msg) continue;
-
-      // Flush any pending assistant group before user message
-      flushAssistant();
-
-      result.push(
-        JSON.stringify({ source: "cc", event: { type: "user", message: msg } }),
-      );
+      const entry: Entry = { type: "user", msg, order: order++ };
+      entries.push(entry);
     } else if (parsed.type === "assistant") {
       const msg = parsed.message;
       if (!msg) continue;
+      if (msg.usage) lastUsage = msg.usage;
 
-      const msgId = msg.id;
-      if (msgId && msgId === currentAssistantId && currentAssistantMsg) {
-        // Same message.id — merge content blocks
-        currentAssistantMsg.content = [
-          ...(currentAssistantMsg.content || []),
+      const msgId: string | undefined = msg.id;
+      if (msgId && assistantById.has(msgId)) {
+        // Merge content blocks into existing entry
+        const existing = assistantById.get(msgId)!;
+        existing.msg.content = [
+          ...(existing.msg.content || []),
           ...(msg.content || []),
         ];
-        // Update usage to latest (later lines may have more complete data)
-        if (msg.usage) {
-          currentAssistantMsg.usage = msg.usage;
-          lastUsage = msg.usage;
-        }
+        if (msg.usage) existing.msg.usage = msg.usage;
+      } else if (msgId) {
+        // First occurrence — track by ID
+        const entry: Entry = { type: "assistant", msg: { ...msg }, order: order++ };
+        assistantById.set(msgId, entry);
+        entries.push(entry);
       } else {
-        // New assistant message — flush previous and start new group
-        flushAssistant();
-        currentAssistantId = msgId || null;
-        currentAssistantMsg = { ...msg };
-        if (msg.usage) lastUsage = msg.usage;
+        // No ID (defensive) — push immediately
+        const entry: Entry = { type: "assistant", msg: { ...msg }, order: order++ };
+        entries.push(entry);
       }
     }
     // Skip queue-operation, progress, system, and anything else
   }
 
-  // Flush final assistant group
-  flushAssistant();
+  // Serialize in insertion order (entries array already ordered)
+  const result: string[] = entries.map((e) =>
+    JSON.stringify({ source: "cc", event: { type: e.type, message: e.msg } }),
+  );
 
   // Append synthetic result event with last usage so gauge works after replay
   if (lastUsage) {

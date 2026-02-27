@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { StateBuilder } from "./state-builder.ts";
 import {
   resolveSessionForFolder,
   isHandoffStale,
@@ -689,6 +690,69 @@ describe("parseSessionJSONL", () => {
     expect(assistant.event.type).toBe("assistant");
     expect(assistant.event.message.content).toHaveLength(2);
     expect(parse(result[1]).event.type).toBe("user");
+  });
+
+  it("merges assistant messages across interleaved user events (dupe bug fix)", () => {
+    // CC with --include-partial-messages interleaves assistant and user
+    // (tool_result) events with the same message ID. The old merge broke
+    // on user boundaries, producing duplicate entries for the same ID.
+    const input = [
+      assistantLine(
+        [{ type: "tool_use", id: "tu_1", name: "Read", input: {} }],
+        { id: "msg_interleave", usage: { input_tokens: 100, output_tokens: 50 } },
+      ),
+      // User event: tool_result breaks the consecutive run
+      userLine("tool_result for tu_1"),
+      // Same assistant message ID continues after the tool_result
+      assistantLine(
+        [{ type: "text", text: "Here is the answer" }],
+        { id: "msg_interleave", usage: { input_tokens: 200, output_tokens: 100 } },
+      ),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+
+    // Should be: 1 merged assistant + 1 user + 1 synthetic result = 3
+    const events = result.map((r) => parse(r));
+    const assistants = events.filter((e) => e.event.type === "assistant");
+    const users = events.filter((e) => e.event.type === "user");
+
+    expect(assistants).toHaveLength(1);
+    expect(users).toHaveLength(1);
+
+    // Merged assistant has both content blocks
+    expect(assistants[0].event.message.content).toHaveLength(2);
+    expect(assistants[0].event.message.content[0].type).toBe("tool_use");
+    expect(assistants[0].event.message.content[1].type).toBe("text");
+
+    // Usage updated to latest
+    expect(assistants[0].event.message.usage.output_tokens).toBe(100);
+
+    // Ordering preserved: assistant appears before user
+    const types = events.map((e) => e.event.type);
+    expect(types.indexOf("assistant")).toBeLessThan(types.indexOf("user"));
+  });
+
+  it("handles multiple interleaving cycles with same assistant ID", () => {
+    // Simulates a multi-tool turn: assistant → user → assistant → user → assistant
+    // all with the same message ID
+    const input = [
+      assistantLine([{ type: "tool_use", id: "tu_1", name: "Read", input: {} }], { id: "msg_multi" }),
+      userLine("tool_result_1"),
+      assistantLine([{ type: "tool_use", id: "tu_2", name: "Grep", input: {} }], { id: "msg_multi" }),
+      userLine("tool_result_2"),
+      assistantLine([{ type: "text", text: "Done" }], { id: "msg_multi" }),
+    ].join("\n");
+
+    const result = parseSessionJSONL(input);
+    const events = result.map((r) => parse(r));
+    const assistants = events.filter((e) => e.event.type === "assistant");
+    const users = events.filter((e) => e.event.type === "user");
+
+    // One merged assistant with 3 content blocks, 2 user events
+    expect(assistants).toHaveLength(1);
+    expect(users).toHaveLength(2);
+    expect(assistants[0].event.message.content).toHaveLength(3);
   });
 });
 
@@ -1406,5 +1470,65 @@ describe("buildResumeInjection", () => {
     for (const reason of ["crash", "self-caused", "external"] as const) {
       expect(buildResumeInjection(reason)).toMatch(/^\[guéridon:system\]/);
     }
+  });
+});
+
+// --- Integration: parseSessionJSONL → StateBuilder.replayFromJSONL ---
+
+describe("parseSessionJSONL → StateBuilder replay integration", () => {
+  const fixturePath = join(__dirname, "..", "fixtures", "interleaved-tool-turn.jsonl");
+  const fixtureContent = readFileSync(fixturePath, "utf-8");
+
+  it("interleaved JSONL produces no duplicate messages after full pipeline", () => {
+    // Step 1: Parse JSONL (merge interleaved assistant events by ID)
+    const parsed = parseSessionJSONL(fixtureContent);
+
+    // Step 2: Replay through StateBuilder
+    const sb = new StateBuilder("test-session", "test-project");
+    sb.replayFromJSONL(parsed);
+    const state = sb.getState();
+
+    // The fixture has: 1 user prompt, 1 assistant turn (2 tools + text), 2 tool_results
+    // StateBuilder collapses tool_results into the assistant's tool_calls.
+    // Expected: 1 user message + 1 assistant message = 2 messages
+    expect(state.messages).toHaveLength(2);
+    expect(state.messages[0].role).toBe("user");
+    expect(state.messages[0].content).toBe("Read server/bridge.ts and server/state-builder.ts");
+
+    const assistant = state.messages[1];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.content).toBe(
+      "I've read both files. The bridge handles HTTP and SSE, while the state builder translates CC events into the frontend state shape.",
+    );
+    expect(assistant.tool_calls).toHaveLength(2);
+    expect(assistant.tool_calls![0].name).toBe("Read");
+    expect(assistant.tool_calls![0].status).toBe("completed");
+    expect(assistant.tool_calls![0].output).toBe("// bridge.ts contents...");
+    expect(assistant.tool_calls![1].name).toBe("Read");
+    expect(assistant.tool_calls![1].status).toBe("completed");
+    expect(assistant.tool_calls![1].output).toBe("// state-builder.ts contents...");
+  });
+
+  it("each unique message ID produces exactly one state message", () => {
+    const parsed = parseSessionJSONL(fixtureContent);
+    const sb = new StateBuilder("test-session", "test-project");
+    sb.replayFromJSONL(parsed);
+    const state = sb.getState();
+
+    // Count assistant messages — should be exactly 1 (one unique msg ID)
+    const assistants = state.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(1);
+  });
+
+  it("getTurnMetrics returns real token counts after replay", () => {
+    const parsed = parseSessionJSONL(fixtureContent);
+    const sb = new StateBuilder("test-session", "test-project");
+    sb.replayFromJSONL(parsed);
+    const metrics = sb.getTurnMetrics();
+
+    // Last usage in fixture: input_tokens: 300, cache_read: 5200, output: 40
+    expect(metrics.inputTokens).toBe(300 + 5200);
+    expect(metrics.outputTokens).toBe(40);
+    expect(metrics.toolCalls).toBeGreaterThan(0);
   });
 });

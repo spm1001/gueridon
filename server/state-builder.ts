@@ -153,6 +153,7 @@ export class StateBuilder {
   private seenMessageIds = new Set<string>();
   private contextWindow = DEFAULT_CONTEXT_WINDOW;
   private lastInputTokens = 0;
+  private lastOutputTokens = 0;
 
   constructor(sessionId: string, project: string) {
     this.state = {
@@ -166,6 +167,19 @@ export class StateBuilder {
 
   getState(): BBState {
     return JSON.parse(JSON.stringify(this.state));
+  }
+
+  /** Turn-level metrics for logging. */
+  getTurnMetrics(): { inputTokens: number; outputTokens: number; toolCalls: number } {
+    // Count tool calls from the last committed assistant message — this is the
+    // most reliable source because content_block_stop patches it in-place during
+    // streaming, and handleAssistant sets it during replay.
+    const lastAssistant = [...this.state.messages].reverse().find((m) => m.role === "assistant");
+    return {
+      inputTokens: this.lastInputTokens,
+      outputTokens: this.lastOutputTokens,
+      toolCalls: lastAssistant?.tool_calls?.length ?? 0,
+    };
   }
 
   /** Process a CC event, return an SSE delta to broadcast (or null). */
@@ -487,6 +501,7 @@ export class StateBuilder {
         (usage.input_tokens || 0) +
         (usage.cache_read_input_tokens || 0) +
         (usage.cache_creation_input_tokens || 0);
+      this.lastOutputTokens = usage.output_tokens || 0;
       this.state.session.context_pct = Math.round(
         (this.lastInputTokens / this.contextWindow) * 100,
       );

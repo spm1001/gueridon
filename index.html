@@ -258,7 +258,10 @@ function sseConnect() {
     // Clear stale messages — the POST /session response sends a fresh state snapshot.
     // Without this, deltas arriving between reconnect and state snapshot accumulate
     // on top of old messages, causing visual duplication.
-    if (data.reconnect && sseCurrentFolder) {
+    if (sseCurrentFolder) {
+      // Always clear stale messages when we have an active folder —
+      // both auto-reconnect (Last-Event-ID) and watchdog reconnect (fresh
+      // EventSource) need a clean slate before the state snapshot arrives.
       liveState.messages = [];
       ssePostSession(sseCurrentFolder);
     } else if (location.hash.length > 1) {
@@ -356,7 +359,10 @@ function handleSSEState(data) {
   // getState().session is {id, model, project, context_pct} — overwrites the string
   // (later properties win in spread). So data.session is the object.
 
-  if (data.messages) liveState.messages = data.messages;
+  if (data.messages) {
+    console.log('[bb] state snapshot:', data.messages.length, 'msgs');
+    liveState.messages = data.messages;
+  }
   if (data.session && typeof data.session === 'object') {
     liveState.session = { ...liveState.session, ...data.session };
   }
@@ -392,9 +398,10 @@ function handleSSEDelta(data) {
       break;
 
     case 'message_start':
-      // New CC assistant turn — push a fresh skeleton so subsequent content/tool
-      // deltas don't overwrite the previous turn's message.
-      liveState.messages.push({ role: 'assistant', content: null });
+      // Ensure an assistant skeleton exists — but don't push a duplicate if
+      // the last message is already an assistant (multi-API-call turns).
+      ensureAssistantMessage();
+      console.log('[bb] message_start, now', liveState.messages.length, 'msgs');
       break;
 
     case 'activity':
@@ -913,6 +920,15 @@ function renderChip(tc) {
 }
 
 function renderMessages(messages) {
+  // Dupe tripwire: detect consecutive assistant messages with identical content
+  for (let i = 1; i < messages.length; i++) {
+    const prev = messages[i - 1], cur = messages[i];
+    if (prev.role === 'assistant' && cur.role === 'assistant' && prev.content && cur.content && prev.content === cur.content) {
+      console.warn('[bb] DUPE TRIPWIRE: consecutive identical assistant messages at index', i, 'of', messages.length);
+      reportError('dupe-tripwire: consecutive identical assistant messages at index ' + i);
+    }
+  }
+
   const el = document.getElementById('messages');
 
   // Snapshot expanded chips before rebuild

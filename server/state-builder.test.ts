@@ -384,6 +384,48 @@ describe("StateBuilder", () => {
     });
   });
 
+  describe("getTurnMetrics", () => {
+    it("returns token counts from last assistant usage", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(
+        assistantMessage("msg_metrics", [{ type: "text", text: "Hi" }], {
+          input_tokens: 100,
+          output_tokens: 50,
+          cache_read_input_tokens: 200,
+          cache_creation_input_tokens: 0,
+        }),
+      );
+      sb.handleEvent(resultEvent());
+
+      const metrics = sb.getTurnMetrics();
+      expect(metrics.inputTokens).toBe(300); // 100 + 200
+      expect(metrics.outputTokens).toBe(50);
+    });
+
+    it("counts tool calls from committed assistant message", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(
+        assistantMessage("msg_tools", [
+          { type: "text", text: "Reading files." },
+          { type: "tool_use", id: "toolu_a", name: "Read", input: { file_path: "/a.ts" } },
+          { type: "tool_use", id: "toolu_b", name: "Grep", input: { pattern: "foo" } },
+        ]),
+      );
+      sb.handleEvent(resultEvent());
+
+      const metrics = sb.getTurnMetrics();
+      expect(metrics.toolCalls).toBe(2);
+    });
+
+    it("returns zeros before any events", () => {
+      const sb = makeBuilder();
+      const metrics = sb.getTurnMetrics();
+      expect(metrics.inputTokens).toBe(0);
+      expect(metrics.outputTokens).toBe(0);
+      expect(metrics.toolCalls).toBe(0);
+    });
+  });
+
   describe("JSONL replay via replayFromJSONL", () => {
     it("rebuilds state from complete assistant messages (no streaming events)", () => {
       const sb = makeBuilder();
@@ -499,6 +541,61 @@ describe("StateBuilder", () => {
 
       sb.replayFromJSONL([assistantEvent, assistantEvent]);
       expect(sb.getState().messages).toHaveLength(1);
+    });
+
+    it("replays interleaved assistant/user events with merged content (dupe bug scenario)", () => {
+      const sb = makeBuilder();
+
+      // This is what parseSessionJSONL now produces for a multi-tool turn:
+      // one merged assistant (tool_use + text), interleaved user (tool_result)
+      const events = [
+        JSON.stringify({
+          source: "cc",
+          event: {
+            type: "assistant",
+            message: {
+              id: "msg_interleave",
+              role: "assistant",
+              content: [
+                { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/a.ts" } },
+                { type: "text", text: "Here is the result." },
+              ],
+              usage: { input_tokens: 200, output_tokens: 50, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+            },
+          },
+        }),
+        JSON.stringify({
+          source: "cc",
+          event: {
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                { type: "tool_result", tool_use_id: "toolu_1", content: "file contents", is_error: false },
+              ],
+            },
+          },
+        }),
+        JSON.stringify({
+          source: "cc",
+          event: { type: "result", subtype: "success", is_error: false, modelUsage: {} },
+        }),
+      ];
+
+      sb.replayFromJSONL(events);
+      const state = sb.getState();
+
+      // Single assistant message, not two
+      expect(state.messages).toHaveLength(1);
+      const msg = state.messages[0];
+      expect(msg.role).toBe("assistant");
+      expect(msg.content).toBe("Here is the result.");
+      expect(msg.tool_calls).toHaveLength(1);
+      expect(msg.tool_calls![0]).toMatchObject({
+        name: "Read",
+        status: "completed",
+        output: "file contents",
+      });
     });
 
     it("multi-turn replay: second assistant message does not inherit first turn's tool calls", () => {

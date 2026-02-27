@@ -501,18 +501,17 @@ async function onTurnComplete(session: Session): Promise<void> {
     ...session.stateBuilder.getState(),
   });
 
-  // Emit turn metrics
-  const state = session.stateBuilder.getState();
-  const lastMsg = [...state.messages].reverse().find((m) => m.role === "assistant");
+  // Emit turn metrics from state builder's internal counters
+  const metrics = session.stateBuilder.getTurnMetrics();
   emit({
     type: "turn:complete",
     folder: session.folderName,
     sessionId: session.id,
     durationMs,
-    inputTokens: null,
-    outputTokens: null,
+    inputTokens: metrics.inputTokens > 0 ? metrics.inputTokens : null,
+    outputTokens: metrics.outputTokens > 0 ? metrics.outputTokens : null,
     contextPct: session.contextPct,
-    toolCalls: lastMsg?.tool_calls?.length ?? 0,
+    toolCalls: metrics.toolCalls,
   });
 
   // Push notification when no SSE clients are watching (phone-in-pocket).
