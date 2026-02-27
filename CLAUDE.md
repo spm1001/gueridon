@@ -15,7 +15,7 @@ One HTML file (`index.html`) served by the bridge. SSE for live events, POST for
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~280 tests, ~3s)
+npm test                     # Run all tests (~291 tests, ~3s)
 npm run test:watch           # Watch mode
 ```
 
@@ -72,8 +72,8 @@ The bridge is split across several modules in `server/`:
 | POST | `/push/unsubscribe` | Remove push subscription |
 | GET | `/status` | Debug endpoint (sessions, memory, recent events) |
 | POST | `/client-error` | Mobile error reporting (rate-limited) |
-| POST | `/upload` | Share-sheet new-session upload |
-| POST | `/upload/:folder` | Multipart file upload to active session |
+| POST | `/upload` | Share-sheet new-session upload (auto-injects prompt) |
+| POST | `/upload/:folder` | Multipart file upload (`?stage=true` for client staging, default auto-injects) |
 
 **Key design:**
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
@@ -84,6 +84,9 @@ The bridge is split across several modules in `server/`:
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
 - **Orphan reaping:** On startup, reads sse-sessions.json, SIGTERMs any live CC processes from the previous bridge instance.
 - **Outrider prompt:** When the first queued prompt arrives during an active turn, the bridge injects a steering message into CC's stdin ("The user has sent a follow-up message. Finish your current work..."). CC sees this as a user message and wraps up before processing the queue. These appear in JSONL transcripts as phantom user messages — they are bridge-generated, not user-typed.
+- **Upload staging:** `POST /upload/:folder?stage=true` deposits files on disk and returns the manifest without injecting a prompt. The client stages deposits as pills below the textarea; on send, `buildDepositNoteClient()` composes deposit notes + user text as one prompt. Without `?stage=true` (share-sheet flow), upload auto-injects as before.
+- **`[guéridon:*]` prefix convention:** Bridge-injected messages use `[guéridon:system]`, `[guéridon:upload]` etc. StateBuilder detects these and marks as `synthetic: true` (rendered as system chips, prefix stripped). **Exception:** staged uploads contain a deposit note followed by user text — StateBuilder checks for text after the deposit suffix and keeps these as real user messages. The client's `renderUserBubble()` parses deposit notes into `📎 filename` references.
+- **Deposit note parity:** `buildDepositNoteClient()` in `index.html` must exactly match `buildDepositNote()` in `server/upload.ts`. If either changes, staged vs non-staged uploads produce different prompts for CC. `renderUserBubble()` also parses this format — three places coupled to one template.
 
 ## CC Process Flags
 
@@ -146,6 +149,8 @@ Full list: https://code.claude.com/docs/en/settings
 - Chunk-level updates (not token-level)
 - Session switcher with per-folder session list
 - Push notifications via service worker
+- Upload staging: files deposit as pills below textarea, sent with prompt on send
+- `renderUserBubble()` detects `[guéridon:upload]` blocks in user messages and renders as `📎 filename` references (both optimistic bubbles and server-state re-renders)
 
 ## Key Docs
 

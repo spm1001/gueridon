@@ -254,6 +254,50 @@ describe("buildDepositNote", () => {
     expect(note).toContain("⚠️");
     expect(note).toContain("deposited as binary");
   });
+
+  it("matches client-side buildDepositNoteClient exactly (parity gate)", () => {
+    // Client function from index.html — if this test fails, the two have drifted.
+    // Update BOTH or staged vs non-staged uploads produce different prompts for CC.
+    function buildDepositNoteClient(folder: string, manifest: { files: Array<{ deposited_as: string; mime_type: string; size_bytes: number }>; warnings: string[] }): string {
+      const listing = manifest.files
+        .map((f: { deposited_as: string; mime_type: string; size_bytes: number }) => `  - ${f.deposited_as} (${f.mime_type}, ${f.size_bytes} bytes)`)
+        .join("\n");
+      const warningLines = manifest.warnings.length > 0
+        ? "\n\n\u26A0\uFE0F " + manifest.warnings.join("\n\u26A0\uFE0F ")
+        : "";
+      return `[gu\u00E9ridon:upload] Files deposited at ${folder}/\n\n${listing}${warningLines}\n\nmanifest.json has full metadata. Read the files if relevant to our conversation.`;
+    }
+
+    // Single file, no warnings
+    const m1 = buildManifest([{
+      originalName: "report.pdf",
+      validation: { valid: true, effectiveMime: "application/pdf", declaredMime: "application/pdf", detectedMime: "application/pdf", warning: null },
+      size: 54321,
+      depositedAs: "report.pdf",
+    }], "parity1");
+
+    const folder1 = "mise/upload--report--parity1";
+    expect(buildDepositNote(folder1, m1)).toBe(buildDepositNoteClient(folder1, m1));
+
+    // Multiple files with warning
+    const m2 = buildManifest([
+      {
+        originalName: "data.csv",
+        validation: { valid: true, effectiveMime: "text/csv", declaredMime: "text/csv", detectedMime: null, warning: null },
+        size: 100,
+        depositedAs: "data.csv",
+      },
+      {
+        originalName: "fake.png",
+        validation: { valid: true, effectiveMime: "application/octet-stream", declaredMime: "image/png", detectedMime: null, warning: "fake.png: deposited as binary" },
+        size: 4,
+        depositedAs: "fake.png",
+      },
+    ], "parity2");
+
+    const folder2 = "mise/upload--data--parity2";
+    expect(buildDepositNote(folder2, m2)).toBe(buildDepositNoteClient(folder2, m2));
+  });
 });
 
 // ============================================================
