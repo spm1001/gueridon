@@ -979,7 +979,7 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
 
 // -- File upload --
 
-async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPath: string): Promise<void> {
+async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPath: string, stage = false): Promise<void> {
   const session = sessions.get(folderPath);
   if (!session) {
     res.writeHead(400).end(JSON.stringify({ error: "No active session for folder" }));
@@ -987,14 +987,18 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
   }
   try {
     const { depositFolder, manifest } = await depositFiles(req, folderPath);
-    const note = buildDepositNote(depositFolder, manifest);
-    deliverPrompt(session, { text: note });
 
-    // Broadcast state so the synthetic deposit message renders immediately
-    // as a system chip. Without this, clients only see it at turn end.
-    broadcastToSession(session, "state", {
-      ...session.stateBuilder.getState(),
-    });
+    if (!stage) {
+      // Auto-inject deposit note as prompt (original behaviour, used by share-sheet)
+      const note = buildDepositNote(depositFolder, manifest);
+      deliverPrompt(session, { text: note });
+
+      // Broadcast state so the synthetic deposit message renders immediately
+      // as a system chip. Without this, clients only see it at turn end.
+      broadcastToSession(session, "state", {
+        ...session.stateBuilder.getState(),
+      });
+    }
 
     emit({ type: "upload:deposited", folder: depositFolder, files: manifest.file_count });
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -1297,7 +1301,9 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  // POST /upload/:folder — multipart file upload → validate → mise deposit → auto-inject
+  // POST /upload/:folder — multipart file upload → validate → mise deposit
+  // With ?stage=true: deposit only, return manifest (client stages as pills)
+  // Without: deposit + auto-inject prompt (share-sheet compatibility)
   const uploadMatch = url.pathname.match(/^\/upload\/(.+)$/);
   if (req.method === "POST" && uploadMatch) {
     const folderParam = decodeURIComponent(uploadMatch[1]);
@@ -1306,7 +1312,8 @@ const server = createServer(async (req, res) => {
       res.writeHead(400).end(JSON.stringify({ error: "Invalid folder" }));
       return;
     }
-    await handleUpload(req, res, folderPath);
+    const stage = url.searchParams.get("stage") === "true";
+    await handleUpload(req, res, folderPath, stage);
     return;
   }
 
