@@ -487,14 +487,9 @@ export class StateBuilder {
       return { type: "api_error", error: errorText };
     }
 
-    // Deduplicate by message ID
-    const msgId = message.id as string;
-    if (msgId) {
-      if (this.seenMessageIds.has(msgId)) return null;
-      this.seenMessageIds.add(msgId);
-    }
-
-    // Extract context tokens from per-message usage
+    // Always extract usage — CC emits the same message ID multiple times with
+    // --include-partial-messages, and later emissions have more complete token
+    // counts (first emission often has output_tokens: 1).
     const usage = message.usage as Record<string, number> | undefined;
     if (usage) {
       this.lastInputTokens =
@@ -505,6 +500,13 @@ export class StateBuilder {
       this.state.session.context_pct = Math.round(
         (this.lastInputTokens / this.contextWindow) * 100,
       );
+    }
+
+    // Deduplicate by message ID — but AFTER usage extraction above
+    const msgId = message.id as string;
+    if (msgId) {
+      if (this.seenMessageIds.has(msgId)) return null;
+      this.seenMessageIds.add(msgId);
     }
 
     // Build assistant message — prefer streaming accumulation, fall back to
