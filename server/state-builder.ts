@@ -155,6 +155,11 @@ export class StateBuilder {
   private lastInputTokens = 0;
   private lastOutputTokens = 0;
 
+  // Turn-level tool call accumulator — incremented per content_block_stop(tool_use),
+  // reset on system:init (which fires once per turn). Fixes the bug where
+  // getTurnMetrics only saw the LAST assistant message (usually text-only, 0 tools).
+  private turnToolCallCount = 0;
+
   constructor(sessionId: string, project: string) {
     this.state = {
       session: { id: sessionId, model: "", project, context_pct: 0 },
@@ -171,14 +176,10 @@ export class StateBuilder {
 
   /** Turn-level metrics for logging. */
   getTurnMetrics(): { inputTokens: number; outputTokens: number; toolCalls: number } {
-    // Count tool calls from the last committed assistant message — this is the
-    // most reliable source because content_block_stop patches it in-place during
-    // streaming, and handleAssistant sets it during replay.
-    const lastAssistant = [...this.state.messages].reverse().find((m) => m.role === "assistant");
     return {
       inputTokens: this.lastInputTokens,
       outputTokens: this.lastOutputTokens,
-      toolCalls: lastAssistant?.tool_calls?.length ?? 0,
+      toolCalls: this.turnToolCallCount,
     };
   }
 
@@ -222,6 +223,9 @@ export class StateBuilder {
 
   private handleSystem(event: Record<string, unknown>): SSEDelta {
     if (event.subtype !== "init") return null;
+
+    // Reset per-turn counters — init fires once per turn
+    this.turnToolCallCount = 0;
 
     if (event.model) this.state.session.model = event.model as string;
     if (event.session_id) this.state.session.id = event.session_id as string;
@@ -418,6 +422,8 @@ export class StateBuilder {
     }
 
     if (blockType === "tool_use") {
+      this.turnToolCallCount++;
+
       const callIndex = this.toolBlockToCallIndex.get(index);
       if (callIndex === undefined) return null;
 
@@ -555,6 +561,7 @@ export class StateBuilder {
         if (calls.length > 0) {
           toolCalls = calls;
           this.currentToolCalls = calls; // so tool_result can find them
+          this.turnToolCallCount += calls.length; // replay path — no content_block_stop
         }
       }
     }

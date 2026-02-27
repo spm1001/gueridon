@@ -424,6 +424,61 @@ describe("StateBuilder", () => {
       expect(metrics.outputTokens).toBe(0);
       expect(metrics.toolCalls).toBe(0);
     });
+
+    it("accumulates tool calls across multiple assistant messages in a turn (streaming)", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+
+      // First assistant message: 2 tool calls (streaming path)
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "Bash", "toolu_1"));
+      sb.handleEvent(inputJsonDelta(0, '{"command":"ls"}'));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(toolBlockStart(1, "Read", "toolu_2"));
+      sb.handleEvent(inputJsonDelta(1, '{"file_path":"/a.ts"}'));
+      sb.handleEvent(blockStop(1));
+      sb.handleEvent(assistantMessage("msg_1", [
+        { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } },
+        { type: "tool_use", id: "toolu_2", name: "Read", input: { file_path: "/a.ts" } },
+      ]));
+
+      // Tool results come back, then a text-only assistant message
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Here are the results."));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg_2", [{ type: "text", text: "Here are the results." }]));
+      sb.handleEvent(resultEvent());
+
+      const metrics = sb.getTurnMetrics();
+      // Should count all 2 tool calls from the turn, not just the last message (0)
+      expect(metrics.toolCalls).toBe(2);
+    });
+
+    it("resets tool call count on new turn", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+
+      // Turn 1: 1 tool call
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "Bash", "toolu_a"));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg_t1", [
+        { type: "tool_use", id: "toolu_a", name: "Bash", input: {} },
+      ]));
+      sb.handleEvent(resultEvent());
+      expect(sb.getTurnMetrics().toolCalls).toBe(1);
+
+      // Turn 2: system:init resets, no tool calls
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Just text."));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg_t2", [{ type: "text", text: "Just text." }]));
+      sb.handleEvent(resultEvent());
+      expect(sb.getTurnMetrics().toolCalls).toBe(0);
+    });
   });
 
   describe("JSONL replay via replayFromJSONL", () => {
