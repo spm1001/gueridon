@@ -1,0 +1,9 @@
+{
+  "name": "gueridon",
+  "version": "0.1.0",
+  "description": "Mobile web UI for Claude Code — setup, status, and management. Requires: Node.js, Tailscale",
+  "author": { "name": "Sameer Modha", "url": "https://github.com/spm1001" },
+  "repository": "https://github.com/spm1001/gueridon",
+  "license": "MIT",
+  "keywords": ["mobile", "pwa", "remote", "web-ui"]
+}
