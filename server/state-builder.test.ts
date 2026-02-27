@@ -455,6 +455,57 @@ describe("StateBuilder", () => {
       expect(metrics.toolCalls).toBe(2);
     });
 
+    it("sums output tokens across multiple assistant messages in a turn", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+
+      // First assistant message: tool calls, 500 output tokens
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "Bash", "toolu_1"));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg_out_1", [
+        { type: "tool_use", id: "toolu_1", name: "Bash", input: {} },
+      ], { output_tokens: 500 }));
+
+      // Second assistant message: text response, 200 output tokens
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg_out_2", [
+        { type: "text", text: "Done." },
+      ], { output_tokens: 200 }));
+      sb.handleEvent(resultEvent());
+
+      const metrics = sb.getTurnMetrics();
+      expect(metrics.outputTokens).toBe(700); // 500 + 200, not just 200
+    });
+
+    it("partial emissions overwrite per message ID (no double-counting)", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+
+      // Same message ID emitted twice (--include-partial-messages)
+      sb.handleEvent(assistantMessage("msg_partial", [{ type: "text", text: "" }], {
+        output_tokens: 1,
+      }));
+      // Second emission with same ID — more complete usage
+      sb.handleEvent({
+        type: "assistant",
+        message: {
+          id: "msg_partial",
+          model: "claude-opus-4-6",
+          role: "assistant",
+          content: [{ type: "text", text: "Full response." }],
+          usage: { input_tokens: 100, output_tokens: 350, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+        session_id: "test-session-1",
+      });
+      sb.handleEvent(resultEvent());
+
+      const metrics = sb.getTurnMetrics();
+      expect(metrics.outputTokens).toBe(350); // latest emission wins, not 1 + 350
+    });
+
     it("resets tool call count on new turn", () => {
       const sb = makeBuilder();
       sb.handleEvent(systemInit());

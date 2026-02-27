@@ -160,6 +160,11 @@ export class StateBuilder {
   // getTurnMetrics only saw the LAST assistant message (usually text-only, 0 tools).
   private turnToolCallCount = 0;
 
+  // Turn-level output token tracking — keyed by message ID so partial emissions
+  // (same ID, increasing counts) overwrite rather than accumulate, while different
+  // messages in the same turn sum correctly.
+  private turnOutputTokensById = new Map<string, number>();
+
   constructor(sessionId: string, project: string) {
     this.state = {
       session: { id: sessionId, model: "", project, context_pct: 0 },
@@ -176,9 +181,13 @@ export class StateBuilder {
 
   /** Turn-level metrics for logging. */
   getTurnMetrics(): { inputTokens: number; outputTokens: number; toolCalls: number } {
+    // Sum output tokens across all messages in the turn (partial emissions for the
+    // same message ID overwrite in the map, so no double-counting).
+    let outputTokens = 0;
+    for (const v of this.turnOutputTokensById.values()) outputTokens += v;
     return {
       inputTokens: this.lastInputTokens,
-      outputTokens: this.lastOutputTokens,
+      outputTokens: outputTokens || this.lastOutputTokens, // fallback for pre-init events
       toolCalls: this.turnToolCallCount,
     };
   }
@@ -226,6 +235,7 @@ export class StateBuilder {
 
     // Reset per-turn counters — init fires once per turn
     this.turnToolCallCount = 0;
+    this.turnOutputTokensById.clear();
 
     if (event.model) this.state.session.model = event.model as string;
     if (event.session_id) this.state.session.id = event.session_id as string;
@@ -497,6 +507,7 @@ export class StateBuilder {
     // --include-partial-messages, and later emissions have more complete token
     // counts (first emission often has output_tokens: 1).
     const usage = message.usage as Record<string, number> | undefined;
+    const msgId = message.id as string;
     if (usage) {
       this.lastInputTokens =
         (usage.input_tokens || 0) +
@@ -506,10 +517,14 @@ export class StateBuilder {
       this.state.session.context_pct = Math.round(
         (this.lastInputTokens / this.contextWindow) * 100,
       );
+      // Track per-message output tokens — partials overwrite (same ID),
+      // different messages in the same turn accumulate (different IDs).
+      if (msgId) {
+        this.turnOutputTokensById.set(msgId, this.lastOutputTokens);
+      }
     }
 
     // Deduplicate by message ID — but AFTER usage extraction above
-    const msgId = message.id as string;
     if (msgId) {
       if (this.seenMessageIds.has(msgId)) return null;
       this.seenMessageIds.add(msgId);
