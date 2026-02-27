@@ -40,6 +40,7 @@
     <div class="slash-sheet">
       <div class="slash-sheet-handle"></div>
       <div class="slash-sheet-title">Commands</div>
+      <input class="slash-search" id="slashSearch" type="text" placeholder="Filter commands…">
       <div id="slashList"></div>
     </div>
   </div>
@@ -390,14 +391,8 @@ function handleSSEDelta(data) {
     case 'status':
       liveState.status = data.status;
       if (data.status === 'idle') liveState._activity = null;
-      // Working status = CC ingested queued messages — clear queued/pending flags
       if (data.status === 'working') {
-        for (const msg of liveState.messages) {
-          if (msg.queued || msg.pending) {
-            msg.queued = false;
-            msg.pending = false;
-          }
-        }
+        // Working status = CC ingested queued messages
       }
       break;
 
@@ -786,19 +781,10 @@ function addCopyButtons(container) {
 
 function trimText(text) {
   if (!text) return text;
-  // Strip <local-command-stdout> tags and trim /context output
+  // Strip <local-command-stdout> tags (local command output now takes the chip path
+  // in the render loop, but trimText still runs on assistant message content)
   const stdoutRe = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/g;
-  text = text.replace(stdoutRe, (_, inner) => {
-    // /context output: extract just the usage/cost summary lines
-    if (inner.includes('Context:') || inner.includes('context window')) {
-      const lines = inner.split('\n');
-      const usageLines = lines.filter(l =>
-        /^\s*Context:\s*\d/.test(l) || /token/i.test(l) || /^\s*Cost:/i.test(l) || /^\s*\d+%/.test(l)
-      );
-      return usageLines.length ? usageLines.join('\n').trim() : inner.trim();
-    }
-    return inner.trim();
-  });
+  text = text.replace(stdoutRe, (_, inner) => inner.trim());
   return text;
 }
 
@@ -820,44 +806,49 @@ function renderLocalCommand(content) {
   const match = content.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
   const inner = match ? match[1].trim() : content;
 
-  // Extract a one-line summary for the collapsed header
-  // /context: "Model: claude-opus-4-6  Tokens: 73.3k / 200k (37%)"
-  // /cost: the whole thing is short enough
+  // Extract a one-line summary for the chip path
+  // /context: "Tokens: 75.2k / 200k (38%)"
+  // /cost: short enough to use as-is
   // /compact: "Compacted"
   let summary = '';
   const lines = inner.split('\n');
-  // Look for the Tokens line (most useful for /context)
   const tokensLine = lines.find(l => /\*\*Tokens:\*\*/.test(l));
   if (tokensLine) {
-    // Strip markdown bold markers
     summary = tokensLine.replace(/\*\*/g, '').trim();
   } else if (inner.length < 100) {
-    // Short output like /compact or /cost — use as-is
     summary = inner.replace(/\n/g, ' ').trim();
   } else {
-    // Fallback: first non-empty, non-heading line
     summary = lines.find(l => l.trim() && !l.startsWith('#')) || lines[0] || 'Command output';
     summary = summary.replace(/\*\*/g, '').trim();
   }
 
-  const block = document.createElement('div');
-  block.className = 'local-cmd';
-  block.dataset.expanded = 'false';
+  // Render as a standard .chip — same look as tool call chips
+  const chip = document.createElement('div');
+  chip.className = 'chip local-cmd-chip';
 
-  block.innerHTML = `
-    <div class="local-cmd-header">
-      <span class="tool-chevron">&#x25B8;</span>
-      <span class="local-cmd-summary">${esc(summary)}</span>
-    </div>
-    <div class="local-cmd-body">${marked.parse(inner)}</div>
-  `;
+  chip.innerHTML =
+    `<span class="c-status done">&#x2713;</span>` +
+    `<span class="c-name">local</span>` +
+    `<span class="c-path">${esc(summary)}</span>` +
+    `<div class="c-detail local-cmd-detail">${marked.parse(inner)}</div>`;
 
-  block.querySelector('.local-cmd-header').addEventListener('click', () => {
-    block.dataset.expanded = block.dataset.expanded === 'true' ? 'false' : 'true';
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'code-copy-btn';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(inner).then(() => {
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+  });
+  chip.querySelector('.c-detail').appendChild(copyBtn);
+
+  chip.addEventListener('click', () => {
+    chip.classList.toggle('expanded');
   });
 
-  addCopyButtons(block);
-  return block;
+  return chip;
 }
 
 const THINKING_TRUNCATE = 500;
@@ -880,11 +871,24 @@ function renderThinkingChip(thinkingText) {
     (needsMore ? `<span class="thinking-more" style="color:var(--accent);cursor:pointer;display:block;margin-top:4px;font-size:0.55rem">Show full thinking</span>` : '') +
     `</div>`;
 
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'code-copy-btn';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(thinkingText).then(() => {
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+  });
+  chip.querySelector('.c-detail').appendChild(copyBtn);
+
   chip.addEventListener('click', (e) => {
     if (e.target.classList.contains('thinking-more')) {
-      // Replace truncated with full text
+      // Replace truncated with full text, re-append copy button
       const detail = chip.querySelector('.c-detail');
       detail.textContent = thinkingText;
+      detail.appendChild(copyBtn);
       return;
     }
     chip.classList.toggle('expanded');
@@ -977,10 +981,15 @@ function renderMessages(messages) {
 
   el.innerHTML = '';
 
+  // Coalesce consecutive tool-call-only chips into one grid (Tetris packing).
+  // Text, user messages, or thinking breaks the run and starts a new grid.
+  let currentChipGrid = null;
+
   for (const msg of messages) {
     // Thinking chip — before content (thinking happened first, keeps visual position)
     const hasThinking = msg.thinking && msg.role === 'assistant';
     if (hasThinking) {
+      currentChipGrid = null; // thinking breaks chip run
       const grid = document.createElement('div');
       grid.className = 'chip-grid';
       const chip = renderThinkingChip(msg.thinking);
@@ -989,11 +998,15 @@ function renderMessages(messages) {
       el.appendChild(grid);
     }
 
-    // Text content
+    // Text content — breaks chip run
     if (msg.content !== null && msg.content !== undefined) {
+      currentChipGrid = null;
       // Local command output — render as collapsible block
-      if (msg.role === 'assistant' && msg.content.includes('<local-command-stdout>')) {
-        el.appendChild(renderLocalCommand(msg.content));
+      if (msg.role === 'user' && msg.content.includes('<local-command-stdout>')) {
+        const grid = document.createElement('div');
+        grid.className = 'chip-grid';
+        grid.appendChild(renderLocalCommand(msg.content));
+        el.appendChild(grid);
       } else {
         const div = document.createElement('div');
         if (msg.role === 'user' && msg.synthetic) {
@@ -1003,8 +1016,6 @@ function renderMessages(messages) {
           div.className = 'msg-user';
           div.innerHTML = renderUserBubble(msg.content);
           if (msg._msgId) div.dataset.msgId = msg._msgId;
-          if (msg.pending) div.dataset.pending = 'true';
-          else if (msg.queued) div.dataset.queued = 'true';
         } else {
           div.className = 'msg-assistant';
           div.innerHTML = marked.parse(trimText(msg.content));
@@ -1014,17 +1025,23 @@ function renderMessages(messages) {
       }
     }
 
-    // Tool calls — render as chip grid (after content)
+    // Tool calls — coalesce into shared grid when consecutive
     const hasTools = msg.tool_calls && msg.tool_calls.length;
     if (hasTools) {
-      const grid = document.createElement('div');
-      grid.className = 'chip-grid';
+      // Any expanded chip in this batch breaks the run (needs full width)
+      const anyExpanded = msg.tool_calls.some(tc => expandedChips.has(tc.name + '|' + (tc.input || '')));
+      if (anyExpanded) currentChipGrid = null;
+
+      if (!currentChipGrid) {
+        currentChipGrid = document.createElement('div');
+        currentChipGrid.className = 'chip-grid';
+        el.appendChild(currentChipGrid);
+      }
       for (const tc of msg.tool_calls) {
         const chip = renderChip(tc);
         if (expandedChips.has(chip.dataset.toolId)) chip.classList.add('expanded');
-        grid.appendChild(chip);
+        currentChipGrid.appendChild(chip);
       }
-      el.appendChild(grid);
     }
   }
 
@@ -1440,7 +1457,7 @@ function updateSendButton() {
     sendBtn.dataset.active = 'false';
     sendBtn.innerHTML = '&#x2191;';
   } else if (isDisconnected && isLive) {
-    // Live mode disconnected — allow send (queues as pending in WS, disabled in SSE)
+    // Live mode disconnected — allow send (disabled in SSE)
     sendBtn.dataset.stop = 'false';
     sendBtn.dataset.active = hasContent ? 'true' : 'false';
     sendBtn.innerHTML = '&#x2191;';
@@ -1455,22 +1472,8 @@ function updateSendButton() {
   }
 }
 
-// Undo state — tracks the last sent message so it can be recalled
-let undoTimer = null;
-let undoEl = null;
-
 // Staged deposits — files deposited on disk but not yet sent as prompt
 let stagedDeposits = [];
-
-function clearUndo() {
-  if (undoTimer) clearTimeout(undoTimer);
-  if (undoEl) {
-    undoEl.dataset.fading = 'true';
-    setTimeout(() => undoEl?.remove(), 300);
-  }
-  undoTimer = null;
-  undoEl = null;
-}
 
 // Send button tap
 sendBtn.addEventListener('click', () => {
@@ -1494,9 +1497,6 @@ sendBtn.addEventListener('click', () => {
       ssePostAbort(sseCurrentFolder);
     }
   } else if (hasContent) {
-    // Clear any previous undo
-    clearUndo();
-
     // Compose prompt: deposit notes first, then user text
     const parts = [];
     stagedDeposits.forEach(dep => {
@@ -1508,7 +1508,7 @@ sendBtn.addEventListener('click', () => {
 
     const msgId = 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
 
-    // Add message to DOM immediately as pending
+    // Add message to DOM immediately (optimistic)
     const bubble = document.createElement('div');
     bubble.className = 'msg-user';
     let bubbleHTML = '';
@@ -1521,69 +1521,18 @@ sendBtn.addEventListener('click', () => {
     if (userText) bubbleHTML += marked.parseInline(userText);
     bubble.innerHTML = bubbleHTML;
     bubble.dataset.msgId = msgId;
-    bubble.dataset.pending = 'true';
     msgEl.appendChild(bubble);
 
     // Also add to liveState so re-renders preserve it
     if (bridgeUrl) {
       liveState.messages.push({
         role: 'user', content: text, _msgId: msgId,
-        pending: true, queued: false,
       });
     }
 
-    // Send via SSE bridge — transition pending → queued/delivered on response
+    // Send via SSE bridge
     if (bridgeUrl && sseCurrentFolder) {
-      ssePostPrompt(sseCurrentFolder, text).then(result => {
-        const msg = liveState.messages.find(m => m._msgId === msgId);
-        if (!msg) return;
-        msg.pending = false;
-        if (result.queued) {
-          msg.queued = true;
-          bubble.dataset.pending = 'false';
-          bubble.dataset.queued = 'true';
-        } else if (result.delivered) {
-          // Delivered immediately — remove pending styling
-          msg.queued = false;
-          delete bubble.dataset.pending;
-          delete bubble.dataset.queued;
-        }
-      });
-    }
-
-    // Undo button — available briefly after send
-    {
-      const undo = document.createElement('div');
-      undo.className = 'msg-undo';
-      undo.dataset.msgId = msgId;
-      undo.innerHTML = '<button>undo</button>';
-      msgEl.appendChild(undo);
-      undoEl = undo;
-
-      // Capture state for undo restore
-      const savedText = ta.value.trim();
-      const savedDeposits = [...stagedDeposits];
-
-      undo.querySelector('button').addEventListener('click', () => {
-        // Remove from liveState
-        const li = liveState.messages.findIndex(m => m._msgId === msgId);
-        if (li !== -1) liveState.messages.splice(li, 1);
-        // Remove from DOM
-        bubble.remove();
-        undo.remove();
-        undoEl = null;
-        if (undoTimer) clearTimeout(undoTimer);
-        undoTimer = null;
-        ta.value = savedText;
-        stagedDeposits = savedDeposits;
-        renderStagedDeposits();
-        ta.style.height = 'auto';
-        ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
-        ta.focus();
-        updateSendButton();
-      });
-
-      // No timer — undo stays until message is flushed
+      ssePostPrompt(sseCurrentFolder, text);
     }
 
     // Clear staging
@@ -1606,17 +1555,39 @@ const slashSheet = document.getElementById('slashSheet');
 const slashList = document.getElementById('slashList');
 const slashBtn = document.getElementById('slashBtn');
 
-const LOCAL_SLASH_COMMANDS = [
-  { name: 'context', description: 'Show context window usage', local: true },
-  { name: 'cost', description: 'Show session cost', local: true },
-  { name: 'compact', description: 'Compact conversation history', local: true },
+// Bridge-level commands — always present, never reported by CC
+// (state-builder.ts LOCAL_CMDS is the separate set for tagging CC-reported locals)
+const BRIDGE_COMMANDS = [
   { name: 'abort', description: 'Kill hung Claude process', local: true },
   { name: 'exit', description: 'End session and return to lobby', local: true },
 ];
 
-function openSlashSheet() {
-  const cmds = liveState.slashCommands?.length ? liveState.slashCommands : LOCAL_SLASH_COMMANDS;
-  if (!cmds.length) return;
+// Shown before CC spawns (CC will send its own list including these + help, clear, skills)
+const FALLBACK_LOCAL_COMMANDS = [
+  { name: 'compact', description: 'Compact conversation history', local: true },
+  { name: 'context', description: 'Show context window usage', local: true },
+  { name: 'cost', description: 'Show session cost', local: true },
+];
+
+const slashSearchInput = document.getElementById('slashSearch');
+
+// Merge bridge commands + CC commands (or fallback), sorted: locals first, then alpha
+function getSlashCommands() {
+  const source = liveState.slashCommands?.length ? liveState.slashCommands : FALLBACK_LOCAL_COMMANDS;
+  const bridgeNames = new Set(BRIDGE_COMMANDS.map(c => c.name));
+  const merged = [...BRIDGE_COMMANDS, ...source.filter(c => !bridgeNames.has(c.name))];
+  merged.sort((a, b) => {
+    if (a.local && !b.local) return -1;
+    if (!a.local && b.local) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  return merged;
+}
+
+function renderSlashList(filter) {
+  const all = getSlashCommands();
+  const q = (filter || '').toLowerCase();
+  const cmds = q ? all.filter(c => c.name.includes(q) || (c.description || '').toLowerCase().includes(q)) : all;
 
   slashList.innerHTML = '';
   for (const cmd of cmds) {
@@ -1670,9 +1641,18 @@ function openSlashSheet() {
     });
     slashList.appendChild(row);
   }
-  slashSheet.classList.add('open');
 }
 
+function openSlashSheet() {
+  if (!getSlashCommands().length) return;
+  slashSearchInput.value = '';
+  renderSlashList('');
+  slashSheet.classList.add('open');
+  // Auto-focus after the sheet animates open
+  requestAnimationFrame(() => slashSearchInput.focus());
+}
+
+slashSearchInput.addEventListener('input', () => renderSlashList(slashSearchInput.value));
 slashBtn.addEventListener('click', openSlashSheet);
 
 // Close on backdrop tap

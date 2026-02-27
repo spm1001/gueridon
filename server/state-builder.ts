@@ -65,6 +65,8 @@ export type SSEDelta =
 
 // -- Constants --
 
+// CC-reported commands tagged local: true (auto-send in frontend).
+// Bridge-only commands (abort, exit) live in index.html BRIDGE_COMMANDS — not here.
 const LOCAL_CMDS = new Set(["context", "cost", "compact", "help", "clear"]);
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 
