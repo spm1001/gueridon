@@ -56,7 +56,7 @@ export type BridgeEvent =
   | { type: "handoff:stale"; folder: string; sessionId: string }
 
   // JSONL replay
-  | { type: "replay:ok"; folder: string; eventCount: number; sessionId?: string }
+  | { type: "replay:ok"; folder: string; eventCount: number; skippedLines?: number; sessionId?: string }
   | { type: "replay:fail"; folder: string; error: string; sessionId?: string }
 
   // Push notifications
@@ -65,6 +65,7 @@ export type BridgeEvent =
   | { type: "push:subscriptions-load-error" }
   | { type: "push:subscribe"; total: number }
   | { type: "push:unsubscribe"; total: number }
+  | { type: "push:send-ok"; sent: number; tag: string }
   | { type: "push:send-fail"; endpoint: string; error: string }
   | { type: "push:expired-cleanup"; count: number }
 
@@ -79,12 +80,16 @@ export type BridgeEvent =
   | { type: "share:created"; folder: string; files: number }
 
   // Request handling
+  | { type: "request:http"; method: string; url: string; status: number; durationMs: number }
   | { type: "request:rejected"; reason: string; method: string; url: string }
   | { type: "request:error"; action: string; error: string }
 
   // Server lifecycle
   | { type: "server:start"; port: number; scanRoot: string }
   | { type: "server:shutdown"; signal: string }
+  | { type: "server:shutdown-complete" }
+  | { type: "server:uncaught-exception"; error: string }
+  | { type: "server:unhandled-rejection"; error: string }
   | { type: "server:persist-error"; error: string };
 
 // -- Level mapping --
@@ -121,16 +126,21 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "push:subscriptions-load-error": "warn",
   "push:subscribe": "info",
   "push:unsubscribe": "info",
+  "push:send-ok": "debug",
   "push:send-fail": "warn",
   "push:expired-cleanup": "info",
   "folders:scan-error": "warn",
   "client:error": "warn",
   "upload:deposited": "info",
   "share:created": "info",
+  "request:http": "debug",
   "request:rejected": "warn",
   "request:error": "error",
   "server:start": "info",
   "server:shutdown": "info",
+  "server:shutdown-complete": "info",
+  "server:uncaught-exception": "error",
+  "server:unhandled-rejection": "error",
   "server:persist-error": "error",
 };
 

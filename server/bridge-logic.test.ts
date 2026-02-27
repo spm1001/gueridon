@@ -465,11 +465,11 @@ describe("parseSessionJSONL", () => {
   }
 
   it("returns empty array for empty input", () => {
-    expect(parseSessionJSONL("")).toEqual([]);
+    expect(parseSessionJSONL("").events).toEqual([]);
   });
 
   it("returns empty array for whitespace-only input", () => {
-    expect(parseSessionJSONL("  \n  \n  ")).toEqual([]);
+    expect(parseSessionJSONL("  \n  \n  ").events).toEqual([]);
   });
 
   it("parses simple text conversation (user + assistant)", () => {
@@ -478,7 +478,7 @@ describe("parseSessionJSONL", () => {
       assistantLine([{ type: "text", text: "Hi there!" }]),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
 
     // user + assistant + synthetic result = 3
     expect(result).toHaveLength(3);
@@ -507,7 +507,7 @@ describe("parseSessionJSONL", () => {
       ),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
 
     // One merged assistant + synthetic result = 2
     expect(result).toHaveLength(2);
@@ -539,7 +539,7 @@ describe("parseSessionJSONL", () => {
       ),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
 
     expect(result).toHaveLength(5);
 
@@ -558,7 +558,7 @@ describe("parseSessionJSONL", () => {
       userLine("hi"),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(result).toHaveLength(1);
     expect(parse(result[0]).event.type).toBe("user");
   });
@@ -569,7 +569,7 @@ describe("parseSessionJSONL", () => {
       userLine("hi"),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(result).toHaveLength(1);
   });
 
@@ -579,7 +579,7 @@ describe("parseSessionJSONL", () => {
       assistantLine([{ type: "text", text: "ok" }]),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(result).toHaveLength(2);
     expect(parse(result[0]).event.type).toBe("assistant");
   });
@@ -590,14 +590,14 @@ describe("parseSessionJSONL", () => {
       userLine("real message"),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(result).toHaveLength(1);
     expect(parse(result[0]).event.message.content).toBe("real message");
   });
 
   it("preserves user string content as-is", () => {
     const input = userLine("hello world");
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(parse(result[0]).event.message.content).toBe("hello world");
   });
 
@@ -610,7 +610,7 @@ describe("parseSessionJSONL", () => {
       },
     });
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     const parsed = parse(result[0]);
     expect(Array.isArray(parsed.event.message.content)).toBe(true);
     expect(parsed.event.message.content[0].type).toBe("tool_result");
@@ -624,7 +624,7 @@ describe("parseSessionJSONL", () => {
       assistantLine([{ type: "text", text: "second answer" }], { id: "msg_b" }),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(result).toHaveLength(5);
 
     const types = result.slice(0, 4).map((r) => parse(r).event.type);
@@ -642,7 +642,7 @@ describe("parseSessionJSONL", () => {
       { usage: { input_tokens: 5000, output_tokens: 500, cache_read_input_tokens: 10000 } },
     );
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     const synthetic = parse(result[result.length - 1]);
 
     expect(synthetic.source).toBe("cc");
@@ -654,7 +654,7 @@ describe("parseSessionJSONL", () => {
 
   it("does not append synthetic result when no assistant messages", () => {
     const input = userLine("just a question with no answer");
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(result).toHaveLength(1);
     expect(parse(result[0]).event.type).toBe("user");
   });
@@ -667,7 +667,7 @@ describe("parseSessionJSONL", () => {
       assistantLine([{ type: "text", text: "valid reply" }]),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(result).toHaveLength(3);
   });
 
@@ -684,7 +684,7 @@ describe("parseSessionJSONL", () => {
       userLine("follow up"),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     expect(result).toHaveLength(3);
     const assistant = parse(result[0]);
     expect(assistant.event.type).toBe("assistant");
@@ -710,7 +710,7 @@ describe("parseSessionJSONL", () => {
       ),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
 
     // Should be: 1 merged assistant + 1 user + 1 synthetic result = 3
     const events = result.map((r) => parse(r));
@@ -744,7 +744,7 @@ describe("parseSessionJSONL", () => {
       assistantLine([{ type: "text", text: "Done" }], { id: "msg_multi" }),
     ].join("\n");
 
-    const result = parseSessionJSONL(input);
+    const { events: result } = parseSessionJSONL(input);
     const events = result.map((r) => parse(r));
     const assistants = events.filter((e) => e.event.type === "assistant");
     const users = events.filter((e) => e.event.type === "user");
@@ -753,6 +753,33 @@ describe("parseSessionJSONL", () => {
     expect(assistants).toHaveLength(1);
     expect(users).toHaveLength(2);
     expect(assistants[0].event.message.content).toHaveLength(3);
+  });
+
+  it("counts skipped lines for corrupted JSON", () => {
+    const input = [
+      userLine("hello"),
+      "this is not valid json",
+      "neither is {this",
+      assistantLine([{ type: "text", text: "Hi" }]),
+    ].join("\n");
+
+    const { events, skippedLines } = parseSessionJSONL(input);
+    expect(skippedLines).toBe(2);
+    expect(events.length).toBeGreaterThan(0);
+  });
+
+  it("returns zero skippedLines for clean input", () => {
+    const input = [
+      userLine("hello"),
+      assistantLine([{ type: "text", text: "Hi" }]),
+    ].join("\n");
+
+    const { skippedLines } = parseSessionJSONL(input);
+    expect(skippedLines).toBe(0);
+  });
+
+  it("returns zero skippedLines for empty input", () => {
+    expect(parseSessionJSONL("").skippedLines).toBe(0);
   });
 });
 
@@ -767,12 +794,12 @@ describe("parseSessionJSONL with real JSONL fixture", () => {
   }
 
   it("parses the fixture without errors", () => {
-    const result = parseSessionJSONL(fixtureContent);
+    const { events: result } = parseSessionJSONL(fixtureContent);
     expect(result.length).toBeGreaterThan(0);
   });
 
   it("skips queue-operation, progress, and isMeta lines", () => {
-    const result = parseSessionJSONL(fixtureContent);
+    const { events: result } = parseSessionJSONL(fixtureContent);
     const types = result.map((r) => parse(r).event.type);
     expect(types).not.toContain("queue-operation");
     expect(types).not.toContain("progress");
@@ -785,7 +812,7 @@ describe("parseSessionJSONL with real JSONL fixture", () => {
   });
 
   it("produces correct event sequence: user, assistant(tool), user(tool_result), assistant(tool), user(tool_result), assistant(text), result", () => {
-    const result = parseSessionJSONL(fixtureContent);
+    const { events: result } = parseSessionJSONL(fixtureContent);
 
     expect(result).toHaveLength(7);
 
@@ -814,7 +841,7 @@ describe("parseSessionJSONL with real JSONL fixture", () => {
   });
 
   it("preserves envelope fields needed by the adapter", () => {
-    const result = parseSessionJSONL(fixtureContent);
+    const { events: result } = parseSessionJSONL(fixtureContent);
     const assistant = parse(result[1]);
 
     expect(assistant.event.message.id).toBe("msg_01HeZYXk68NFgKUpAE4MeM9E");
@@ -824,7 +851,7 @@ describe("parseSessionJSONL with real JSONL fixture", () => {
   });
 
   it("synthetic result uses the last assistant's usage data", () => {
-    const result = parseSessionJSONL(fixtureContent);
+    const { events: result } = parseSessionJSONL(fixtureContent);
     const synthetic = parse(result[result.length - 1]);
 
     expect(synthetic.event.result.usage.input_tokens).toBe(1);
@@ -833,7 +860,7 @@ describe("parseSessionJSONL with real JSONL fixture", () => {
   });
 
   it("all output events have source: cc", () => {
-    const result = parseSessionJSONL(fixtureContent);
+    const { events: result } = parseSessionJSONL(fixtureContent);
     for (const r of result) {
       expect(parse(r).source).toBe("cc");
     }
@@ -1481,7 +1508,7 @@ describe("parseSessionJSONL → StateBuilder replay integration", () => {
 
   it("interleaved JSONL produces no duplicate messages after full pipeline", () => {
     // Step 1: Parse JSONL (merge interleaved assistant events by ID)
-    const parsed = parseSessionJSONL(fixtureContent);
+    const { events: parsed } = parseSessionJSONL(fixtureContent);
 
     // Step 2: Replay through StateBuilder
     const sb = new StateBuilder("test-session", "test-project");
@@ -1510,7 +1537,7 @@ describe("parseSessionJSONL → StateBuilder replay integration", () => {
   });
 
   it("each unique message ID produces exactly one state message", () => {
-    const parsed = parseSessionJSONL(fixtureContent);
+    const { events: parsed } = parseSessionJSONL(fixtureContent);
     const sb = new StateBuilder("test-session", "test-project");
     sb.replayFromJSONL(parsed);
     const state = sb.getState();
@@ -1521,7 +1548,7 @@ describe("parseSessionJSONL → StateBuilder replay integration", () => {
   });
 
   it("getTurnMetrics returns real token counts after replay", () => {
-    const parsed = parseSessionJSONL(fixtureContent);
+    const { events: parsed } = parseSessionJSONL(fixtureContent);
     const sb = new StateBuilder("test-session", "test-project");
     sb.replayFromJSONL(parsed);
     const metrics = sb.getTurnMetrics();

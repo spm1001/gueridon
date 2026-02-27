@@ -284,9 +284,10 @@ export function buildCCArgs(
  * Appends a synthetic `result` event with the last assistant's usage data so the
  * adapter's `handleResult()` sets `_lastInputTokens` and the gauge works after replay.
  */
-export function parseSessionJSONL(content: string): string[] {
+export function parseSessionJSONL(content: string): { events: string[]; skippedLines: number } {
   const lines = content.split("\n");
   let lastUsage: any = null;
+  let skippedLines = 0;
 
   // Merge assistant messages by ID across the full JSONL — user events
   // (tool_results) interleave freely and must not break the merge.
@@ -306,6 +307,7 @@ export function parseSessionJSONL(content: string): string[] {
     try {
       parsed = JSON.parse(trimmed);
     } catch {
+      skippedLines++;
       continue; // skip corrupted lines
     }
 
@@ -358,7 +360,7 @@ export function parseSessionJSONL(content: string): string[] {
     );
   }
 
-  return result;
+  return { events: result, skippedLines };
 }
 
 // --- Active process map ---

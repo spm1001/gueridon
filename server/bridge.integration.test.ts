@@ -576,4 +576,52 @@ describe("bridge HTTP smoke tests", () => {
     });
     expect(res.status).toBe(401);
   });
+
+  // -- Logging sweep (gdn-mudila) --
+
+  it("GET /status includes stderrBuffer per session", async () => {
+    const res = await fetch(`${baseUrl}/status`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    // Every session object should have a stderrBuffer array
+    for (const session of data.sessions) {
+      expect(session).toHaveProperty("stderrBuffer");
+      expect(Array.isArray(session.stderrBuffer)).toBe(true);
+    }
+  });
+
+  it("CORS rejection emits request:rejected event to stderr", async () => {
+    // Clear the slate — record stderr position
+    const before = stderrLines.length;
+
+    // Send a cross-origin request from an unknown origin
+    await fetch(baseUrl, { headers: { Origin: "https://evil.example.com" } });
+
+    // Give the event bus a moment to flush
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Look for request:rejected in the new stderr lines
+    const newLines = stderrLines.slice(before);
+    const rejection = newLines.find((line) => line.includes("request:rejected") && line.includes("cors-origin"));
+    expect(rejection).toBeTruthy();
+  });
+
+  it("request:http events include requestId for debug tracing", async () => {
+    // This test verifies the correlation ID infrastructure works end-to-end.
+    // We need LOG_LEVEL=debug to see request:http events, which our test bridge
+    // doesn't set by default. Instead, we verify request:rejected (warn level)
+    // includes a requestId, since it flows through the same AsyncLocalStorage.
+    const before = stderrLines.length;
+
+    await fetch(baseUrl, { headers: { Origin: "https://evil.example.com" } });
+    await new Promise((r) => setTimeout(r, 100));
+
+    const newLines = stderrLines.slice(before);
+    const rejection = newLines.find((line) => line.includes("request:rejected"));
+    expect(rejection).toBeTruthy();
+
+    const parsed = JSON.parse(rejection!);
+    expect(parsed.requestId).toBeTruthy();
+    expect(parsed.requestId).toHaveLength(8); // 4 random bytes → 8 hex chars
+  });
 });

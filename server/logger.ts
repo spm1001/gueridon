@@ -6,7 +6,7 @@
  *   LOG_FILE=/path/to/file           (optional, appends)
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { subscribe } from "./event-bus.ts";
 import { levelFor, type BridgeEvent, type LogLevel } from "./events.ts";
 
@@ -33,11 +33,9 @@ function handleEvent(event: BridgeEvent): void {
   process.stderr.write(line + "\n");
 
   if (logFile) {
-    try {
-      appendFileSync(logFile, line + "\n");
-    } catch {
+    appendFile(logFile, line + "\n").catch(() => {
       // Don't recurse — just drop the line if file write fails
-    }
+    });
   }
 }
 

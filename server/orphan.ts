@@ -12,7 +12,7 @@ import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
 import { KILL_ESCALATION_MS } from "./bridge-logic.js";
-import { emit } from "./event-bus.js";
+import { emit, errorDetail } from "./event-bus.js";
 
 export const SESSION_FILE = join(homedir(), ".config", "gueridon", "sse-sessions.json");
 
@@ -53,7 +53,7 @@ export function persistSessions(sessions: Iterable<PersistableSession>): void {
       mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
       await writeFile(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
     } catch (err) {
-      emit({ type: "server:persist-error", error: String(err) });
+      emit({ type: "server:persist-error", error: errorDetail(err) });
     }
   }, 500);
 }

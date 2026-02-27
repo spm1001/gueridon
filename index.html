@@ -63,6 +63,7 @@
 // Fire-and-forget — never blocks or throws.
 {
   const reported = new Set();
+  window.reportError = reportError;
   function reportError(message, stack) {
     const key = message + (stack || '');
     if (reported.has(key)) return;
@@ -482,9 +483,10 @@ async function ssePostSession(folderName, sessionId) {
       headers: { 'Content-Type': 'application/json', 'X-Client-ID': sseClientId },
       body: JSON.stringify(body),
     });
-    if (!res.ok) console.error('[bb] POST /session failed:', res.status);
+    if (!res.ok) { console.error('[bb] POST /session failed:', res.status); reportError('POST /session failed: ' + res.status); }
   } catch (err) {
     console.error('[bb] POST /session error:', err);
+    reportError('POST /session error: ' + err);
   }
 }
 
@@ -497,12 +499,14 @@ async function ssePostPrompt(folderName, text) {
     });
     if (!res.ok) {
       console.error('[bb] POST /prompt failed:', res.status);
+      reportError('POST /prompt failed: ' + res.status);
       return { ok: false };
     }
     const data = await res.json();
     return { ok: true, queued: !!data.queued, delivered: !!data.delivered };
   } catch (err) {
     console.error('[bb] POST /prompt error:', err);
+    reportError('POST /prompt error: ' + err);
     return { ok: false };
   }
 }
@@ -515,6 +519,7 @@ async function ssePostAbort(folderName) {
     });
   } catch (err) {
     console.error('[bb] POST /abort error:', err);
+    reportError('POST /abort error: ' + err);
   }
 }
 
@@ -526,6 +531,7 @@ async function ssePostExit(folderName) {
     });
   } catch (err) {
     console.error('[bb] POST /exit error:', err);
+    reportError('POST /exit error: ' + err);
   }
 }
 
@@ -1750,7 +1756,7 @@ function uploadFiles(files) {
       renderStagedDeposits();
       updateSendButton();
     })
-    .catch(() => showStagedError('Upload failed'))
+    .catch((err) => { reportError('POST /upload error: ' + err); showStagedError('Upload failed'); })
     .finally(() => fileBtn.classList.remove('uploading'));
 }
 

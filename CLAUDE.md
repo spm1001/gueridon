@@ -62,6 +62,7 @@ The bridge is split across several modules in `server/`:
 | `push.ts` | Web Push (VAPID) notification delivery |
 | `upload.ts` | Upload validation, MIME detection via magic bytes, manifest building |
 | `event-bus.ts` | Typed event emitter decoupling event production from consumption |
+| `request-context.ts` | Per-request AsyncLocalStorage — auto-attaches correlation IDs to events |
 | `events.ts` | `BridgeEvent` type definitions, severity level mapping |
 | `logger.ts` | JSON-lines structured logger subscribed to event bus |
 | `status-buffer.ts` | Circular buffer of recent events for the `/status` debug endpoint |

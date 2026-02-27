@@ -2,7 +2,7 @@ import { readdir, stat, readFile, writeFile, access, open as fsOpen } from "node
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import type { ActiveSessionInfo } from "./bridge-logic.js";
-import { emit } from "./event-bus.js";
+import { emit, errorDetail } from "./event-bus.js";
 
 // --- Shared tail-read utility ---
 
@@ -386,7 +386,7 @@ export async function scanFolders(
   try {
     entries = await readdir(SCAN_ROOT);
   } catch (err) {
-    emit({ type: "folders:scan-error", scanRoot: SCAN_ROOT, error: String(err) });
+    emit({ type: "folders:scan-error", scanRoot: SCAN_ROOT, error: errorDetail(err) });
     return [];
   }
 

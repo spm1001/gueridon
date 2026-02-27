@@ -12,7 +12,7 @@ import webpush from "web-push";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { emit } from "./event-bus.js";
+import { emit, errorDetail } from "./event-bus.js";
 
 const CONFIG_DIR = join(homedir(), ".config", "gueridon");
 const VAPID_PATH = join(CONFIG_DIR, "vapid.json");
@@ -39,7 +39,7 @@ function init(): void {
     vapidReady = true;
     emit({ type: "push:init", status: "configured" });
   } catch (e) {
-    emit({ type: "push:init", status: "error", detail: String(e) });
+    emit({ type: "push:init", status: "error", detail: errorDetail(e) });
     return;
   }
   loadSubscriptions();
@@ -96,10 +96,12 @@ export async function sendPush(payload: {
 
   const data = JSON.stringify(payload);
   const expired: string[] = [];
+  let sent = 0;
 
   for (const [endpoint, sub] of subscriptions) {
     try {
       await webpush.sendNotification(sub, data);
+      sent++;
     } catch (err: unknown) {
       const statusCode = (err as { statusCode?: number }).statusCode;
       if (statusCode === 410 || statusCode === 404 || statusCode === 403) {
@@ -107,7 +109,7 @@ export async function sendPush(payload: {
         // 403 BadJwtToken from Apple means the subscription needs re-creating.
         expired.push(endpoint);
       } else {
-        emit({ type: "push:send-fail", endpoint: endpoint.slice(0, 60), error: String(err) });
+        emit({ type: "push:send-fail", endpoint: endpoint.slice(0, 60), error: errorDetail(err) });
       }
     }
   }
@@ -116,6 +118,10 @@ export async function sendPush(payload: {
     for (const ep of expired) subscriptions.delete(ep);
     saveSubscriptions();
     emit({ type: "push:expired-cleanup", count: expired.length });
+  }
+
+  if (sent > 0) {
+    emit({ type: "push:send-ok", sent, tag: payload.tag });
   }
 }
 

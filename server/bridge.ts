@@ -53,13 +53,14 @@ import {
 
 import { StateBuilder } from "./state-builder.js";
 import { getVapidPublicKey, pushTurnComplete, pushAskUser, addSubscription, removeSubscription } from "./push.js";
-import { emit } from "./event-bus.js";
+import { emit, errorDetail } from "./event-bus.js";
 import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
 import { buildDepositNote, buildShareDepositNote } from "./upload.js";
 import { depositFiles } from "./deposit.js";
 import { persistSessions, reapOrphans } from "./orphan.js";
 import { generateFolderName } from "./fun-names.js";
+import { requestContext, generateRequestId } from "./request-context.js";
 
 // -- Types --
 
@@ -264,7 +265,7 @@ function startGraceTimer(session: Session): void {
   session.graceTimer = setTimeout(() => {
     emit({ type: "grace:expire", folder: session.folderName, sessionId: session.id });
     if (session.process) {
-      killWithEscalation(session.process);
+      killWithEscalation(session.process, { folder: session.folderName, reason: "grace-expire" });
     }
     sessions.delete(session.folder);
   }, GRACE_MS);
@@ -321,7 +322,7 @@ function spawnCC(session: Session): void {
     session.initTimer = null;
     if (session.process) {
       emit({ type: "init:timeout", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
-      killWithEscalation(session.process);
+      killWithEscalation(session.process, { folder: session.folderName, reason: "init-timeout" });
       broadcastToSession(session, "delta", {
         type: "status",
         status: "error",
@@ -437,7 +438,7 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
     if (delta.type === "ask_user" && session.clients.size === 0) {
       session.pushedAskThisTurn = true;
       pushAskUser(session.folderName).catch((err) =>
-        emit({ type: "push:send-fail", endpoint: "ask-user", error: String(err) }),
+        emit({ type: "push:send-fail", endpoint: "ask-user", error: errorDetail(err)}),
       );
     }
   }
@@ -519,7 +520,7 @@ async function onTurnComplete(session: Session): Promise<void> {
   // Claude needs them, a "finished" buzz seconds later is noise.
   if (session.clients.size === 0 && !session.pushedAskThisTurn) {
     pushTurnComplete(session.folderName, session.shareContext).catch((err) =>
-      emit({ type: "push:send-fail", endpoint: "turn-complete", error: String(err) }),
+      emit({ type: "push:send-fail", endpoint: "turn-complete", error: errorDetail(err)}),
     );
   }
   session.pushedAskThisTurn = false;
@@ -576,9 +577,10 @@ function deliverPrompt(
     session.turnStartedAt = Date.now();
     session.hadContentThisTurn = false;
 
+    emit({ type: "turn:start", folder: session.folderName, sessionId: session.id });
     emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id });
   } catch (err) {
-    emit({ type: "process:stdin-error", folder: session.folderName, sessionId: session.id, error: String(err) });
+    emit({ type: "process:stdin-error", folder: session.folderName, sessionId: session.id, error: errorDetail(err)});
     broadcastToSession(session, "delta", {
       type: "status",
       status: "error",
@@ -589,12 +591,15 @@ function deliverPrompt(
 
 // -- Kill with escalation --
 
-function killWithEscalation(proc: ChildProcess): void {
+function killWithEscalation(proc: ChildProcess, context?: { folder: string; reason: string }): void {
   if (!proc.pid) return;
   proc.kill("SIGTERM");
   const timer = setTimeout(() => {
     try {
       process.kill(proc.pid!, 0); // check alive
+      if (context) {
+        emit({ type: "process:kill", folder: context.folder, pid: proc.pid!, reason: `${context.reason} (sigkill-escalation)` });
+      }
       proc.kill("SIGKILL");
     } catch { /* already gone */ }
   }, KILL_ESCALATION_MS);
@@ -662,9 +667,9 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
     try {
       const jsonlPath = getSessionJSONLPath(folderPath, resolution.sessionId);
       const content = await readFile(jsonlPath, "utf-8");
-      const events = parseSessionJSONL(content);
+      const { events, skippedLines } = parseSessionJSONL(content);
       session.stateBuilder.replayFromJSONL(events);
-      emit({ type: "replay:ok", folder: folderName, eventCount: events.length });
+      emit({ type: "replay:ok", folder: folderName, eventCount: events.length, ...(skippedLines > 0 && { skippedLines }) });
 
       // Any resumable session should auto-resume after bridge restart.
       // CC was killed (orphan reap or shutdown) — the user expects continuity.
@@ -677,7 +682,7 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
         midTurn: replayState.status === "working",
       });
     } catch (err) {
-      emit({ type: "replay:fail", folder: folderName, error: String(err) });
+      emit({ type: "replay:fail", folder: folderName, error: errorDetail(err)});
     }
   }
 
@@ -734,7 +739,7 @@ async function tearDownSession(session: Session): Promise<void> {
   if (session.initTimer) { clearTimeout(session.initTimer); session.initTimer = null; }
 
   if (session.process) {
-    killWithEscalation(session.process);
+    killWithEscalation(session.process, { folder: session.folderName, reason: "teardown" });
     // Give it a moment to die so the exit handler fires
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -785,11 +790,11 @@ async function createSessionWithId(
     try {
       const jsonlPath = getSessionJSONLPath(folderPath, sessionId);
       const content = await readFile(jsonlPath, "utf-8");
-      const events = parseSessionJSONL(content);
+      const { events, skippedLines } = parseSessionJSONL(content);
       session.stateBuilder.replayFromJSONL(events);
-      emit({ type: "replay:ok", folder: folderName, eventCount: events.length, sessionId });
+      emit({ type: "replay:ok", folder: folderName, eventCount: events.length, ...(skippedLines > 0 && { skippedLines }), sessionId });
     } catch (err) {
-      emit({ type: "replay:fail", folder: folderName, error: String(err), sessionId });
+      emit({ type: "replay:fail", folder: folderName, error: errorDetail(err), sessionId });
     }
   }
 
@@ -892,6 +897,7 @@ async function handlePrompt(
   try {
     parsed = JSON.parse(body);
   } catch {
+    emit({ type: "request:rejected", reason: "prompt-parse-error", method: "POST", url: `/prompt/${folderPath.split("/").pop()}` });
     res.writeHead(400).end(JSON.stringify({ error: "Invalid JSON" }));
     return;
   }
@@ -940,7 +946,7 @@ async function handleAbort(folderPath: string, res: ServerResponse): Promise<voi
     return;
   }
 
-  killWithEscalation(session.process);
+  killWithEscalation(session.process, { folder: session.folderName, reason: "abort" });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ aborted: true }));
 }
@@ -957,7 +963,7 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
 
   // Kill process if running
   if (session.process) {
-    killWithEscalation(session.process);
+    killWithEscalation(session.process, { folder: session.folderName, reason: "exit" });
   }
 
   // Notify clients
@@ -982,6 +988,7 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
 async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPath: string, stage = false): Promise<void> {
   const session = sessions.get(folderPath);
   if (!session) {
+    emit({ type: "request:rejected", reason: "upload-no-session", method: req.method!, url: req.url || "/upload" });
     res.writeHead(400).end(JSON.stringify({ error: "No active session for folder" }));
     return;
   }
@@ -1005,6 +1012,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
     res.end(JSON.stringify({ folder: depositFolder, manifest, warnings: manifest.warnings }));
   } catch (err: any) {
     const status = err.message === "No files in upload" ? 400 : 500;
+    emit({ type: "request:rejected", reason: `upload-error: ${err.message}`, method: req.method!, url: req.url || "/upload" });
     res.writeHead(status).end(JSON.stringify({ error: err.message || "Upload failed" }));
   }
 }
@@ -1041,6 +1049,7 @@ async function handleShareUpload(req: IncomingMessage, res: ServerResponse): Pro
     const status = err.message === "No files in upload" ? 400
       : err.message === "Upload too large" ? 413
       : 500;
+    emit({ type: "request:rejected", reason: `share-upload-error: ${err.message}`, method: req.method!, url: req.url || "/upload" });
     res.writeHead(status).end(JSON.stringify({ error: err.message || "Share upload failed" }));
   }
 }
@@ -1119,8 +1128,10 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse): boolean {
   return false;
 }
 
-const server = createServer(async (req, res) => {
+const server = createServer((req, res) => {
+  requestContext.run({ requestId: generateRequestId() }, async () => {
   if (!setCorsHeaders(req, res)) {
+    emit({ type: "request:rejected", reason: "cors-origin", method: req.method || "UNKNOWN", url: req.url || "/" });
     res.writeHead(403).end("Forbidden: origin not allowed");
     return;
   }
@@ -1132,6 +1143,14 @@ const server = createServer(async (req, res) => {
 
 
   const url = new URL(req.url!, `http://localhost`);
+
+  // Debug-level request logging — skip noisy endpoints
+  if (url.pathname !== "/events" && url.pathname !== "/status") {
+    const start = Date.now();
+    res.on("finish", () => {
+      emit({ type: "request:http", method: req.method!, url: url.pathname, status: res.statusCode, durationMs: Date.now() - start });
+    });
+  }
 
   // GET /events — SSE connection
   if (req.method === "GET" && url.pathname === "/events") {
@@ -1160,6 +1179,7 @@ const server = createServer(async (req, res) => {
       turnInProgress: s.turnInProgress,
       clients: s.clients.size,
       queueDepth: s.promptQueue.length,
+      stderrBuffer: s.stderrBuffer,
     }));
     const mem = process.memoryUsage();
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -1214,7 +1234,7 @@ const server = createServer(async (req, res) => {
           return;
       }
     } catch (err) {
-      emit({ type: "request:error", action, error: String(err) });
+      emit({ type: "request:error", action, error: errorDetail(err)});
       if (!res.headersSent) {
         res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
       }
@@ -1226,6 +1246,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/push/subscribe") {
     const pushToken = req.headers["x-push-token"] as string | undefined;
     if (!pushToken || !validPushTokens.has(pushToken)) {
+      emit({ type: "request:rejected", reason: "push-token-invalid", method: "POST", url: "/push/subscribe" });
       res.writeHead(401).end(JSON.stringify({ error: "Invalid or missing push token" }));
       return;
     }
@@ -1249,6 +1270,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/push/unsubscribe") {
     const pushToken = req.headers["x-push-token"] as string | undefined;
     if (!pushToken || !validPushTokens.has(pushToken)) {
+      emit({ type: "request:rejected", reason: "push-token-invalid", method: "POST", url: "/push/unsubscribe" });
       res.writeHead(401).end(JSON.stringify({ error: "Invalid or missing push token" }));
       return;
     }
@@ -1274,6 +1296,7 @@ const server = createServer(async (req, res) => {
     const now = Date.now();
     clientErrorTimestamps = clientErrorTimestamps.filter((t) => now - t < 60_000);
     if (clientErrorTimestamps.length >= 10) {
+      emit({ type: "request:rejected", reason: "rate-limited", method: "POST", url: "/client-error" });
       res.writeHead(429).end(JSON.stringify({ error: "Rate limited" }));
       return;
     }
@@ -1294,6 +1317,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/upload") {
     const mode = req.headers["x-gueridon-mode"];
     if (mode !== "new-session") {
+      emit({ type: "request:rejected", reason: "upload-missing-mode-header", method: "POST", url: "/upload" });
       res.writeHead(400).end(JSON.stringify({ error: "POST /upload requires X-Gueridon-Mode: new-session header" }));
       return;
     }
@@ -1309,6 +1333,7 @@ const server = createServer(async (req, res) => {
     const folderParam = decodeURIComponent(uploadMatch[1]);
     const folderPath = resolveFolder(folderParam);
     if (!folderPath) {
+      emit({ type: "request:rejected", reason: "upload-invalid-folder", method: "POST", url: url.pathname });
       res.writeHead(400).end(JSON.stringify({ error: "Invalid folder" }));
       return;
     }
@@ -1321,6 +1346,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && serveStatic(url.pathname, res)) return;
 
   res.writeHead(404).end("Not found");
+  });
 });
 
 // -- Ping loop --
@@ -1352,7 +1378,7 @@ function shutdown(signal: string): void {
     };
     writeFileSync(SHUTDOWN_FILE, JSON.stringify(ctx, null, 2));
   } catch (err) {
-    emit({ type: "server:persist-error", error: String(err) });
+    emit({ type: "server:persist-error", error: errorDetail(err)});
   }
 
   // Stop accepting new connections
@@ -1368,7 +1394,7 @@ function shutdown(signal: string): void {
     if (session.initTimer) clearTimeout(session.initTimer);
     if (session.process) {
       emit({ type: "process:kill", folder: session.folderName, pid: session.process.pid!, reason: "shutdown" });
-      killWithEscalation(session.process);
+      killWithEscalation(session.process, { folder: session.folderName, reason: "shutdown" });
     }
   }
 
@@ -1384,11 +1410,23 @@ function shutdown(signal: string): void {
   // survive this shutdown. The next bridge's reapOrphans() needs the file.
 
   // Give kill escalation time to fire if needed, then exit
-  setTimeout(() => process.exit(0), KILL_ESCALATION_MS + 500).unref();
+  setTimeout(() => {
+    emit({ type: "server:shutdown-complete" });
+    process.exit(0);
+  }, KILL_ESCALATION_MS + 500).unref();
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+process.on("uncaughtException", (err) => {
+  emit({ type: "server:uncaught-exception", error: errorDetail(err) });
+  shutdown("uncaughtException");
+});
+
+process.on("unhandledRejection", (reason) => {
+  emit({ type: "server:unhandled-rejection", error: errorDetail(reason) });
+});
 
 // -- Start --
 
