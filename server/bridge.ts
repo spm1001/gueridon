@@ -1071,6 +1071,7 @@ const STATIC_FILES: Record<string, { file: string; mime: string }> = {
   "/render-utils.js": { file: "client/render-utils.cjs", mime: "application/javascript" },
   "/render-chips.js": { file: "client/render-chips.cjs", mime: "application/javascript" },
   "/render-messages.js": { file: "client/render-messages.cjs", mime: "application/javascript" },
+  "/render-chrome.js": { file: "client/render-chrome.cjs", mime: "application/javascript" },
 };
 
 // CSP: restrict what index.html can load (gdn-tilozu).

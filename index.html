@@ -65,6 +65,7 @@
 <script src="/render-utils.js"></script>
 <script src="/render-chips.js"></script>
 <script src="/render-messages.js"></script>
+<script src="/render-chrome.js"></script>
 <script>
 // === Client error reporting ===
 // Captures unhandled errors and promise rejections, sends to bridge.
@@ -694,22 +695,14 @@ function sseConnectFolder(folder, sessionId) {
 }
 
 let sseRenderQueued = false;
-function updatePlaceholder() {
-  const ta = document.querySelector('.input-field');
-  if (!sseCurrentFolder) {
-    ta.placeholder = 'Choose a folder…';
-  } else if (liveState.connection === 'disconnected') {
-    ta.placeholder = 'Reconnecting…';
-  } else if (liveState.status === 'working') {
-    const activity = liveState._activity;
-    ta.placeholder = activity === 'writing' ? 'Claude is writing…' :
-                     activity === 'tool' ? 'Claude is editing…' :
-                     'Claude is thinking…';
-  } else {
-    const model = liveState.session?.model;
-    const short = model ? model.replace('claude-', '').replace(/-\d{8}$/, '') : '';
-    ta.placeholder = short ? `Message ${short}…` : 'Message Claude…';
-  }
+function refreshPlaceholder() {
+  updatePlaceholder(document.querySelector('.input-field'), {
+    currentFolder: sseCurrentFolder,
+    connection: liveState.connection,
+    status: liveState.status,
+    activity: liveState._activity,
+    model: liveState.session?.model,
+  });
 }
 
 function sseRender() {
@@ -718,7 +711,7 @@ function sseRender() {
   requestAnimationFrame(() => {
     sseRenderQueued = false;
     cachedState = liveState;
-    renderStatusBar(liveState);
+    renderStatusBar(liveState, chromeEls);
     renderMessages(document.getElementById('messages'), liveState.messages, {
       status: liveState.status,
       connection: liveState.connection,
@@ -726,12 +719,13 @@ function sseRender() {
       userScrolledUp,
       onError: reportError,
     });
-    renderSwitcher(liveState);
+    refreshSwitcher();
+    refreshSendButton();
     // Show action buttons when any folder is connected (local commands always available)
     const hasFolder = !!sseCurrentFolder;
     document.getElementById('slashBtn').classList.toggle('visible', hasFolder);
     document.getElementById('fileBtn').classList.toggle('visible', hasFolder);
-    updatePlaceholder();
+    refreshPlaceholder();
   });
 }
 
@@ -763,7 +757,23 @@ if (bridgeUrl) {
 // Render functions from client/*.js modules (window.Gdn namespace)
 const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, THINKING_TRUNCATE,
         renderChip, renderThinkingChip, renderLocalCommand, attachCopyButton,
-        addCopyButtons, renderUserBubble, renderMessages } = Gdn;
+        addCopyButtons, renderUserBubble, renderMessages,
+        renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton } = Gdn;
+
+// Chrome element refs — cached once, passed to render functions
+const chromeEls = {
+  project: document.getElementById('project'),
+  contextPct: document.getElementById('contextPct'),
+  contextBtn: document.getElementById('contextBtn'),
+  connectionDot: document.getElementById('switcherConnectionDot'),
+  body: document.body,
+};
+const switcherEls = {
+  switcher: document.getElementById('switcher'),
+  list: document.getElementById('switcherList'),
+  backdrop: document.getElementById('switcherBackdrop'),
+  body: document.body,
+};
 
 // Configure marked — GFM for tables/task lists/strikethrough, no <br> on single newlines
 marked.setOptions({ gfm: true, breaks: false });
@@ -776,209 +786,25 @@ document.getElementById('messages').addEventListener('scroll', () => {
   userScrolledUp = !atBottom;
 });
 
-function renderStatusBar(state) {
-  const sess = state.session || {};
-  document.getElementById('project').textContent = sess.project || '';
+// renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton now in /render-chrome.js
 
-  const ctxEl = document.getElementById('contextPct');
-  const ctxBtn = document.getElementById('contextBtn');
-  const pct = sess.context_pct;
-  if (pct !== undefined && pct !== null) {
-    ctxEl.textContent = pct + '%';
-    ctxBtn.dataset.level = pct >= 85 ? 'critical' : pct >= 70 ? 'low' : '';
-  } else if (sess.project) {
-    ctxEl.textContent = '0%';
-    ctxBtn.dataset.level = '';
-  } else {
-    ctxEl.textContent = '';
-    ctxBtn.dataset.level = '';
-  }
-
-  // Connection state
-  const connected = state.connection !== 'disconnected';
-  document.body.dataset.connection = connected ? 'connected' : 'disconnected';
-  document.getElementById('switcherConnectionDot').dataset.state = connected ? 'connected' : 'disconnected';
-
-  // Busy state — used by send button and activity chips
-  const busy = connected && state.status === 'working';
-  document.body.dataset.busy = busy;
-
-  updateSendButton();
-}
-
-function renderSwitcher(state) {
-  const switcher = document.getElementById('switcher');
-  const list = document.getElementById('switcherList');
-
-  const backdrop = document.getElementById('switcherBackdrop');
-  if (!state.switcher || !switcherOpen) {
-    switcher.dataset.open = 'false';
-    backdrop.dataset.open = 'false';
-    return;
-  }
-
-  backdrop.dataset.open = 'true';
-  switcher.dataset.open = 'true';
-  document.body.dataset.switcherOpen = '';
-  list.innerHTML = '';
-
-  const currentId = state.session ? state.session.id : null;
-  const sessions = state.switcher.sessions || [];
-  const filter = document.getElementById('switcherSearch').value.trim().toLowerCase();
-
-  // Group: current first, then Now (active+paused), Previous (closed with history), fresh hidden
-  const groups = { now: [], previous: [] };
-  const freshPool = [];
-  let top = null; // current session or most recently ended
-
-  for (const s of sessions) {
-    if (filter && !s.project.toLowerCase().includes(filter)) continue;
-    if (s.project === sseCurrentFolder) { top = s; continue; }
-    if (s.status === 'ended' && !top) { top = s; continue; }
-    if (s.status === 'now') groups.now.push(s);
-    else if (s.status === 'previous' && s.humanSessionCount > 0) groups.previous.push(s);
-    else freshPool.push(s);
-  }
-
-  // timeAgo and shortModel now in /render-utils.js (Gdn namespace)
-  const { timeAgo, shortModel } = Gdn;
-
-  function makeItem(s, isCurrent) {
-    const pct = s.context_pct;
-    const level = pct >= 85 ? 'critical' : pct >= 70 ? 'low' : '';
-    const hasSessions = s.sessions && s.sessions.length > 1;
-    const isExpanded = switcherExpandedFolder === s.project;
-    const item = document.createElement('div');
-    item.className = 'switcher-item';
-    item.dataset.status = s.backendState || s.status;
-    if (isCurrent) item.dataset.current = 'true';
-
-    // Main row: body (clickable → connect) + chevron (clickable → expand)
-    const row = document.createElement('div');
-    row.className = 'switcher-item-row';
-
-    const body = document.createElement('div');
-    body.className = 'switcher-item-body';
-    body.innerHTML = `
-      <span class="switcher-dot" data-status="${s.backendState || s.status}"></span>
-      <div class="switcher-info">
-        <div class="switcher-project">${esc(s.project)}</div>
-        <div class="switcher-last-msg">${esc(s.last_message || '')}</div>
-      </div>
-      <div class="switcher-meta">
-        <div class="switcher-context" data-level="${level}">${pct ? pct + '%' : ''}</div>
-        <div class="switcher-time">${timeAgo(s.updated)}</div>
-      </div>
-    `;
-    body.addEventListener('click', () => {
-      if (bridgeUrl) {
-        sseConnectFolder({ name: s.project, path: s.id });
-        closeSwitcher();
-      }
-    });
-    row.appendChild(body);
-
-    if (hasSessions) {
-      const humanCount = s.sessions.filter(sess => sess.humanInteraction !== false).length;
-      const countBadge = document.createElement('span');
-      countBadge.className = 'switcher-session-count';
-      countBadge.textContent = humanCount;
-      row.appendChild(countBadge);
-
-      const chevron = document.createElement('div');
-      chevron.className = 'switcher-chevron';
-      chevron.dataset.expanded = isExpanded ? 'true' : 'false';
-      chevron.textContent = '\u203A'; // ›
-      chevron.addEventListener('click', (e) => {
-        e.stopPropagation();
-        switcherExpandedFolder = isExpanded ? null : s.project;
-        renderSwitcher(state);
-      });
-      row.appendChild(chevron);
-    }
-
-    item.appendChild(row);
-
-    // Expanded session list
-    if (hasSessions && isExpanded) {
-      const sessionsDiv = document.createElement('div');
-      sessionsDiv.className = 'switcher-sessions';
-
-      // New Session button — top of list so you don't scroll through old sessions
-      const newRow = document.createElement('div');
-      newRow.className = 'switcher-new-session';
-      newRow.innerHTML = '+ New Session';
-      newRow.addEventListener('click', (e) => {
-        e.stopPropagation();
-        sseConnectFolder({ name: s.project, path: s.id }, 'new');
-        closeSwitcher();
-      });
-      sessionsDiv.appendChild(newRow);
-
-      // Filter to human-interactive sessions only (hide subagent spam)
-      const humanSessions = s.sessions.filter(sess => sess.humanInteraction !== false);
-      const hiddenCount = s.sessions.length - humanSessions.length;
-
-      for (const sess of humanSessions) {
-        const sessionPct = sess.contextPct;
-        const sessionLevel = sessionPct >= 85 ? 'critical' : sessionPct >= 70 ? 'low' : '';
-        const sessionRow = document.createElement('div');
-        sessionRow.className = 'switcher-session-row';
-        sessionRow.innerHTML = `
-          <span class="switcher-dot" data-status="${sess.closed ? 'closed' : 'paused'}"></span>
-          <span class="switcher-session-id">${esc(sess.id.slice(0, 8))}</span>
-          <span class="switcher-session-model">${esc(shortModel(sess.model))}</span>
-          <span class="switcher-context" data-level="${sessionLevel}">${sessionPct ? sessionPct + '%' : ''}</span>
-          <span class="switcher-time">${timeAgo(sess.lastActive)}</span>
-        `;
-        sessionRow.addEventListener('click', (e) => {
-          e.stopPropagation();
-          sseConnectFolder({ name: s.project, path: s.id }, sess.id);
-          closeSwitcher();
-        });
-        sessionsDiv.appendChild(sessionRow);
-      }
-
-      if (hiddenCount > 0) {
-        const hidden = document.createElement('div');
-        hidden.style.cssText = 'font-size: 0.65rem; color: var(--text-dim); padding: 4px 10px;';
-        hidden.textContent = `${hiddenCount} subagent session${hiddenCount > 1 ? 's' : ''} hidden`;
-        sessionsDiv.appendChild(hidden);
-      }
-
-      item.appendChild(sessionsDiv);
-    }
-
-    return item;
-  }
-
-  if (top) list.appendChild(makeItem(top, true));
-
-  if (groups.now.length) {
-    const label = document.createElement('div');
-    label.className = 'switcher-section';
-    label.textContent = 'Now';
-    list.appendChild(label);
-    for (const s of groups.now) list.appendChild(makeItem(s, false));
-  }
-
-  if (groups.previous.length) {
-    const label = document.createElement('div');
-    label.className = 'switcher-section';
-    label.textContent = 'Previous';
-    list.appendChild(label);
-    for (const s of groups.previous) list.appendChild(makeItem(s, false));
-  }
-
-  // Fresh pool: only show when filtering or when nothing else exists
-  const showFresh = freshPool.length && (filter || (!groups.now.length && !groups.previous.length && !top));
-  if (showFresh) {
-    const label = document.createElement('div');
-    label.className = 'switcher-section';
-    label.textContent = filter ? 'Other' : 'All Projects';
-    list.appendChild(label);
-    for (const s of freshPool) list.appendChild(makeItem(s, false));
-  }
+function refreshSwitcher() {
+  renderSwitcher(cachedState || liveState, {
+    switcherOpen,
+    currentFolder: sseCurrentFolder,
+    expandedFolder: switcherExpandedFolder,
+    filter: document.getElementById('switcherSearch').value.trim().toLowerCase(),
+    els: switcherEls,
+    onConnect: (folder, sessionId) => {
+      if (!bridgeUrl) return;
+      sseConnectFolder(folder, sessionId);
+      closeSwitcher();
+    },
+    onExpand: (folder) => {
+      switcherExpandedFolder = folder;
+      refreshSwitcher();
+    },
+  });
 }
 
 // Bridge mode renders via its own event handlers — no render() call needed.
@@ -1044,7 +870,7 @@ document.getElementById('switcherBackdrop').addEventListener('click', closeSwitc
 }
 
 document.getElementById('switcherSearch').addEventListener('input', () => {
-  if (cachedState) renderSwitcher(cachedState);
+  if (cachedState) refreshSwitcher();
 });
 
 // Folder lozenge: tap opens session switcher
@@ -1057,7 +883,7 @@ document.getElementById('folderBtn').addEventListener('click', () => {
       .then(d => { if (d.folders) handleSSEFolders(d.folders); })
       .catch(() => {});
   }
-  if (cachedState) renderSwitcher(cachedState);
+  if (cachedState) refreshSwitcher();
 });
 
 // Context lozenge: tap when amber/red offers exit, long-press always offers exit
@@ -1095,7 +921,7 @@ const sendBtn = document.getElementById('sendBtn');
 ta.addEventListener('input', () => {
   ta.style.height = 'auto';
   ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
-  updateSendButton();
+  refreshSendButton();
 });
 
 // Tapping input resets scroll — user wants to see latest to compose a reply
@@ -1112,34 +938,14 @@ ta.addEventListener('keydown', (e) => {
   }
 });
 
-// Update send button state based on current text and connection/busy state
-function updateSendButton() {
-  const hasText = ta.value.trim().length > 0;
-  const hasDeposits = stagedDeposits.length > 0;
-  const hasContent = hasText || hasDeposits;
-  const isDisconnected = document.body.dataset.connection === 'disconnected';
-  const isBusy = document.body.dataset.busy === 'true';
-
-  const isLive = !!bridgeUrl;
-  if (isDisconnected && !isLive) {
-    // File mode disconnected — disable send
-    sendBtn.dataset.stop = 'false';
-    sendBtn.dataset.active = 'false';
-    sendBtn.innerHTML = '&#x2191;';
-  } else if (isDisconnected && isLive) {
-    // Live mode disconnected — allow send (disabled in SSE)
-    sendBtn.dataset.stop = 'false';
-    sendBtn.dataset.active = hasContent ? 'true' : 'false';
-    sendBtn.innerHTML = '&#x2191;';
-  } else if (isBusy && !hasContent) {
-    sendBtn.dataset.stop = 'true';
-    delete sendBtn.dataset.active;
-    sendBtn.innerHTML = '&#x25A0;'; // stop
-  } else {
-    sendBtn.dataset.stop = 'false';
-    sendBtn.dataset.active = hasContent ? 'true' : 'false';
-    sendBtn.innerHTML = '&#x2191;'; // send
-  }
+function refreshSendButton() {
+  updateSendButton(sendBtn, {
+    hasText: ta.value.trim().length > 0,
+    hasDeposits: stagedDeposits.length > 0,
+    isDisconnected: document.body.dataset.connection === 'disconnected',
+    isBusy: document.body.dataset.busy === 'true',
+    isLive: !!bridgeUrl,
+  });
 }
 
 // Staged deposits — files deposited on disk but not yet sent as prompt
@@ -1216,7 +1022,7 @@ sendBtn.addEventListener('click', () => {
     // Clear textarea
     ta.value = '';
     ta.style.height = 'auto';
-    updateSendButton();
+    refreshSendButton();
   }
 });
 
@@ -1301,7 +1107,7 @@ function renderSlashList(filter) {
       ta.value = '/' + cmd.name;
       ta.style.height = 'auto';
       ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
-      updateSendButton();
+      refreshSendButton();
       // Local commands auto-send — they're instant, no reason to pause
       if (cmd.local) {
         sendBtn.click();
@@ -1367,7 +1173,7 @@ function renderStagedDeposits() {
     pill.querySelector('.staged-x').addEventListener('click', () => {
       stagedDeposits.splice(i, 1);
       renderStagedDeposits();
-      updateSendButton();
+      refreshSendButton();
     });
     container.appendChild(pill);
   });
@@ -1398,7 +1204,7 @@ function uploadFiles(files) {
       if (sseCurrentFolder !== targetFolder) return;
       stagedDeposits.push({ folder: data.folder, manifest: data.manifest });
       renderStagedDeposits();
-      updateSendButton();
+      refreshSendButton();
     })
     .catch((err) => { reportError('POST /upload error: ' + err); showStagedError('Upload failed'); })
     .finally(() => fileBtn.classList.remove('uploading'));

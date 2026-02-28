@@ -158,7 +158,7 @@ Pure utility and render functions are being extracted from `index.html` into `cl
 
 **Load order matters** — classic `<script>` tags execute sequentially:
 ```
-marked.js → render-utils.js → render-chips.js → render-messages.js → (future: render-chrome.js) → inline script
+marked.js → render-utils.js → render-chips.js → render-messages.js → render-chrome.js → inline script
 ```
 
 **The `.cjs` pattern:** `package.json` has `"type": "module"`, making `.js` files ESM. Client files use `module.exports` (CJS) so they work as both classic browser scripts and vitest imports. The `.cjs` extension forces CJS regardless of the package type setting.
@@ -178,7 +178,7 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 | `render-utils.cjs` | `esc`, `trimText`, `trimToolOutput`, `truncateThinking`, `buildDepositNoteClient`, `timeAgo`, `shortModel` | Done |
 | `render-chips.cjs` | `renderChip`, `renderThinkingChip`, `renderLocalCommand`, `attachCopyButton` | Done |
 | `render-messages.cjs` | `renderUserBubble`, `addCopyButtons`, `renderMessages` | Done |
-| `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` | Planned (gdn-rokako) |
+| `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` | Done |
 | `render-overlays.cjs` | AskUser overlay, slash menu, staged deposits | Planned (gdn-sugopa) |
 
 ### UI features
