@@ -63,6 +63,7 @@
 
 <script src="/marked.js"></script>
 <script src="/render-utils.js"></script>
+<script src="/render-chips.js"></script>
 <script>
 // === Client error reporting ===
 // Captures unhandled errors and promise rejections, sends to bridge.
@@ -752,8 +753,9 @@ if (bridgeUrl) {
 
 // === Rendering helpers ===
 
-// Pure utility functions now in /render-utils.js (window.Gdn namespace)
-const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, THINKING_TRUNCATE } = Gdn;
+// Pure utility + chip render functions from /render-utils.js and /render-chips.js (window.Gdn namespace)
+const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, THINKING_TRUNCATE,
+        renderChip, renderThinkingChip, renderLocalCommand, attachCopyButton } = Gdn;
 
 // Configure marked — GFM for tables/task lists/strikethrough, no <br> on single newlines
 marked.setOptions({ gfm: true, breaks: false });
@@ -762,149 +764,9 @@ marked.setOptions({ gfm: true, breaks: false });
 function addCopyButtons(container) {
   for (const pre of container.querySelectorAll('pre')) {
     if (pre.querySelector('.code-copy-btn')) continue;
-    const btn = document.createElement('button');
-    btn.className = 'code-copy-btn';
-    btn.textContent = 'Copy';
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const code = pre.querySelector('code');
-      const text = (code || pre).textContent;
-      navigator.clipboard.writeText(text).then(() => {
-        btn.textContent = 'Copied';
-        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
-      });
-    });
-    pre.appendChild(btn);
+    const code = pre.querySelector('code');
+    attachCopyButton(pre, (code || pre).textContent);
   }
-}
-
-// === Output trimming — implementations in /render-utils.js ===
-
-function renderLocalCommand(content) {
-  // Extract inner content from <local-command-stdout> tags
-  const match = content.match(/<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/);
-  const inner = match ? match[1].trim() : content;
-
-  // Extract a one-line summary for the chip path
-  // /context: "Tokens: 75.2k / 200k (38%)"
-  // /cost: short enough to use as-is
-  // /compact: "Compacted"
-  let summary = '';
-  const lines = inner.split('\n');
-  const tokensLine = lines.find(l => /\*\*Tokens:\*\*/.test(l));
-  if (tokensLine) {
-    summary = tokensLine.replace(/\*\*/g, '').trim();
-  } else if (inner.length < 100) {
-    summary = inner.replace(/\n/g, ' ').trim();
-  } else {
-    summary = lines.find(l => l.trim() && !l.startsWith('#')) || lines[0] || 'Command output';
-    summary = summary.replace(/\*\*/g, '').trim();
-  }
-
-  // Render as a standard .chip — same look as tool call chips
-  const chip = document.createElement('div');
-  chip.className = 'chip local-cmd-chip';
-
-  chip.innerHTML =
-    `<span class="c-status done">&#x2713;</span>` +
-    `<span class="c-name">local</span>` +
-    `<span class="c-path">${esc(summary)}</span>` +
-    `<div class="c-detail local-cmd-detail">${marked.parse(inner)}</div>`;
-
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'code-copy-btn';
-  copyBtn.textContent = 'Copy';
-  copyBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(inner).then(() => {
-      copyBtn.textContent = 'Copied';
-      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
-    });
-  });
-  chip.querySelector('.c-detail').appendChild(copyBtn);
-
-  chip.addEventListener('click', () => {
-    chip.classList.toggle('expanded');
-  });
-
-  return chip;
-}
-
-
-function renderThinkingChip(thinkingText) {
-  const chip = document.createElement('div');
-  chip.className = 'chip thinking-done';
-  const truncated = truncateThinking(thinkingText);
-  const needsMore = thinkingText.length > THINKING_TRUNCATE;
-
-  chip.innerHTML =
-    `<span class="c-status done" style="color:var(--accent)">&#x2726;</span>` +
-    `<span class="c-name" style="color:var(--accent)">Thought</span>` +
-    `<div class="c-detail">${esc(truncated)}` +
-    (needsMore ? `<span class="thinking-more" style="color:var(--accent);cursor:pointer;display:block;margin-top:4px;font-size:0.55rem">Show full thinking</span>` : '') +
-    `</div>`;
-
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'code-copy-btn';
-  copyBtn.textContent = 'Copy';
-  copyBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(thinkingText).then(() => {
-      copyBtn.textContent = 'Copied';
-      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
-    });
-  });
-  chip.querySelector('.c-detail').appendChild(copyBtn);
-
-  chip.addEventListener('click', (e) => {
-    if (e.target.classList.contains('thinking-more')) {
-      // Replace truncated with full text, re-append copy button
-      const detail = chip.querySelector('.c-detail');
-      detail.textContent = thinkingText;
-      detail.appendChild(copyBtn);
-      return;
-    }
-    chip.classList.toggle('expanded');
-  });
-
-  return chip;
-}
-
-function renderChip(tc) {
-  const statusClass = tc.status === 'completed' ? 'done' : tc.status === 'running' ? 'run' : 'err';
-  const statusIcon = tc.status === 'completed' ? '&#x2713;' :
-                     tc.status === 'running' ? '&#x25cf;' : '&#x2717;';
-  const chipClass = 'chip' + (tc.status === 'error' ? ' error' : '') + (tc.status === 'running' ? ' running' : '');
-
-  const chip = document.createElement('div');
-  chip.className = chipClass;
-  chip.dataset.toolId = tc.name + '|' + (tc.input || '');
-
-  const detail = tc.input + (tc.output ? '\n' + trimToolOutput(tc.output) : '');
-
-  chip.innerHTML =
-    `<span class="c-status ${statusClass}">${statusIcon}</span>` +
-    `<span class="c-name">${esc(tc.name)}</span>` +
-    (tc.input ? `<span class="c-path">${esc(tc.input)}</span>` : '') +
-    `<div class="c-detail">${esc(detail)}</div>`;
-
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'code-copy-btn';
-  copyBtn.textContent = 'Copy';
-  copyBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(detail).then(() => {
-      copyBtn.textContent = 'Copied';
-      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
-    });
-  });
-  chip.querySelector('.c-detail').appendChild(copyBtn);
-
-  chip.addEventListener('click', () => {
-    chip.classList.toggle('expanded');
-  });
-
-  return chip;
 }
 
 // Parse deposit notes out of user message content → 📎 file refs + remaining text
