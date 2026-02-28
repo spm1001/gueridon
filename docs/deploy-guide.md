@@ -99,10 +99,13 @@ To prevent re-installation, ensure `~/.claude.json` has:
 
 ## 3. Clone and install
 
+Production runs from `/opt/gueridon`. Development happens in `~/Repos/gueridon`.
+
 ```bash
-mkdir -p ~/Repos
-git clone https://github.com/spm1001/gueridon.git ~/Repos/gueridon
-cd ~/Repos/gueridon
+# Production checkout
+sudo mkdir -p /opt/gueridon && sudo chown $USER:$USER /opt/gueridon
+git clone https://github.com/spm1001/gueridon.git /opt/gueridon
+cd /opt/gueridon
 npm install
 ```
 
@@ -112,6 +115,12 @@ npx tsx server/bridge.ts
 # Expected: "[push] No VAPID keys ... push disabled"
 #           "[bridge] listening on port 3001"
 # Ctrl+C to stop
+```
+
+Optionally, clone a separate development copy:
+```bash
+mkdir -p ~/Repos
+git clone https://github.com/spm1001/gueridon.git ~/Repos/gueridon
 ```
 
 ## 4. VAPID keys for push notifications
@@ -133,7 +142,7 @@ node -e "
 ```
 
 > **Note:** `web-push` is a dependency of gueridon, so `require('web-push')`
-> works from within the project directory. Run this from `~/Repos/gueridon`.
+> works from within the project directory. Run this from `/opt/gueridon`.
 
 ## 5. Tailscale HTTPS
 
@@ -155,7 +164,7 @@ sudo tailscale serve status
 ## 6. Systemd service
 
 ```bash
-sudo cp ~/Repos/gueridon/gueridon.service /etc/systemd/system/
+sudo cp /opt/gueridon/gueridon.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now gueridon
 ```
@@ -188,7 +197,7 @@ This gives you standalone mode (no Safari chrome) and persistent push notificati
 ## Updating
 
 ```bash
-cd ~/Repos/gueridon
+cd /opt/gueridon
 git pull
 npm install
 sudo systemctl restart gueridon

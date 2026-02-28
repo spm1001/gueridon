@@ -1,6 +1,6 @@
 # Guéridon
 
-Mobile web UI for Claude Code. Single HTML file, no framework, no build step.
+Mobile web UI for Claude Code. No framework, no build step.
 
 ## Architecture
 
@@ -15,7 +15,7 @@ One HTML file (`index.html`) served by the bridge. SSE for live events, POST for
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~309 tests, ~3s)
+npm test                     # Run all tests (~421 tests, ~7s)
 npm run test:watch           # Watch mode
 ```
 
@@ -25,6 +25,17 @@ Phone URL: `https://tube.atlas-cloud.ts.net/` (Tailscale HTTPS termination).
 
 Runs on **tube** (Debian Linux, Tailscale). Single systemd service.
 
+**Two directories:**
+- **`/opt/gueridon`** — production checkout. The systemd service runs from here.
+- **`~/Repos/gueridon`** — development. Edit, test, commit, push here.
+
+**Deploy workflow:**
+```bash
+# After pushing from ~/Repos/gueridon:
+cd /opt/gueridon && git pull && npm install && sudo systemctl restart gueridon
+```
+
+**Service management:**
 ```bash
 sudo systemctl restart gueridon    # Restart bridge
 sudo systemctl status gueridon     # Check health
@@ -38,12 +49,10 @@ journalctl -u gueridon -f          # Tail logs
 
 ### Self-deployment (working on guéridon from guéridon)
 
-When Claude is running as a CC child of the bridge, `sudo systemctl restart gueridon` kills the bridge, the new bridge reaps the CC process, and the client reconnects with `--resume`. This means:
+When Claude is running as a CC child of the bridge and you deploy, the bridge restart kills the bridge process, the new bridge reaps the CC process, and the client reconnects with `--resume`. The self-deploy caveats still apply:
 
-1. **Chain test + restart in one command:** `npm test 2>&1 | tail -5 && sudo systemctl restart gueridon`. This ensures the restart happens in the same Bash call. Do NOT run test and restart as separate tool calls — the session will resume between them and you'll lose the restart intent.
+1. **Don't announce before restarting.** Sending a text response ("I'll restart now") triggers a bridge→client→CC round-trip. If the bridge restarts during that round-trip, the session resumes and you may loop. Just run the deploy command.
 2. **After session resume, the deploy is done.** The `[guéridon:system] The bridge was restarted...` message confirms it. Do NOT restart again — that was the deploy.
-3. **Don't announce before restarting.** Sending a text response ("I'll restart now") triggers a bridge→client→CC round-trip. If the bridge restarts during that round-trip, the session resumes and you may loop. Just run the command.
-4. **Test count is in the output** — `npm test` reports current count (~293). Update the "Running" section if it changes significantly.
 
 See `docs/deploy-guide.md` for VAPID key setup, Tailscale plumbing, and first-time install.
 
@@ -89,7 +98,7 @@ The bridge is split across several modules in `server/`:
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
 - **StateBuilder** (`server/state-builder.ts`): See module table above. Emits SSE deltas during streaming, full state snapshots at turn end.
 - **Delta conflation:** Text deltas accumulated and flushed on timer (not per-token). Reduces SSE traffic without visible latency.
-- **Static serving:** index.html, style.css, sw.js, manifest.json, marked.js, icons — no-cache headers, same port as API.
+- **Static serving:** index.html, style.css, sw.js, manifest.json, marked.js, icons, mockup.html, client modules (render-utils.js, render-chips.js, render-messages.js, render-chrome.js) — no-cache headers, same port as API.
 - **Lazy spawn:** CC process starts on first prompt, not on connect.
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
 - **Orphan reaping:** On startup, reads sse-sessions.json, SIGTERMs any live CC processes from the previous bridge instance.
@@ -150,7 +159,7 @@ Full list: https://code.claude.com/docs/en/settings
 
 ## Frontend
 
-`index.html` (HTML + JS) and `style.css` — no build step. Uses `marked` library (served from node_modules as `/marked.js`).
+`index.html` (HTML + inline JS), `style.css`, and extracted client modules in `client/*.cjs` — no build step. Uses `marked` library (served from node_modules as `/marked.js`).
 
 ### Client modules (`client/`)
 

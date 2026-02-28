@@ -25,7 +25,7 @@ Phone (HTTPS) → tailscale serve (TLS termination)
 
 Two processes. The **bridge** serves the web UI over HTTP and communicates with the browser via SSE (server→client) and POST (client→server). One CC process per folder, spawned lazily on first prompt.
 
-The **web client** is a single HTML file — CSS, JS, and markup in one place. No framework, no build step, no dependencies. It translates CC's stream-json events into a chat UI with streaming responses, tool call display, thinking blocks, and a context gauge.
+The **web client** is `index.html` (HTML + inline JS), `style.css`, and extracted client modules in `client/*.cjs`. No framework, no build step, no vendored components. It translates CC's stream-json events into a chat UI with streaming responses, tool call display, thinking blocks, and a context gauge.
 
 ### Server modules
 
@@ -35,7 +35,15 @@ The **web client** is a single HTML file — CSS, JS, and markup in one place. N
 | `server/bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
 | `server/state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape |
 | `server/folders.ts` | Folder scanning, session discovery, handoff reading |
+| `server/deposit.ts` | Multipart/binary upload parsing, file validation |
+| `server/orphan.ts` | Orphan CC process reaping, debounced session persistence |
 | `server/push.ts` | Web Push (VAPID) notification delivery |
+| `server/upload.ts` | Upload validation, MIME detection via magic bytes, manifest building |
+| `server/event-bus.ts` | Typed event emitter decoupling event production from consumption |
+| `server/request-context.ts` | Per-request AsyncLocalStorage — auto-attaches correlation IDs to events |
+| `server/events.ts` | `BridgeEvent` type definitions, severity level mapping |
+| `server/logger.ts` | JSON-lines structured logger subscribed to event bus |
+| `server/status-buffer.ts` | Circular buffer of recent events for the `/status` debug endpoint |
 | `server/fun-names.ts` | Alliterative folder name generator |
 
 ## Quick start
@@ -50,7 +58,7 @@ npm start            # Bridge on :3001
 Open `http://localhost:3001` in a browser. Pick a folder. Start prompting.
 
 ```bash
-npm test             # 152 tests, <500ms
+npm test             # ~421 tests, ~7s
 npm run test:watch   # Watch mode
 ```
 
@@ -76,7 +84,7 @@ See [`docs/deploy-guide.md`](docs/deploy-guide.md) for the full walkthrough: Nod
 - **Lazy spawn** — CC process starts on first prompt, not on connect. No wasted processes.
 - **Idle guards** — graduated response to idle sessions: warn, then kill, then resume on reconnect. Prevents orphaned processes consuming MAX seats.
 - **SSE + POST** — EventSource for server→client, fetch POST for client→server. Auto-reconnects, stateless transport, no WebSocket complexity.
-- **Single HTML file** — no build step, no framework, no vendored components. Edit and reload.
+- **No build step** — no framework, no vendored components. `index.html` + extracted client modules. Edit and reload.
 - **No auth** — designed for localhost or Tailscale mesh. Not for the open internet.
 
 ## Docs

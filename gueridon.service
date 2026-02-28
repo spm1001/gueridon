@@ -5,10 +5,10 @@ After=network.target tailscaled.service
 [Service]
 Type=simple
 User=modha
-WorkingDirectory=/home/modha/Repos/gueridon
+WorkingDirectory=/opt/gueridon
 Environment=HOME=/home/modha
 Environment=PATH=/home/modha/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/modha/Repos/gueridon/node_modules/.bin/tsx server/bridge.ts
+ExecStart=/opt/gueridon/node_modules/.bin/tsx server/bridge.ts
 KillMode=process
 Restart=always
 RestartSec=3
