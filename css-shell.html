@@ -85,6 +85,12 @@
     gap: 8px; /* up from 6px, matches btn-bar gap and padding-top */
   }
 
+  /* Auto-grow textarea — pure CSS, no JavaScript needed.
+     Respects min-height (38px) and max-height (120px) from style.css. */
+  .input-field {
+    field-sizing: content;
+  }
+
   /* 5. Context lozenge: show default when percentage is empty */
   .btn-lozenge.context .pct:empty::before {
     content: '0%';
@@ -168,15 +174,6 @@
   // Also re-measure after a beat (iOS sometimes settles late)
   setTimeout(measure, 500);
 
-  // Auto-grow textarea (mirrors production index.html behaviour)
-  // Deferred — textarea is in .input-area which follows .messages in DOM
-  document.addEventListener('DOMContentLoaded', () => {
-    const ta = document.querySelector('.input-field');
-    ta.addEventListener('input', () => {
-      ta.style.height = 'auto';
-      ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
-    });
-  });
   </script>
 
   <div class="input-area">
