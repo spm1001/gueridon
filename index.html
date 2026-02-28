@@ -64,6 +64,7 @@
 <script src="/marked.js"></script>
 <script src="/render-utils.js"></script>
 <script src="/render-chips.js"></script>
+<script src="/render-messages.js"></script>
 <script>
 // === Client error reporting ===
 // Captures unhandled errors and promise rejections, sends to bridge.
@@ -753,47 +754,13 @@ if (bridgeUrl) {
 
 // === Rendering helpers ===
 
-// Pure utility + chip render functions from /render-utils.js and /render-chips.js (window.Gdn namespace)
+// Render functions from client/*.js modules (window.Gdn namespace)
 const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, THINKING_TRUNCATE,
-        renderChip, renderThinkingChip, renderLocalCommand, attachCopyButton } = Gdn;
+        renderChip, renderThinkingChip, renderLocalCommand, attachCopyButton,
+        addCopyButtons, renderUserBubble } = Gdn;
 
 // Configure marked — GFM for tables/task lists/strikethrough, no <br> on single newlines
 marked.setOptions({ gfm: true, breaks: false });
-
-// Inject copy buttons into <pre> blocks inside a container element
-function addCopyButtons(container) {
-  for (const pre of container.querySelectorAll('pre')) {
-    if (pre.querySelector('.code-copy-btn')) continue;
-    const code = pre.querySelector('code');
-    attachCopyButton(pre, (code || pre).textContent);
-  }
-}
-
-// Parse deposit notes out of user message content → 📎 file refs + remaining text
-function renderUserBubble(content) {
-  const DEPOSIT_END = 'manifest.json has full metadata. Read the files if relevant to our conversation.';
-  let remaining = content;
-  const fileNames = [];
-
-  while (remaining.includes('[gu\u00E9ridon:upload]')) {
-    const start = remaining.indexOf('[gu\u00E9ridon:upload]');
-    const endIdx = remaining.indexOf(DEPOSIT_END, start);
-    if (endIdx === -1) break;
-
-    const block = remaining.slice(start, endIdx + DEPOSIT_END.length);
-    const filePattern = /  - (\S+) \(/g;
-    let m;
-    while ((m = filePattern.exec(block)) !== null) fileNames.push(m[1]);
-
-    remaining = remaining.slice(0, start) + remaining.slice(endIdx + DEPOSIT_END.length);
-  }
-
-  remaining = remaining.replace(/^\n+/, '').replace(/\n+$/, '');
-  let html = '';
-  if (fileNames.length > 0) html += `<div class="msg-files">\u{1F4CE} ${fileNames.join(', ')}</div>`;
-  if (remaining) html += marked.parseInline(remaining);
-  return html;
-}
 
 function renderMessages(messages) {
   // Dupe tripwire: detect consecutive assistant messages with identical content
