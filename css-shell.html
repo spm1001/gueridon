@@ -167,6 +167,13 @@
   }
   // Also re-measure after a beat (iOS sometimes settles late)
   setTimeout(measure, 500);
+
+  // Auto-grow textarea (mirrors production index.html behaviour)
+  const ta = document.querySelector('.input-field');
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+  });
   </script>
 
   <div class="input-area">
