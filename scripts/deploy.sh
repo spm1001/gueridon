@@ -9,11 +9,11 @@ echo "=== Pulling latest ==="
 git -C "$DEPLOY_DIR" pull --ff-only || { echo "Pull failed — check for local changes in $DEPLOY_DIR"; exit 1; }
 
 echo "=== Installing dependencies ==="
-cd "$DEPLOY_DIR" && npm install --omit=dev 2>&1 | tail -3
+cd "$DEPLOY_DIR" && npm install 2>&1 | tail -3
 
 echo "=== Restarting service ==="
 sudo systemctl restart gueridon
-sleep 1
+sleep 3
 
 if systemctl is-active --quiet gueridon; then
   echo "=== Deployed ==="
