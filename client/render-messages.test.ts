@@ -18,9 +18,19 @@ Object.defineProperty(navigator, "clipboard", {
 require("./render-chips.cjs");
 
 const { buildDepositNoteClient } = require("./render-utils.cjs" as string);
-const { renderUserBubble, addCopyButtons } = require(
+const { renderUserBubble, addCopyButtons, renderMessages } = require(
   "./render-messages.cjs" as string,
 );
+
+/** Create a fresh container element for renderMessages tests. */
+function makeContainer() {
+  const el = document.createElement("div");
+  el.id = "messages";
+  return el;
+}
+
+/** Default opts — idle, connected, no scroll offset. */
+const idle = { status: "idle", connection: "connected", activity: null, userScrolledUp: false };
 
 // ============================================================
 // renderUserBubble — deposit note parsing
@@ -127,5 +137,161 @@ describe("addCopyButtons", () => {
     container.innerHTML = "<pre><code>a</code></pre><pre><code>b</code></pre>";
     addCopyButtons(container);
     expect(container.querySelectorAll(".code-copy-btn").length).toBe(2);
+  });
+});
+
+// ============================================================
+// renderMessages — the main render loop
+// ============================================================
+describe("renderMessages", () => {
+  it("renders user message as msg-user", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "user", content: "hello" }], idle);
+    expect(el.querySelector(".msg-user")).not.toBeNull();
+    expect(el.querySelector(".msg-user")!.textContent).toContain("hello");
+  });
+
+  it("renders assistant message as msg-assistant with marked output", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "assistant", content: "**bold**" }], idle);
+    const msg = el.querySelector(".msg-assistant")!;
+    expect(msg).not.toBeNull();
+    expect(msg.innerHTML).toContain("<strong>");
+  });
+
+  it("strips local-command-stdout tags from assistant content via trimText", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "assistant", content: "before <local-command-stdout>inner</local-command-stdout> after" }], idle);
+    const msg = el.querySelector(".msg-assistant")!;
+    expect(msg.textContent).toContain("inner");
+    expect(msg.textContent).not.toContain("local-command-stdout");
+  });
+
+  it("adds copy buttons to code blocks in assistant messages", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "assistant", content: "```js\nconst x = 1;\n```" }], idle);
+    const msg = el.querySelector(".msg-assistant")!;
+    expect(msg.querySelector("pre")).not.toBeNull();
+    expect(msg.querySelector(".code-copy-btn")).not.toBeNull();
+  });
+
+  it("renders synthetic user message as msg-system", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "user", content: "system info", synthetic: true }], idle);
+    expect(el.querySelector(".msg-system")).not.toBeNull();
+    expect(el.querySelector(".msg-user")).toBeNull();
+  });
+
+  it("renders local command as chip", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "user", content: "<local-command-stdout>output</local-command-stdout>" }], idle);
+    expect(el.querySelector(".local-cmd-chip")).not.toBeNull();
+  });
+
+  it("renders tool calls as chips in a chip-grid", () => {
+    const el = makeContainer();
+    renderMessages(el, [{
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        { name: "Read", input: "a.ts", status: "completed" },
+        { name: "Grep", input: "pattern", status: "completed" },
+      ],
+    }], idle);
+    const chips = el.querySelectorAll(".chip");
+    expect(chips.length).toBe(2);
+    expect(el.querySelectorAll(".chip-grid").length).toBe(1);
+  });
+
+  it("coalesces consecutive tool-call messages into one grid", () => {
+    const el = makeContainer();
+    renderMessages(el, [
+      { role: "assistant", content: null, tool_calls: [{ name: "Read", input: "a.ts", status: "completed" }] },
+      { role: "assistant", content: null, tool_calls: [{ name: "Read", input: "b.ts", status: "completed" }] },
+    ], idle);
+    expect(el.querySelectorAll(".chip").length).toBe(2);
+    expect(el.querySelectorAll(".chip-grid").length).toBe(1);
+  });
+
+  it("text content breaks chip coalescing", () => {
+    const el = makeContainer();
+    renderMessages(el, [
+      { role: "assistant", content: null, tool_calls: [{ name: "Read", input: "a.ts", status: "completed" }] },
+      { role: "assistant", content: "some text" },
+      { role: "assistant", content: null, tool_calls: [{ name: "Read", input: "b.ts", status: "completed" }] },
+    ], idle);
+    expect(el.querySelectorAll(".chip-grid").length).toBe(2);
+  });
+
+  it("renders thinking chip before assistant content", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "assistant", thinking: "hmm", content: "answer" }], idle);
+    expect(el.querySelector(".thinking-done")).not.toBeNull();
+    const children = Array.from(el.children);
+    const thinkingIdx = children.findIndex(c => c.querySelector(".thinking-done"));
+    const textIdx = children.findIndex(c => c.classList.contains("msg-assistant"));
+    expect(thinkingIdx).toBeLessThan(textIdx);
+  });
+
+  it("shows activity chip when working and thinking", () => {
+    const el = makeContainer();
+    renderMessages(el, [], {
+      status: "working",
+      connection: "connected",
+      activity: "thinking",
+      userScrolledUp: false,
+    });
+    const chip = el.querySelector(".chip.thinking");
+    expect(chip).not.toBeNull();
+    expect(chip!.querySelector(".c-name")!.textContent).toBe("Thinking\u2026");
+  });
+
+  it("shows writing activity chip", () => {
+    const el = makeContainer();
+    renderMessages(el, [], {
+      status: "working",
+      connection: "connected",
+      activity: "writing",
+      userScrolledUp: false,
+    });
+    expect(el.querySelector(".chip.writing")).not.toBeNull();
+  });
+
+  it("no activity chip when disconnected", () => {
+    const el = makeContainer();
+    renderMessages(el, [], {
+      status: "working",
+      connection: "disconnected",
+      activity: "thinking",
+      userScrolledUp: false,
+    });
+    expect(el.querySelector(".chip.thinking")).toBeNull();
+  });
+
+  it("no activity chip for tool activity (shown by running chip)", () => {
+    const el = makeContainer();
+    renderMessages(el, [], {
+      status: "working",
+      connection: "connected",
+      activity: "Bash",
+      userScrolledUp: false,
+    });
+    expect(el.querySelector(".chip")).toBeNull();
+  });
+
+  it("calls onError for dupe tripwire", () => {
+    const el = makeContainer();
+    const onError = vi.fn();
+    renderMessages(el, [
+      { role: "assistant", content: "same" },
+      { role: "assistant", content: "same" },
+    ], { ...idle, onError });
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("dupe-tripwire"));
+  });
+
+  it("sets msgId dataset on user messages", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "user", content: "hi", _msgId: "abc-123" }], idle);
+    expect((el.querySelector(".msg-user") as HTMLElement).dataset.msgId).toBe("abc-123");
   });
 });

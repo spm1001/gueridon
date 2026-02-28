@@ -177,7 +177,7 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 |------|----------|--------|
 | `render-utils.cjs` | `esc`, `trimText`, `trimToolOutput`, `truncateThinking`, `buildDepositNoteClient`, `timeAgo`, `shortModel` | Done |
 | `render-chips.cjs` | `renderChip`, `renderThinkingChip`, `renderLocalCommand`, `attachCopyButton` | Done |
-| `render-messages.cjs` | `renderUserBubble`, `addCopyButtons` (+ `renderMessages` planned gdn-jonono) | Done (gdn-kanofo) |
+| `render-messages.cjs` | `renderUserBubble`, `addCopyButtons`, `renderMessages` | Done |
 | `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` | Planned (gdn-rokako) |
 | `render-overlays.cjs` | AskUser overlay, slash menu, staged deposits | Planned (gdn-sugopa) |
 
