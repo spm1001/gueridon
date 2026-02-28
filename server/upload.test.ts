@@ -255,18 +255,11 @@ describe("buildDepositNote", () => {
     expect(note).toContain("deposited as binary");
   });
 
-  it("matches client-side buildDepositNoteClient exactly (parity gate)", () => {
-    // Client function from index.html — if this test fails, the two have drifted.
-    // Update BOTH or staged vs non-staged uploads produce different prompts for CC.
-    function buildDepositNoteClient(folder: string, manifest: { files: Array<{ deposited_as: string; mime_type: string; size_bytes: number }>; warnings: string[] }): string {
-      const listing = manifest.files
-        .map((f: { deposited_as: string; mime_type: string; size_bytes: number }) => `  - ${f.deposited_as} (${f.mime_type}, ${f.size_bytes} bytes)`)
-        .join("\n");
-      const warningLines = manifest.warnings.length > 0
-        ? "\n\n\u26A0\uFE0F " + manifest.warnings.join("\n\u26A0\uFE0F ")
-        : "";
-      return `[gu\u00E9ridon:upload] Files deposited at ${folder}/\n\n${listing}${warningLines}\n\nmanifest.json has full metadata. Read the files if relevant to our conversation.`;
-    }
+  it("matches client-side buildDepositNoteClient exactly (parity gate)", async () => {
+    // Imports the REAL client function — one source of truth.
+    // If this test fails, server and client deposit note formats have drifted.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { buildDepositNoteClient } = await import("../client/render-utils.cjs" as string);
 
     // Single file, no warnings
     const m1 = buildManifest([{

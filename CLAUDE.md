@@ -96,7 +96,7 @@ The bridge is split across several modules in `server/`:
 - **Outrider prompt:** When the first queued prompt arrives during an active turn, the bridge injects a steering message into CC's stdin ("The user has sent a follow-up message. Finish your current work..."). CC sees this as a user message and wraps up before processing the queue. These appear in JSONL transcripts as phantom user messages — they are bridge-generated, not user-typed.
 - **Upload staging:** `POST /upload/:folder?stage=true` deposits files on disk and returns the manifest without injecting a prompt. The client stages deposits as pills below the textarea; on send, `buildDepositNoteClient()` composes deposit notes + user text as one prompt. Without `?stage=true` (share-sheet flow), upload auto-injects as before.
 - **`[guéridon:*]` prefix convention:** Bridge-injected messages use `[guéridon:system]`, `[guéridon:upload]` etc. StateBuilder detects these and marks as `synthetic: true` (rendered as system chips, prefix stripped). **Exception:** staged uploads contain a deposit note followed by user text — StateBuilder checks for text after the deposit suffix and keeps these as real user messages. The client's `renderUserBubble()` parses deposit notes into `📎 filename` references.
-- **Deposit note parity:** `buildDepositNoteClient()` in `index.html` must exactly match `buildDepositNote()` in `server/upload.ts`. If either changes, staged vs non-staged uploads produce different prompts for CC. `renderUserBubble()` also parses this format — three places coupled to one template.
+- **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
 
 ## CC Process Flags
 
@@ -152,6 +152,37 @@ Full list: https://code.claude.com/docs/en/settings
 
 `index.html` (HTML + JS) and `style.css` — no build step. Uses `marked` library (served from node_modules as `/marked.js`).
 
+### Client modules (`client/`)
+
+Pure utility and render functions are being extracted from `index.html` into `client/*.cjs` files. Each file is served by STATIC_FILES as `/filename.js` and loaded via `<script>` tags before the inline script.
+
+**Load order matters** — classic `<script>` tags execute sequentially:
+```
+marked.js → render-utils.js → (future: render-chips.js → render-messages.js → render-chrome.js) → inline script
+```
+
+**The `.cjs` pattern:** `package.json` has `"type": "module"`, making `.js` files ESM. Client files use `module.exports` (CJS) so they work as both classic browser scripts and vitest imports. The `.cjs` extension forces CJS regardless of the package type setting.
+
+**Importing in tests:**
+```typescript
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { esc, trimText } = require("./render-utils.cjs");
+```
+Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` is the correct bridge. For TypeScript to accept the path, use `as string` cast: `await import("../client/render-utils.cjs" as string)`.
+
+**Browser export:** Each file sets `window.Gdn = { ...window.Gdn, ...mod }`. The inline script destructures what it needs: `const { esc, trimText } = Gdn;`
+
+| File | Contents | Status |
+|------|----------|--------|
+| `render-utils.cjs` | `esc`, `trimText`, `trimToolOutput`, `truncateThinking`, `buildDepositNoteClient`, `timeAgo`, `shortModel` | Done |
+| `render-chips.cjs` | Chip renderers + shared `attachCopyButton` | Planned (gdn-hadowi) |
+| `render-messages.cjs` | `renderUserBubble`, `addCopyButtons`, `renderMessages` | Planned (gdn-kanofo, gdn-jonono) |
+| `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` | Planned (gdn-rokako) |
+| `render-overlays.cjs` | AskUser overlay, slash menu, staged deposits | Planned (gdn-sugopa) |
+
+### UI features
+
 - Dark theme only
 - Markdown rendering via `marked.parse()` / `marked.parseInline()`
 - Collapsible tool calls (consecutive successful calls coalesce)
@@ -161,6 +192,7 @@ Full list: https://code.claude.com/docs/en/settings
 - Push notifications via service worker
 - Upload staging: files deposit as pills below textarea, sent with prompt on send
 - `renderUserBubble()` detects `[guéridon:upload]` blocks in user messages and renders as `📎 filename` references (both optimistic bubbles and server-state re-renders)
+- Drag-and-drop: document-level handlers with visual overlay (desktop only, mobile Safari doesn't fire drag events)
 
 ## Key Docs
 

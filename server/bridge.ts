@@ -1068,6 +1068,7 @@ const STATIC_FILES: Record<string, { file: string; mime: string }> = {
   "/icon-512.svg": { file: "icon-512.svg", mime: "image/svg+xml" },
   "/marked.js": { file: "node_modules/marked/lib/marked.umd.js", mime: "application/javascript" },
   "/mockup": { file: "mockup.html", mime: "text/html; charset=utf-8" },
+  "/render-utils.js": { file: "client/render-utils.cjs", mime: "application/javascript" },
 };
 
 // CSP: restrict what index.html can load (gdn-tilozu).
