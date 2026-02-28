@@ -169,10 +169,13 @@
   setTimeout(measure, 500);
 
   // Auto-grow textarea (mirrors production index.html behaviour)
-  const ta = document.querySelector('.input-field');
-  ta.addEventListener('input', () => {
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+  // Deferred — textarea is in .input-area which follows .messages in DOM
+  document.addEventListener('DOMContentLoaded', () => {
+    const ta = document.querySelector('.input-field');
+    ta.addEventListener('input', () => {
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+    });
   });
   </script>
 
