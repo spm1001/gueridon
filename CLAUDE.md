@@ -173,6 +173,8 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 
 **Browser export:** Each file sets `window.Gdn = { ...window.Gdn, ...mod }`. The inline script destructures what it needs: `const { esc, trimText } = Gdn;`
 
+**Orchestrator wrappers:** The inline script defines thin wrappers (`refreshSendButton`, `refreshPlaceholder`, `refreshSwitcher`) that read mutable state (e.g., `liveState`, `sseCurrentFolder`, `stagedDeposits`) and pass it as explicit arguments to the extracted module functions. This avoids 5+ callers each computing the same state. Do NOT inline the module calls at each call site — use the wrappers.
+
 | File | Contents | Status |
 |------|----------|--------|
 | `render-utils.cjs` | `esc`, `trimText`, `trimToolOutput`, `truncateThinking`, `buildDepositNoteClient`, `timeAgo`, `shortModel` | Done |
