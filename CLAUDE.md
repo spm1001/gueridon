@@ -15,7 +15,7 @@ One HTML file (`index.html`) served by the bridge. SSE for live events, POST for
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~421 tests, ~7s)
+npm test                     # Run all tests (~423 tests, ~7s)
 npm run test:watch           # Watch mode
 ```
 
@@ -192,6 +192,22 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 | `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` | Done |
 | `render-overlays.cjs` | AskUser overlay, slash menu, staged deposits | Planned (gdn-sugopa) |
 
+### Layout model — body-scroll
+
+The document body scrolls (not a container element). This enables Safari Full Page screenshots and URL bar shrink-on-scroll.
+
+**CSS primitives (no JS):**
+- `body { min-height: 100dvh }` — grows with content, no fixed height
+- `.messages { flex: 1 0 auto }` — no `overflow-y: auto`, content flows into document
+- `.input-area { position: sticky; bottom: 0; will-change: transform }` — stays at viewport bottom
+- `html { scroll-snap-type: y proximity; scroll-padding-bottom: ... }` — auto-follows at bottom, leaves user alone when scrolled up (replaces JS `userScrolledUp` tracking)
+- `.snap-anchor { scroll-snap-align: end }` — invisible element appended by `renderMessages` as snap target
+- `.input-field { field-sizing: content }` — textarea auto-grows (replaces JS `input` event listener)
+
+**Remaining JS for scroll:** only `window.scrollTo()` on send and textarea focus (force-scroll after deliberate user action).
+
+**CSS shell:** `css-shell.html` is the test page for validating CSS layout changes before production. See `docs/css-shell.md`.
+
 ### UI features
 
 - Dark theme only
@@ -210,5 +226,6 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 | Doc | Purpose |
 |-----|---------|
 | `docs/deploy-guide.md` | Deployment guide — systemd, Tailscale, VAPID keys |
+| `docs/css-shell.md` | CSS shell test page — layout validation, streaming simulator, iOS checklist |
 | `docs/empirical-verification.md` | Verified CC event schemas, edge cases, abort mechanisms |
 | `server/CC-EVENTS.md` | CC event reference for state-builder development |
