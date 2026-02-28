@@ -29,8 +29,8 @@ function makeContainer() {
   return el;
 }
 
-/** Default opts — idle, connected, no scroll offset. */
-const idle = { status: "idle", connection: "connected", activity: null, userScrolledUp: false };
+/** Default opts — idle, connected. */
+const idle = { status: "idle", connection: "connected", activity: null };
 
 // ============================================================
 // renderUserBubble — deposit note parsing
@@ -239,7 +239,6 @@ describe("renderMessages", () => {
       status: "working",
       connection: "connected",
       activity: "thinking",
-      userScrolledUp: false,
     });
     const chip = el.querySelector(".chip.thinking");
     expect(chip).not.toBeNull();
@@ -252,7 +251,6 @@ describe("renderMessages", () => {
       status: "working",
       connection: "connected",
       activity: "writing",
-      userScrolledUp: false,
     });
     expect(el.querySelector(".chip.writing")).not.toBeNull();
   });
@@ -263,7 +261,6 @@ describe("renderMessages", () => {
       status: "working",
       connection: "disconnected",
       activity: "thinking",
-      userScrolledUp: false,
     });
     expect(el.querySelector(".chip.thinking")).toBeNull();
   });
@@ -274,7 +271,6 @@ describe("renderMessages", () => {
       status: "working",
       connection: "connected",
       activity: "Bash",
-      userScrolledUp: false,
     });
     expect(el.querySelector(".chip")).toBeNull();
   });
@@ -295,31 +291,17 @@ describe("renderMessages", () => {
     expect((el.querySelector(".msg-user") as HTMLElement).dataset.msgId).toBe("abc-123");
   });
 
-  it("calls scrollToBottom callback when not scrolled up", () => {
-    const el = makeContainer();
-    const scrollToBottom = vi.fn();
-    renderMessages(el, [{ role: "assistant", content: "hello" }], {
-      ...idle,
-      scrollToBottom,
-    });
-    expect(scrollToBottom).toHaveBeenCalledOnce();
-  });
-
-  it("skips scrollToBottom when userScrolledUp is true", () => {
-    const el = makeContainer();
-    const scrollToBottom = vi.fn();
-    renderMessages(el, [{ role: "assistant", content: "hello" }], {
-      ...idle,
-      userScrolledUp: true,
-      scrollToBottom,
-    });
-    expect(scrollToBottom).not.toHaveBeenCalled();
-  });
-
-  it("falls back to container.scrollTop when no scrollToBottom provided", () => {
+  it("appends snap-anchor as last child for CSS scroll-snap", () => {
     const el = makeContainer();
     renderMessages(el, [{ role: "assistant", content: "hello" }], idle);
-    // No error thrown — backward-compatible fallback
-    expect(el.querySelector(".msg-assistant")).not.toBeNull();
+    const anchor = el.querySelector(".snap-anchor");
+    expect(anchor).not.toBeNull();
+    expect(el.lastElementChild).toBe(anchor);
+  });
+
+  it("snap-anchor is present even with empty messages", () => {
+    const el = makeContainer();
+    renderMessages(el, [], idle);
+    expect(el.querySelector(".snap-anchor")).not.toBeNull();
   });
 });

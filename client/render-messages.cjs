@@ -65,12 +65,10 @@ function renderUserBubble(content) {
  * @param {string} opts.status - 'working' | 'idle' | etc.
  * @param {string} opts.connection - 'connected' | 'disconnected' | etc.
  * @param {string|null} opts.activity - '_activity' value: 'thinking' | 'writing' | tool name | null
- * @param {boolean} opts.userScrolledUp - If true, skip auto-scroll
- * @param {Function} [opts.scrollToBottom] - Scroll-to-bottom implementation (body-scroll layout uses window.scrollTo)
  * @param {Function} [opts.onError] - Optional error reporter (receives string message)
  */
 function renderMessages(container, messages, opts) {
-  const { status, connection, activity, userScrolledUp, onError } = opts;
+  const { status, connection, activity, onError } = opts;
 
   // Dupe tripwire: detect consecutive assistant messages with identical content
   for (let i = 1; i < messages.length; i++) {
@@ -188,14 +186,12 @@ function renderMessages(container, messages, opts) {
     }
   }
 
-  // Only auto-scroll if user hasn't scrolled up to read earlier content
-  if (!userScrolledUp) {
-    if (opts.scrollToBottom) {
-      opts.scrollToBottom();
-    } else {
-      container.scrollTop = container.scrollHeight; // fallback for tests
-    }
-  }
+  // Snap anchor — scroll-snap-align: end makes the browser auto-follow
+  // when the user is near the bottom (proximity), and leave them alone
+  // when scrolled up reading. Replaces JS userScrolledUp tracking.
+  const anchor = document.createElement('div');
+  anchor.className = 'snap-anchor';
+  container.appendChild(anchor);
 }
 
 // --- Exports ---

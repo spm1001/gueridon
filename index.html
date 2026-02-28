@@ -110,8 +110,6 @@ window.addEventListener('error', function(e) {
 let cachedState = null;
 let switcherOpen = false;
 let switcherExpandedFolder = null; // folder name currently expanded in switcher
-let userScrolledUp = false; // true when user has scrolled away from bottom
-let scrollLockUntil = 0; // timestamp — suppress scroll events during programmatic scrolls (iOS keyboard animation)
 
 // === Mode detection ===
 const params = new URLSearchParams(location.search);
@@ -720,11 +718,6 @@ function sseRender() {
       status: liveState.status,
       connection: liveState.connection,
       activity: liveState._activity,
-      userScrolledUp,
-      scrollToBottom: () => {
-        scrollLockUntil = Date.now() + 800;
-        window.scrollTo({ top: document.body.scrollHeight });
-      },
       onError: reportError,
     });
     refreshSwitcher();
@@ -786,15 +779,6 @@ const switcherEls = {
 // Configure marked — GFM for tables/task lists/strikethrough, no <br> on single newlines
 marked.setOptions({ gfm: true, breaks: false });
 
-// Track user scroll intent on the document (body-scroll layout)
-window.addEventListener('scroll', () => {
-  // Scroll-lock guard: suppress scroll events during programmatic scrollTo
-  // and iOS keyboard animation (which fires scroll events that fight sticky positioning)
-  if (Date.now() < scrollLockUntil) return;
-  // "At bottom" = within 60px of the end (threshold for finger imprecision)
-  const atBottom = window.scrollY + window.innerHeight >= document.body.scrollHeight - 60;
-  userScrolledUp = !atBottom;
-});
 
 // renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton now in /render-chrome.js
 
@@ -923,21 +907,15 @@ document.getElementById('folderBtn').addEventListener('click', () => {
   contextBtn.addEventListener('pointercancel', () => clearTimeout(longPressTimer));
 }
 
-// Auto-grow textarea: grows upward because flex layout shrinks messages area
+// Textarea setup — field-sizing: content handles auto-grow in CSS
 const ta = document.querySelector('.input-field');
 const msgEl = document.getElementById('messages');
 const sendBtn = document.getElementById('sendBtn');
 
-ta.addEventListener('input', () => {
-  ta.style.height = 'auto';
-  ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
-  refreshSendButton();
-});
+ta.addEventListener('input', () => refreshSendButton());
 
-// Tapping input resets scroll — user wants to see latest to compose a reply
+// Tapping input scrolls to latest — user wants to see recent messages to compose a reply
 ta.addEventListener('focus', () => {
-  userScrolledUp = false;
-  scrollLockUntil = Date.now() + 800;
   window.scrollTo({ top: document.body.scrollHeight });
 });
 
@@ -1026,14 +1004,11 @@ sendBtn.addEventListener('click', () => {
     stagedDeposits = [];
     renderStagedDeposits();
 
-    // Scroll to bottom and reset scroll tracking
-    userScrolledUp = false;
-    scrollLockUntil = Date.now() + 800;
+    // Scroll to bottom after sending
     window.scrollTo({ top: document.body.scrollHeight });
 
     // Clear textarea
     ta.value = '';
-    ta.style.height = 'auto';
     refreshSendButton();
   }
 });
@@ -1117,8 +1092,6 @@ function renderSlashList(filter) {
         return;
       }
       ta.value = '/' + cmd.name;
-      ta.style.height = 'auto';
-      ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
       refreshSendButton();
       // Local commands auto-send — they're instant, no reason to pause
       if (cmd.local) {

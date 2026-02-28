@@ -21,7 +21,12 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-html { font-size: 15px; overflow-x: hidden; }
+html {
+  font-size: 15px;
+  overflow-x: hidden;
+  scroll-snap-type: y proximity; /* auto-follow at bottom, leave alone when scrolled up */
+  scroll-padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); /* clear sticky input */
+}
 
 body {
   font-family: var(--font);
@@ -353,8 +358,13 @@ body {
   resize: none;
   outline: none;
   min-height: 38px;
-  max-height: 120px;
-  overflow-y: auto;
+  field-sizing: content; /* auto-grow with content — replaces JS event listener */
+}
+
+/* Snap sentinel — appended by renderMessages at end of message list */
+.snap-anchor {
+  scroll-snap-align: end;
+  height: 0;
 }
 
 .input-field:focus { border-color: var(--accent-dim); }
