@@ -330,13 +330,10 @@ body {
   padding: 8px 14px calc(var(--safe-bottom) + 4px);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
-/* Standalone PWA: adjust safe-area padding when keyboard is open/closed.
-   No overflow:hidden on html — body-scroll layout needs document-level
-   scrolling. (The old fixed-height layout used overflow:hidden to prevent
-   iOS viewport sliding, but that blocks body scroll.) */
+/* Standalone PWA: adjust safe-area padding when keyboard is open/closed. */
 @media (display-mode: standalone) {
   .input-area {
     padding-bottom: max(env(safe-area-inset-bottom, 0px), 4px);
@@ -358,7 +355,9 @@ body {
   resize: none;
   outline: none;
   min-height: 38px;
-  field-sizing: content; /* auto-grow with content — replaces JS event listener */
+  max-height: 40dvh;
+  overflow-y: auto;
+  field-sizing: content;
 }
 
 /* Snap sentinel — appended by renderMessages at end of message list */
@@ -425,7 +424,9 @@ body {
 .btn-lozenge:active { background: var(--surface-raised); }
 .btn-lozenge.folder { flex: 1; min-width: 0; }
 .btn-lozenge .label { overflow: hidden; text-overflow: ellipsis; }
+.btn-lozenge.folder .label:empty::before { content: 'Guéridon'; color: var(--text-dim); }
 .btn-lozenge .pct { font-family: var(--mono); font-size: 0.7rem; }
+.btn-lozenge.context .pct:empty::before { content: '0%'; color: var(--text-dim); }
 .btn-lozenge[data-level="low"] { border-color: var(--amber); color: var(--amber); }
 .btn-lozenge[data-level="critical"] { border-color: var(--red); color: var(--red); }
 
@@ -439,6 +440,39 @@ body {
 /* Hide non-essential buttons until a folder is connected */
 .btn-slash, .btn-file { display: none; }
 .btn-slash.visible, .btn-file.visible { display: flex; }
+
+/* CSS-drawn button symbols — geometrically centred, no font metrics */
+.btn-file, .btn-slash {
+  position: relative;
+  font-size: 0;
+}
+/* + : horizontal bar */
+.btn-file::before {
+  content: '';
+  position: absolute;
+  width: 14px; height: 1.5px;
+  background: currentColor;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+}
+/* + : vertical bar */
+.btn-file::after {
+  content: '';
+  position: absolute;
+  width: 1.5px; height: 14px;
+  background: currentColor;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+}
+/* / : diagonal stroke */
+.btn-slash::before {
+  content: '';
+  position: absolute;
+  width: 1.5px; height: 14px;
+  background: currentColor;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%) rotate(20deg);
+}
 
 /* Staged deposit pills — between textarea and button bar */
 .staged-deposits {

@@ -4,33 +4,41 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Guéridon — Design Mockups</title>
+<link rel="stylesheet" href="/style.css">
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --bg: #1a1a1a;
-    --surface: #242424;
-    --surface-raised: #2a2a2a;
-    --border: #333;
-    --text: #e8e8e8;
-    --text-dim: #777;
-    --text-mid: #aaa;
-    --accent: #d97757;
-    --accent-dim: #B85A35;
-    --green: #788c5d;
-    --amber: #fbbf24;
-    --blue: #6a9bcc;
-    --red: #CE3931;
-    --font: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-    --mono: 'SF Mono', Menlo, Consolas, monospace;
+  /* === Mockup-only scaffolding — phone frames + scene layout === */
+  body {
+    min-height: auto;
+    padding: 0 0 60px;
+    display: block;
   }
-  html { font-size: 15px; }
-  body { background: var(--bg); color: var(--text); font-family: var(--font); padding: 0; }
-  h1 { font-size: 1.1rem; color: var(--accent); margin-bottom: 4px; padding: 16px 14px 0; }
-  h2 { font-size: 0.85rem; color: var(--text-mid); margin: 0; padding: 20px 14px 6px;
-    text-transform: uppercase; letter-spacing: 0.5px; background: var(--surface); }
-  p.note { font-size: 0.75rem; color: var(--text-dim); padding: 0 14px 12px; line-height: 1.4;
-    background: var(--surface); }
-
+  .mockup-header {
+    font-size: 1.1rem;
+    color: var(--accent);
+    margin-bottom: 4px;
+    padding: 16px 14px 0;
+  }
+  .mockup-subtitle {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    padding: 0 14px 12px;
+    line-height: 1.4;
+  }
+  .scene-title {
+    font-size: 0.85rem;
+    color: var(--text-mid);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 20px 14px 6px;
+    background: var(--surface);
+  }
+  .scene-note {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    padding: 0 14px 12px;
+    line-height: 1.4;
+    background: var(--surface);
+  }
   .phone {
     max-width: 390px;
     margin: 0 auto 32px;
@@ -42,76 +50,18 @@
     flex-direction: column;
     position: relative;
   }
-  .phone-messages {
+  /* Messages container inside phone — override body-scroll for contained frames */
+  .phone .messages {
+    flex: none;
     padding: 12px 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
     min-height: 200px;
   }
-  .phone-input {
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    padding: 8px 10px;
+  .phone .input-area {
+    position: relative;
+    bottom: auto;
   }
-  .phone-textarea {
-    width: 100%; background: var(--bg); border: 1px solid var(--border);
-    border-radius: 20px; padding: 10px 14px; color: var(--text);
-    font-family: var(--font); font-size: 16px; line-height: 1.4;
-    resize: none; outline: none; height: 42px;
-  }
-  .phone-textarea::placeholder { color: var(--text-dim); }
-  .btn-bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-  .btn-circle {
-    width: 34px; height: 34px; border-radius: 50%; border: none;
-    font-size: 1rem; font-weight: 600;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0; cursor: pointer;
-  }
-  .btn-slash { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
-  .btn-file { background: transparent; border: 1px solid var(--border); color: var(--text-dim); font-size: 1.2rem; font-weight: 400; }
-  .btn-send { background: var(--accent); color: var(--bg); }
-  .btn-send.inactive { background: var(--text-dim); }
-  .btn-lozenge {
-    height: 34px; border-radius: 17px; border: 1px solid var(--border);
-    background: transparent; color: var(--text-dim); font-family: var(--font);
-    font-size: 0.72rem; padding: 0 12px;
-    display: flex; align-items: center; gap: 4px;
-    cursor: pointer; white-space: nowrap; overflow: hidden;
-  }
-  .btn-lozenge.folder { flex: 1; min-width: 0; }
-  .btn-lozenge .label { overflow: hidden; text-overflow: ellipsis; }
-  .btn-lozenge .pct { font-family: var(--mono); font-size: 0.7rem; }
-
-  /* Messages */
-  .msg-user {
-    align-self: flex-end; max-width: 85%;
-    background: #2a3a4a; color: #d4e4f4;
-    padding: 9px 14px; border-radius: 18px 18px 4px 18px;
-    font-size: 0.93rem; line-height: 1.4;
-  }
-  .msg-assistant {
-    align-self: flex-start; max-width: 92%;
-    font-size: 0.93rem; padding: 2px 0;
-    color: var(--accent); line-height: 1.5;
-  }
-  .icode { font-family: var(--mono); font-size: 0.82rem; background: var(--surface-raised); padding: 1px 5px; border-radius: 4px; }
-
-  /* Chips */
-  .chip-grid { display: flex; flex-wrap: wrap; gap: 4px; }
-  .chip {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
-    padding: 4px 10px; display: inline-flex; align-items: center; gap: 4px;
-    font-size: 0.65rem; cursor: pointer;
-  }
-  .chip .c-status { font-size: 0.45rem; flex-shrink: 0; }
-  .chip .c-status.done { color: var(--green); }
-  .chip .c-name { font-family: var(--mono); color: var(--text-dim); white-space: nowrap; }
-  .chip .c-path { font-family: var(--mono); font-size: 0.58rem; color: var(--text-dim); opacity: 0.4;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px; }
-
-  /* Drop overlay — matches style.css .drop-overlay */
-  .mock-drop-overlay {
+  /* Drop overlay inside phone frame */
+  .phone .mock-drop-overlay {
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.55);
@@ -123,7 +73,7 @@
     justify-content: center;
     border-radius: 16px;
   }
-  .mock-drop-label {
+  .phone .mock-drop-label {
     font-size: 1.125rem;
     font-weight: 500;
     color: rgba(255, 255, 255, 0.7);
@@ -131,143 +81,276 @@
     border: 2px dashed rgba(255, 255, 255, 0.3);
     border-radius: 12px;
   }
-
-  /* Staged error — matches style.css .staged-error */
-  .staged-error {
-    font-size: 0.75rem;
-    color: var(--red);
-    padding: 2px 0;
-  }
-
-  /* Staged pill — matches style.css .staged-pill */
-  .staged-pill {
-    display: inline-flex; align-items: center; gap: 4px;
-    background: var(--surface-raised); border: 1px solid var(--border);
-    border-radius: 12px; padding: 3px 8px;
-    font-size: 0.7rem; color: var(--text-dim);
-  }
-  .staged-x {
-    background: none; border: none; color: var(--text-dim);
-    font-size: 0.8rem; cursor: pointer; padding: 0 2px;
-  }
-  .staged-deposits { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; }
 </style>
+
+<!-- Load modules in dependency order — same as index.html -->
+<script src="/marked.js"></script>
+<script src="/render-utils.js"></script>
+<script src="/render-chips.js"></script>
+<script src="/render-messages.js"></script>
+<script src="/render-chrome.js"></script>
+<script src="/fixtures.js"></script>
 </head>
 <body>
 
-<h1>Guéridon — Drop Zone Mockups</h1>
-<p class="note" style="padding-top: 8px;">gdn-cenifa &bull; Drag-and-drop visual feedback</p>
+<h1 class="mockup-header">Guéridon — Design Mockups</h1>
+<p class="mockup-subtitle">Rendered with real <code>Gdn.*</code> functions from shared fixtures. Same code path as production.</p>
 
-<!-- ========================================
-     SCENE 1: Drop overlay active
-     ======================================== -->
-<h2>Drop overlay — file dragged over window</h2>
-<p class="note">Full-screen dark blur with dashed label. Appears on dragenter, dismisses on drop or dragleave. Desktop only — mobile Safari doesn't fire drag events.</p>
+<!-- ============================================================
+     SCENE 1: Full conversation
+     ============================================================ -->
+<h2 class="scene-title">Conversation — tools, thinking, markdown</h2>
+<p class="scene-note">User messages, assistant with tool calls, thinking chip, markdown formatting. Idle state.</p>
+<div class="phone">
+  <div class="messages" id="scene-conversation"></div>
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Message Claude..." rows="1" readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file visible" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash visible" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
+      <button class="btn-lozenge context"><span class="pct">45%</span></button>
+      <button class="btn-circle btn-send" aria-label="Send">&#x2191;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 2: Streaming (tool running)
+     ============================================================ -->
+<h2 class="scene-title">Streaming — tool in progress</h2>
+<p class="scene-note">Bash running with pulsing amber border. Activity chip visible.</p>
+<div class="phone">
+  <div class="messages" id="scene-streaming"></div>
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Claude is working..." rows="1" readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file visible" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash visible" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
+      <button class="btn-lozenge context"><span class="pct">45%</span></button>
+      <button class="btn-circle btn-send" data-stop="true" aria-label="Stop">&#x25A0;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 3: Error recovery
+     ============================================================ -->
+<h2 class="scene-title">Error — tool failure and recovery</h2>
+<p class="scene-note">Edit fails (red border), assistant recovers with new approach.</p>
+<div class="phone">
+  <div class="messages" id="scene-error"></div>
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Message Claude..." rows="1" readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file visible" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash visible" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
+      <button class="btn-lozenge context"><span class="pct">45%</span></button>
+      <button class="btn-circle btn-send" aria-label="Send">&#x2191;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 4: File deposit
+     ============================================================ -->
+<h2 class="scene-title">File deposit — upload reference in user bubble</h2>
+<p class="scene-note">User message with deposit note renders file reference. Staged pills below textarea.</p>
+<div class="phone">
+  <div class="messages" id="scene-deposit"></div>
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Message Claude..." rows="1" readonly></textarea>
+    <div class="staged-deposits">
+      <div class="staged-pill"><span class="staged-name">config.json</span><button class="staged-x">&times;</button></div>
+      <div class="staged-pill"><span class="staged-name">error-log.txt</span><button class="staged-x">&times;</button></div>
+    </div>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file visible" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash visible" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
+      <button class="btn-lozenge context"><span class="pct">45%</span></button>
+      <button class="btn-circle btn-send" data-active="true" aria-label="Send">&#x2191;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 5: System message
+     ============================================================ -->
+<h2 class="scene-title">System message — bridge restart</h2>
+<p class="scene-note">Synthetic user message renders as centred system chip, not a blue bubble.</p>
+<div class="phone">
+  <div class="messages" id="scene-system"></div>
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Message Claude..." rows="1" readonly></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file visible" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash visible" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
+      <button class="btn-lozenge context"><span class="pct">45%</span></button>
+      <button class="btn-circle btn-send" aria-label="Send">&#x2191;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 6: Drop overlay
+     ============================================================ -->
+<h2 class="scene-title">Drop overlay — file dragged over window</h2>
+<p class="scene-note">Full-screen dark blur with dashed label. Desktop only — mobile Safari doesn't fire drag events.</p>
 <div class="phone">
   <div class="mock-drop-overlay">
     <div class="mock-drop-label">Drop files here</div>
   </div>
-  <div class="phone-messages">
-    <div class="msg-user">Can you fix the input bar?</div>
-    <div class="msg-assistant">I'll take a look at the current layout.</div>
-    <div class="chip-grid">
-      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">index.html</span></div>
-      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Grep</span><span class="c-path">input-bar</span></div>
-    </div>
-    <div class="msg-assistant">Found it. The <span class="icode">.input-row</span> uses inline flex.</div>
-  </div>
-  <div class="phone-input">
-    <textarea class="phone-textarea" placeholder="Message Claude..." readonly></textarea>
+  <div class="messages" id="scene-drop"></div>
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Message Claude..." rows="1" readonly></textarea>
     <div class="btn-bar">
-      <button class="btn-circle btn-file">+</button>
-      <button class="btn-circle btn-slash">/</button>
+      <button class="btn-circle btn-file visible" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash visible" aria-label="Commands">/</button>
       <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
-      <button class="btn-lozenge"><span class="pct">45%</span></button>
-      <button class="btn-circle btn-send inactive">&uarr;</button>
+      <button class="btn-lozenge context"><span class="pct">45%</span></button>
+      <button class="btn-circle btn-send" aria-label="Send">&#x2191;</button>
     </div>
   </div>
 </div>
 
-<!-- ========================================
-     SCENE 2: File staged after drop
-     ======================================== -->
-<h2>After drop — file staged as pill</h2>
-<p class="note">File deposits as a pill below the textarea (same as file-picker uploads). User can remove with &times; before sending.</p>
+<!-- ============================================================
+     SCENE 7: No folder connected
+     ============================================================ -->
+<h2 class="scene-title">No folder — empty state</h2>
+<p class="scene-note">No session connected. Placeholder text, empty folder label shows "Guéridon", empty context shows "0%".</p>
 <div class="phone">
-  <div class="phone-messages">
-    <div class="msg-user">Can you fix the input bar?</div>
-    <div class="msg-assistant">I'll take a look at the current layout.</div>
-    <div class="chip-grid">
-      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Read</span><span class="c-path">index.html</span></div>
-      <div class="chip"><span class="c-status done">&#x2713;</span><span class="c-name">Grep</span><span class="c-path">input-bar</span></div>
-    </div>
-    <div class="msg-assistant">Found it. The <span class="icode">.input-row</span> uses inline flex.</div>
-  </div>
-  <div class="phone-input">
-    <textarea class="phone-textarea" placeholder="Message Claude..." readonly></textarea>
-    <div class="staged-deposits">
-      <div class="staged-pill"><span>screenshot.png</span><button class="staged-x">&times;</button></div>
-    </div>
-    <div class="btn-bar">
-      <button class="btn-circle btn-file">+</button>
-      <button class="btn-circle btn-slash">/</button>
-      <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
-      <button class="btn-lozenge"><span class="pct">45%</span></button>
-      <button class="btn-circle btn-send">&uarr;</button>
-    </div>
-  </div>
-</div>
-
-<!-- ========================================
-     SCENE 3: Multiple files staged
-     ======================================== -->
-<h2>Multiple files staged</h2>
-<p class="note">Multiple drops or multi-select from file picker. Each gets its own pill.</p>
-<div class="phone">
-  <div class="phone-messages">
-    <div class="msg-assistant">What would you like me to look at?</div>
-  </div>
-  <div class="phone-input">
-    <textarea class="phone-textarea" placeholder="Message Claude..." readonly>Here are the error logs from production</textarea>
-    <div class="staged-deposits">
-      <div class="staged-pill"><span>error-log.txt</span><button class="staged-x">&times;</button></div>
-      <div class="staged-pill"><span>screenshot.png</span><button class="staged-x">&times;</button></div>
-      <div class="staged-pill"><span>config.json</span><button class="staged-x">&times;</button></div>
-    </div>
-    <div class="btn-bar">
-      <button class="btn-circle btn-file">+</button>
-      <button class="btn-circle btn-slash">/</button>
-      <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
-      <button class="btn-lozenge"><span class="pct">45%</span></button>
-      <button class="btn-circle btn-send">&uarr;</button>
-    </div>
-  </div>
-</div>
-
-<!-- ========================================
-     SCENE 4: No session — error
-     ======================================== -->
-<h2>Drop without session — error feedback</h2>
-<p class="note">No folder connected. Drop shows red error text below textarea (same location as upload errors). Auto-clears after 3s.</p>
-<div class="phone">
-  <div class="phone-messages" style="min-height: 280px; display: flex; align-items: center; justify-content: center;">
+  <div class="messages" style="min-height: 280px; display: flex; align-items: center; justify-content: center;">
     <div style="text-align: center; color: var(--text-dim); font-size: 0.85rem;">Pick a folder to start</div>
   </div>
-  <div class="phone-input">
-    <textarea class="phone-textarea" placeholder="Message Claude..." readonly></textarea>
-    <div class="staged-deposits">
-      <div class="staged-error">Connect to a folder first</div>
-    </div>
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Choose a folder..." rows="1" readonly></textarea>
     <div class="btn-bar">
-      <button class="btn-circle btn-file">+</button>
-      <button class="btn-circle btn-slash">/</button>
-      <button class="btn-lozenge folder"><span class="label" style="color: var(--text-dim);">No folder</span></button>
-      <button class="btn-lozenge"><span class="pct">—</span></button>
-      <button class="btn-circle btn-send inactive">&uarr;</button>
+      <button class="btn-circle btn-file" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label"></span></button>
+      <button class="btn-lozenge context"><span class="pct"></span></button>
+      <button class="btn-circle btn-send" aria-label="Send">&#x2191;</button>
     </div>
   </div>
 </div>
 
-<div style="height: 60px;"></div>
+<!-- ============================================================
+     SCENE 8: High context warning
+     ============================================================ -->
+<h2 class="scene-title">High context — warning states</h2>
+<p class="scene-note">Context at 92% — critical (red border). Send button active with text in textarea.</p>
+<div class="phone">
+  <div class="messages" id="scene-high-context"></div>
+  <div class="input-area">
+    <textarea class="input-field" rows="1" readonly>Can you compact the context?</textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file visible" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash visible" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label">trousse</span></button>
+      <button class="btn-lozenge context" data-level="critical"><span class="pct">92%</span></button>
+      <button class="btn-circle btn-send" data-active="true" aria-label="Send">&#x2191;</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCENE 9: Disconnected
+     ============================================================ -->
+<h2 class="scene-title">Disconnected — desaturated state</h2>
+<p class="scene-note">SSE connection lost. Messages dimmed and desaturated, input disabled.</p>
+<div class="phone" data-scene="disconnected">
+  <div class="messages" id="scene-disconnected"></div>
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Reconnecting..." rows="1" readonly disabled></textarea>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file visible" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash visible" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label">gueridon</span></button>
+      <button class="btn-lozenge context"><span class="pct">45%</span></button>
+      <button class="btn-circle btn-send" aria-label="Send">&#x2191;</button>
+    </div>
+  </div>
+</div>
+
+<!-- Render all scenes -->
+<script>
+(function() {
+  const {
+    SCENE_CONVERSATION, SCENE_STREAMING, SCENE_ERROR, SCENE_DEPOSIT, SCENE_SYSTEM,
+    MSG_USER_SIMPLE, MSG_ASSISTANT_SHORT, MSG_ASSISTANT_WITH_TOOLS,
+    renderMessages,
+  } = Gdn;
+
+  const idle = { status: 'idle', connection: 'connected', activity: null };
+  const working = { status: 'working', connection: 'connected', activity: 'Bash' };
+  const disconnected = { status: 'idle', connection: 'disconnected', activity: null };
+
+  // Scene 1: Full conversation
+  renderMessages(
+    document.getElementById('scene-conversation'),
+    SCENE_CONVERSATION,
+    idle
+  );
+
+  // Scene 2: Streaming
+  renderMessages(
+    document.getElementById('scene-streaming'),
+    SCENE_STREAMING,
+    working
+  );
+
+  // Scene 3: Error recovery
+  renderMessages(
+    document.getElementById('scene-error'),
+    SCENE_ERROR,
+    idle
+  );
+
+  // Scene 4: File deposit
+  renderMessages(
+    document.getElementById('scene-deposit'),
+    SCENE_DEPOSIT,
+    idle
+  );
+
+  // Scene 5: System message
+  renderMessages(
+    document.getElementById('scene-system'),
+    SCENE_SYSTEM,
+    idle
+  );
+
+  // Scene 6: Drop overlay (conversation behind the overlay)
+  renderMessages(
+    document.getElementById('scene-drop'),
+    [MSG_USER_SIMPLE, MSG_ASSISTANT_WITH_TOOLS, MSG_ASSISTANT_SHORT],
+    idle
+  );
+
+  // Scene 8: High context (reuse a short conversation)
+  renderMessages(
+    document.getElementById('scene-high-context'),
+    [MSG_USER_SIMPLE, MSG_ASSISTANT_SHORT],
+    idle
+  );
+
+  // Scene 9: Disconnected (apply data attribute for CSS dimming)
+  const discPhone = document.querySelector('[data-scene="disconnected"]');
+  document.body.dataset.connection = '';  // don't affect the whole page
+  renderMessages(
+    document.getElementById('scene-disconnected'),
+    [MSG_USER_SIMPLE, MSG_ASSISTANT_WITH_TOOLS, MSG_ASSISTANT_SHORT],
+    disconnected
+  );
+  // Apply disconnected styling to just this phone frame
+  discPhone.style.opacity = '0.5';
+  discPhone.style.filter = 'grayscale(0.8)';
+})();
+</script>
+
 </body>
 </html>

@@ -83,6 +83,7 @@ window.addEventListener('error', function(e) {
 <script src="/render-chips.js"></script>
 <script src="/render-messages.js"></script>
 <script src="/render-chrome.js"></script>
+<script src="/render-overlays.js"></script>
 <script>
 // === Client error reporting ===
 // Captures unhandled errors and promise rejections, sends to bridge.
@@ -453,7 +454,15 @@ function handleSSEDelta(data) {
     }
 
     case 'ask_user':
-      showAskUserOverlay(data.questions, data.toolCallId);
+      showAskUserOverlay(data.questions, data.toolCallId, {
+        els: askEls,
+        onAnswer(answer) {
+          ssePostPrompt(sseCurrentFolder, answer);
+          liveState.messages.push({ role: 'user', content: answer });
+          sseRender();
+        },
+        onDismiss() { ta.focus(); },
+      });
       break;
 
     case 'thinking_content': {
@@ -558,127 +567,7 @@ async function exitSession() {
   sseRender();
 }
 
-// === AskUserQuestion overlay ===
-
-function showAskUserOverlay(questions, toolCallId) {
-  const backdrop = document.getElementById('askBackdrop');
-  const sheet = document.getElementById('askSheet');
-  const content = document.getElementById('askContent');
-
-  // Build overlay content
-  let html = '';
-  const isSingleImmediate = questions.length === 1 && !questions[0].multiSelect;
-
-  questions.forEach((q, qi) => {
-    html += `<div class="ask-header">${esc(q.header)}</div>`;
-    html += `<div class="ask-question">${esc(q.question)}</div>`;
-    html += `<div class="ask-options" data-qi="${qi}" data-multi="${q.multiSelect}">`;
-    q.options.forEach((opt, oi) => {
-      html += `<div class="ask-option" data-qi="${qi}" data-oi="${oi}" data-label="${esc(opt.label)}">`;
-      if (q.multiSelect) {
-        html += `<span class="ask-option-check">&#x2713;</span>`;
-      }
-      html += `<div>`;
-      html += `<div class="ask-option-label">${esc(opt.label)}</div>`;
-      if (opt.description) {
-        html += `<div class="ask-option-desc">${esc(opt.description)}</div>`;
-      }
-      html += `</div></div>`;
-    });
-    html += `</div>`;
-  });
-
-  if (!isSingleImmediate) {
-    html += `<button class="ask-confirm" id="askConfirm" data-visible="true">Send answers</button>`;
-  }
-  html += `<div class="ask-custom" id="askCustom">Type a custom answer instead</div>`;
-
-  content.innerHTML = html;
-
-  // Show overlay
-  backdrop.dataset.open = 'true';
-  sheet.dataset.open = 'true';
-
-  // Option tap handlers
-  content.querySelectorAll('.ask-option').forEach(opt => {
-    opt.addEventListener('click', () => {
-      const qi = opt.dataset.qi;
-      const container = opt.closest('.ask-options');
-      const isMulti = container.dataset.multi === 'true';
-
-      if (isMulti) {
-        // Toggle selection
-        opt.dataset.selected = opt.dataset.selected === 'true' ? 'false' : 'true';
-      } else {
-        // Single-select: deselect siblings, select this one
-        container.querySelectorAll('.ask-option').forEach(s => s.dataset.selected = 'false');
-        opt.dataset.selected = 'true';
-
-        // Single question + single select = immediate send
-        if (isSingleImmediate) {
-          sendAskUserAnswer(questions, toolCallId);
-        }
-      }
-    });
-  });
-
-  // Confirm button (multi-select or multi-question)
-  const confirmBtn = document.getElementById('askConfirm');
-  if (confirmBtn) {
-    confirmBtn.addEventListener('click', () => {
-      sendAskUserAnswer(questions, toolCallId);
-    });
-  }
-
-  // Custom answer — dismiss overlay, focus input
-  document.getElementById('askCustom').addEventListener('click', () => {
-    hideAskUserOverlay();
-    document.querySelector('.input-field').focus();
-  });
-
-  // Backdrop tap dismisses
-  backdrop.addEventListener('click', () => {
-    hideAskUserOverlay();
-    document.querySelector('.input-field').focus();
-  });
-}
-
-function sendAskUserAnswer(questions, toolCallId) {
-  // Collect selections
-  const content = document.getElementById('askContent');
-  let answer = '';
-
-  if (questions.length === 1) {
-    const selected = content.querySelectorAll('.ask-option[data-selected="true"]');
-    const labels = Array.from(selected).map(s => s.dataset.label);
-    answer = labels.join(', ');
-  } else {
-    // Multi-question: "Header: label1, label2\nHeader2: label3"
-    const parts = [];
-    questions.forEach((q, qi) => {
-      const selected = content.querySelectorAll(`.ask-option[data-qi="${qi}"][data-selected="true"]`);
-      const labels = Array.from(selected).map(s => s.dataset.label);
-      if (labels.length > 0) {
-        parts.push(`${q.header}: ${labels.join(', ')}`);
-      }
-    });
-    answer = parts.join('\n');
-  }
-
-  if (answer && sseCurrentFolder) {
-    ssePostPrompt(sseCurrentFolder, answer);
-    // Show the answer as a user message
-    liveState.messages.push({ role: 'user', content: answer });
-    sseRender();
-  }
-
-  hideAskUserOverlay();
-}
-
-function hideAskUserOverlay() {
-  document.getElementById('askBackdrop').dataset.open = 'false';
-  document.getElementById('askSheet').dataset.open = 'false';
-}
+// showAskUserOverlay, hideAskUserOverlay now in /render-overlays.js
 
 function sseConnectFolder(folder, sessionId) {
   const name = folder.name || folder;
@@ -759,7 +648,10 @@ if (bridgeUrl) {
 const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, THINKING_TRUNCATE,
         renderChip, renderThinkingChip, renderLocalCommand, attachCopyButton,
         addCopyButtons, renderUserBubble, renderMessages,
-        renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton } = Gdn;
+        renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton,
+        showAskUserOverlay, hideAskUserOverlay,
+        getSlashCommands, renderSlashList, openSlashSheet,
+        showStagedError: _showStagedError, renderStagedDeposits: _renderStagedDeposits } = Gdn;
 
 // Chrome element refs — cached once, passed to render functions
 const chromeEls = {
@@ -775,6 +667,26 @@ const switcherEls = {
   backdrop: document.getElementById('switcherBackdrop'),
   body: document.body,
 };
+const askEls = {
+  backdrop: document.getElementById('askBackdrop'),
+  sheet: document.getElementById('askSheet'),
+  content: document.getElementById('askContent'),
+};
+const slashEls = {
+  list: document.getElementById('slashList'),
+  sheet: document.getElementById('slashSheet'),
+  searchInput: document.getElementById('slashSearch'),
+};
+const stagedContainer = document.getElementById('stagedDeposits');
+
+// Orchestrator wrappers — bind mutable state to module functions
+function showStagedError(msg) { _showStagedError(msg, stagedContainer); }
+function renderStagedDeposits() {
+  _renderStagedDeposits(stagedDeposits, {
+    container: stagedContainer,
+    onRemove(i) { stagedDeposits.splice(i, 1); renderStagedDeposits(); refreshSendButton(); },
+  });
+}
 
 // Configure marked — GFM for tables/task lists/strikethrough, no <br> on single newlines
 marked.setOptions({ gfm: true, breaks: false });
@@ -1014,111 +926,33 @@ sendBtn.addEventListener('click', () => {
 });
 
 // --- Slash command sheet ---
-const slashSheet = document.getElementById('slashSheet');
-const slashList = document.getElementById('slashList');
+// getSlashCommands, renderSlashList, openSlashSheet now in /render-overlays.js
+
 const slashBtn = document.getElementById('slashBtn');
 
-// Bridge-level commands — always present, never reported by CC
-// (state-builder.ts LOCAL_CMDS is the separate set for tagging CC-reported locals)
-const BRIDGE_COMMANDS = [
-  { name: 'abort', description: 'Kill hung Claude process', local: true },
-  { name: 'exit', description: 'End session and return to lobby', local: true },
-];
-
-// Shown before CC spawns (CC will send its own list including these + help, clear, skills)
-const FALLBACK_LOCAL_COMMANDS = [
-  { name: 'compact', description: 'Compact conversation history', local: true },
-  { name: 'context', description: 'Show context window usage', local: true },
-  { name: 'cost', description: 'Show session cost', local: true },
-];
-
-const slashSearchInput = document.getElementById('slashSearch');
-
-// Merge bridge commands + CC commands (or fallback), sorted: locals first, then alpha
-function getSlashCommands() {
-  const source = liveState.slashCommands?.length ? liveState.slashCommands : FALLBACK_LOCAL_COMMANDS;
-  const bridgeNames = new Set(BRIDGE_COMMANDS.map(c => c.name));
-  const merged = [...BRIDGE_COMMANDS, ...source.filter(c => !bridgeNames.has(c.name))];
-  merged.sort((a, b) => {
-    if (a.local && !b.local) return -1;
-    if (!a.local && b.local) return 1;
-    return a.name.localeCompare(b.name);
-  });
-  return merged;
-}
-
-function renderSlashList(filter) {
-  const all = getSlashCommands();
-  const q = (filter || '').toLowerCase();
-  const cmds = q ? all.filter(c => c.name.includes(q) || (c.description || '').toLowerCase().includes(q)) : all;
-
-  slashList.innerHTML = '';
-  for (const cmd of cmds) {
-    const row = document.createElement('div');
-    row.className = 'slash-cmd';
-
-    const nameEl = document.createElement('span');
-    nameEl.className = 'slash-cmd-name';
-    nameEl.textContent = cmd.name;
-    row.appendChild(nameEl);
-
-    if (cmd.description) {
-      const descEl = document.createElement('span');
-      descEl.className = 'slash-cmd-desc';
-      descEl.textContent = cmd.description;
-      row.appendChild(descEl);
-    }
-    if (cmd.local) {
-      const badge = document.createElement('span');
-      badge.className = 'slash-cmd-local';
-      badge.textContent = 'local';
-      row.appendChild(badge);
-    }
-
-    row.addEventListener('click', () => {
-      slashSheet.classList.remove('open');
-      // /exit is handled client-side — triggers exitSession with confirmation
-      if (cmd.name === 'exit') {
-        if (sseCurrentFolder && confirm('End this session and return to the lobby?')) {
-          exitSession();
-        }
-        return;
-      }
-      // /abort kills the CC process — emergency escape for hung sessions
-      if (cmd.name === 'abort') {
-        if (sseCurrentFolder) {
-          ssePostAbort(sseCurrentFolder);
-        }
-        return;
-      }
-      ta.value = '/' + cmd.name;
-      refreshSendButton();
-      // Local commands auto-send — they're instant, no reason to pause
-      if (cmd.local) {
-        sendBtn.click();
-      } else {
-        ta.focus();
-      }
-    });
-    slashList.appendChild(row);
+function handleSlashSelect(cmd) {
+  if (cmd.name === 'exit') {
+    if (sseCurrentFolder && confirm('End this session and return to the lobby?')) exitSession();
+    return;
   }
+  if (cmd.name === 'abort') {
+    if (sseCurrentFolder) ssePostAbort(sseCurrentFolder);
+    return;
+  }
+  ta.value = '/' + cmd.name;
+  refreshSendButton();
+  if (cmd.local) sendBtn.click();
+  else ta.focus();
 }
 
-function openSlashSheet() {
-  if (!getSlashCommands().length) return;
-  slashSearchInput.value = '';
-  renderSlashList('');
-  slashSheet.classList.add('open');
-  // Auto-focus after the sheet animates open
-  requestAnimationFrame(() => slashSearchInput.focus());
+function slashOpts() {
+  return { ccCommands: liveState.slashCommands, els: slashEls, onSelect: handleSlashSelect };
 }
 
-slashSearchInput.addEventListener('input', () => renderSlashList(slashSearchInput.value));
-slashBtn.addEventListener('click', openSlashSheet);
-
-// Close on backdrop tap
-slashSheet.addEventListener('click', (e) => {
-  if (e.target === slashSheet) slashSheet.classList.remove('open');
+slashEls.searchInput.addEventListener('input', () => renderSlashList(slashEls.searchInput.value, slashOpts()));
+slashBtn.addEventListener('click', () => openSlashSheet(slashOpts()));
+slashEls.sheet.addEventListener('click', (e) => {
+  if (e.target === slashEls.sheet) slashEls.sheet.classList.remove('open');
 });
 
 // === File upload ===
@@ -1129,40 +963,9 @@ fileInput.multiple = true;
 fileInput.style.display = 'none';
 document.body.appendChild(fileInput);
 
+// showStagedError, renderStagedDeposits now in /render-overlays.js
 // Replicate server/upload.ts:buildDepositNote exactly — if this drifts,
 // staged vs non-staged uploads produce different prompts for CC.
-
-function showStagedError(msg) {
-  const container = document.getElementById('stagedDeposits');
-  const el = document.createElement('div');
-  el.className = 'staged-error';
-  el.textContent = msg;
-  container.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
-
-function renderStagedDeposits() {
-  const container = document.getElementById('stagedDeposits');
-  const errors = [...container.querySelectorAll('.staged-error')];
-  container.innerHTML = '';
-  errors.forEach(e => container.appendChild(e));
-
-  stagedDeposits.forEach((dep, i) => {
-    const pill = document.createElement('span');
-    pill.className = 'staged-pill';
-    const files = dep.manifest.files;
-    const label = files.length === 1
-      ? files[0].deposited_as
-      : `${files[0].deposited_as} +${files.length - 1}`;
-    pill.innerHTML = `<span class="staged-name">${label}</span><button class="staged-x" aria-label="Remove">\u00D7</button>`;
-    pill.querySelector('.staged-x').addEventListener('click', () => {
-      stagedDeposits.splice(i, 1);
-      renderStagedDeposits();
-      refreshSendButton();
-    });
-    container.appendChild(pill);
-  });
-}
 
 function uploadFiles(files) {
   if (!files.length) return;
