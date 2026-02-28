@@ -15,6 +15,7 @@
   html {
     overflow: visible !important;
     scroll-snap-type: y proximity; /* auto-follow when near bottom, leave alone when scrolled up */
+    scroll-padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); /* clear sticky input area */
   }
 
   /* Body-scroll layout: body grows with content, enabling Safari Full Page
