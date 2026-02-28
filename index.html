@@ -111,36 +111,23 @@ let cachedState = null;
 let switcherOpen = false;
 let switcherExpandedFolder = null; // folder name currently expanded in switcher
 let userScrolledUp = false; // true when user has scrolled away from bottom
+let scrollLockUntil = 0; // timestamp — suppress scroll events during programmatic scrolls (iOS keyboard animation)
 
 // === Mode detection ===
 const params = new URLSearchParams(location.search);
 let bridgeUrl = params.get('bridge'); // Explicit bridge URL: ?bridge=http://kube:3001
 
-// === iOS standalone viewport fix ===
-// iOS reports viewport height shorter than the actual screen in standalone mode.
-// CSS viewport units (dvh, vh) and position:fixed are all capped at this wrong value.
-// Force html+body to screen.height which IS the real renderable area.
-// iOS standalone: force full screen height, and resize when keyboard opens.
-// Without this, iOS reports viewport height shorter than the actual screen (793px vs 852px)
-// and the messages area extends behind the keyboard, blocking scroll-to-top.
+// === iOS keyboard detection ===
+// Body-scroll layout: no height-setting needed (body grows with content,
+// the iOS viewport lie doesn't matter). Only toggle keyboard-open class
+// for safe-area padding adjustments in standalone mode.
 {
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
-  if (isStandalone) {
-    document.documentElement.style.height = screen.height + 'px';
-    document.body.style.height = screen.height + 'px';
-  }
   if (window.visualViewport) {
     const inputArea = document.querySelector('.input-area');
     const refHeight = window.visualViewport.height;
     window.visualViewport.addEventListener('resize', () => {
       const keyboardOpen = window.visualViewport.height < refHeight - 100;
       inputArea.classList.toggle('keyboard-open', keyboardOpen);
-      if (isStandalone) {
-        const h = (keyboardOpen ? window.visualViewport.height : screen.height) + 'px';
-        document.documentElement.style.height = h;
-        document.body.style.height = h;
-        window.scrollTo(0, 0);
-      }
     });
   }
 }
@@ -734,6 +721,10 @@ function sseRender() {
       connection: liveState.connection,
       activity: liveState._activity,
       userScrolledUp,
+      scrollToBottom: () => {
+        scrollLockUntil = Date.now() + 800;
+        window.scrollTo({ top: document.body.scrollHeight });
+      },
       onError: reportError,
     });
     refreshSwitcher();
@@ -795,11 +786,13 @@ const switcherEls = {
 // Configure marked — GFM for tables/task lists/strikethrough, no <br> on single newlines
 marked.setOptions({ gfm: true, breaks: false });
 
-// Track user scroll intent on the messages container
-document.getElementById('messages').addEventListener('scroll', () => {
-  const el = document.getElementById('messages');
+// Track user scroll intent on the document (body-scroll layout)
+window.addEventListener('scroll', () => {
+  // Scroll-lock guard: suppress scroll events during programmatic scrollTo
+  // and iOS keyboard animation (which fires scroll events that fight sticky positioning)
+  if (Date.now() < scrollLockUntil) return;
   // "At bottom" = within 60px of the end (threshold for finger imprecision)
-  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 60;
+  const atBottom = window.scrollY + window.innerHeight >= document.body.scrollHeight - 60;
   userScrolledUp = !atBottom;
 });
 
@@ -944,7 +937,8 @@ ta.addEventListener('input', () => {
 // Tapping input resets scroll — user wants to see latest to compose a reply
 ta.addEventListener('focus', () => {
   userScrolledUp = false;
-  msgEl.scrollTop = msgEl.scrollHeight;
+  scrollLockUntil = Date.now() + 800;
+  window.scrollTo({ top: document.body.scrollHeight });
 });
 
 // Enter = newline. Shift+Enter or Cmd/Ctrl+Enter = submit.
@@ -1034,7 +1028,8 @@ sendBtn.addEventListener('click', () => {
 
     // Scroll to bottom and reset scroll tracking
     userScrolledUp = false;
-    msgEl.scrollTop = msgEl.scrollHeight;
+    scrollLockUntil = Date.now() + 800;
+    window.scrollTo({ top: document.body.scrollHeight });
 
     // Clear textarea
     ta.value = '';

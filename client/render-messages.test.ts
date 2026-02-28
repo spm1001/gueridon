@@ -294,4 +294,32 @@ describe("renderMessages", () => {
     renderMessages(el, [{ role: "user", content: "hi", _msgId: "abc-123" }], idle);
     expect((el.querySelector(".msg-user") as HTMLElement).dataset.msgId).toBe("abc-123");
   });
+
+  it("calls scrollToBottom callback when not scrolled up", () => {
+    const el = makeContainer();
+    const scrollToBottom = vi.fn();
+    renderMessages(el, [{ role: "assistant", content: "hello" }], {
+      ...idle,
+      scrollToBottom,
+    });
+    expect(scrollToBottom).toHaveBeenCalledOnce();
+  });
+
+  it("skips scrollToBottom when userScrolledUp is true", () => {
+    const el = makeContainer();
+    const scrollToBottom = vi.fn();
+    renderMessages(el, [{ role: "assistant", content: "hello" }], {
+      ...idle,
+      userScrolledUp: true,
+      scrollToBottom,
+    });
+    expect(scrollToBottom).not.toHaveBeenCalled();
+  });
+
+  it("falls back to container.scrollTop when no scrollToBottom provided", () => {
+    const el = makeContainer();
+    renderMessages(el, [{ role: "assistant", content: "hello" }], idle);
+    // No error thrown — backward-compatible fallback
+    expect(el.querySelector(".msg-assistant")).not.toBeNull();
+  });
 });

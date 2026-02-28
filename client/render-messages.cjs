@@ -66,6 +66,7 @@ function renderUserBubble(content) {
  * @param {string} opts.connection - 'connected' | 'disconnected' | etc.
  * @param {string|null} opts.activity - '_activity' value: 'thinking' | 'writing' | tool name | null
  * @param {boolean} opts.userScrolledUp - If true, skip auto-scroll
+ * @param {Function} [opts.scrollToBottom] - Scroll-to-bottom implementation (body-scroll layout uses window.scrollTo)
  * @param {Function} [opts.onError] - Optional error reporter (receives string message)
  */
 function renderMessages(container, messages, opts) {
@@ -189,7 +190,11 @@ function renderMessages(container, messages, opts) {
 
   // Only auto-scroll if user hasn't scrolled up to read earlier content
   if (!userScrolledUp) {
-    container.scrollTop = container.scrollHeight;
+    if (opts.scrollToBottom) {
+      opts.scrollToBottom();
+    } else {
+      container.scrollTop = container.scrollHeight; // fallback for tests
+    }
   }
 }
 

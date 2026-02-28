@@ -28,16 +28,19 @@ body {
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
-  height: 100dvh;
+  min-height: 100dvh; /* body grows with content — enables Safari Full Page screenshots */
   display: flex;
   flex-direction: column;
   -webkit-font-smoothing: antialiased;
 }
 
 /* === Messages === */
+/* Body-scroll layout: messages overflow into the document, not a scroll
+   container. Safari Full Page screenshots capture document scroll height.
+   flex: 1 0 auto = grow to fill, never shrink, content-sized basis.
+   (flex: 1 means 1 1 0 — messages can collapse to zero height.) */
 .messages {
-  flex: 1;
-  overflow-y: auto;
+  flex: 1 0 auto;
   padding: calc(var(--safe-top) + 12px) 14px 16px;
   display: flex;
   flex-direction: column;
@@ -308,8 +311,15 @@ body {
 
 
 /* === Input area === */
+/* Sticky: stays at viewport bottom while document scrolls.
+   will-change: transform promotes to compositor layer, preventing
+   sticky flicker during iOS keyboard animation. */
 .input-area {
   flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  will-change: transform;
   background: var(--surface);
   border-top: 1px solid var(--border);
   padding: 8px 14px calc(var(--safe-bottom) + 4px);
@@ -318,14 +328,11 @@ body {
   gap: 6px;
 }
 
-/* In standalone PWA mode, iOS reports viewport height shorter than the
-   actual screen (793px vs 852px on iPhone 14 Pro). CSS viewport units
-   and position:fixed are both capped at this wrong value. JS sets
-   html height to screen.height to fill the real screen. */
+/* Standalone PWA: adjust safe-area padding when keyboard is open/closed.
+   No overflow:hidden on html — body-scroll layout needs document-level
+   scrolling. (The old fixed-height layout used overflow:hidden to prevent
+   iOS viewport sliding, but that blocks body scroll.) */
 @media (display-mode: standalone) {
-  html {
-    overflow: hidden;
-  }
   .input-area {
     padding-bottom: max(env(safe-area-inset-bottom, 0px), 4px);
   }
