@@ -32,6 +32,7 @@
     position: sticky;
     bottom: 0;
     z-index: 10;
+    will-change: transform; /* compositor layer — prevents sticky flicker during keyboard animation */
   }
 
   /* 2. Show + and / buttons in shell state (CSS default visible) */
