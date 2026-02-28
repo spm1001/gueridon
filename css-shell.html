@@ -10,6 +10,12 @@
 <style>
   /* === Proposed CSS fixes for shell state === */
 
+  /* Override style.css's html { overflow: hidden } in standalone media query
+     — that blocks document-level scrolling entirely. */
+  html {
+    overflow: visible !important;
+  }
+
   /* Body-scroll layout: body grows with content, enabling Safari Full Page
      screenshots (which capture document scroll height, not element scroll).
      No calc(100dvh + 1px) needed — body naturally exceeds viewport when
@@ -92,19 +98,33 @@
     <div class="msg-system">CSS-only shell — body-scroll proof-of-concept</div>
     <pre id="diag" style="font-family:var(--mono);font-size:0.72rem;color:var(--text-dim);line-height:1.8;padding:12px;background:var(--surface);border-radius:8px;white-space:pre-wrap;"></pre>
 
-    <!-- Dummy messages to create scrollable content -->
+    <!-- Enough dummy messages to guarantee 2-3x viewport overflow -->
     <div class="msg-user">Can you help me refactor this module?</div>
-    <div class="msg-assistant"><p>Sure, I'll take a look at the code and suggest improvements.</p></div>
+    <div class="msg-assistant"><p>Sure, I'll take a look at the code and suggest improvements. The main thing to check here is whether the body grows past the viewport height.</p></div>
     <div class="msg-user">The scroll should now be on the document body, not the messages container.</div>
     <div class="msg-assistant"><p>That's correct. With <code>overflow-y: visible</code> on <code>.messages</code> and <code>height: auto</code> on <code>body</code>, the document itself scrolls. This enables Safari's "Full Page" screenshot to capture the entire conversation.</p></div>
     <div class="msg-user">What about the input area?</div>
     <div class="msg-assistant"><p>The input area uses <code>position: sticky; bottom: 0</code> so it stays pinned to the bottom of the viewport as you scroll through messages. It's the same pattern as many chat apps.</p></div>
     <div class="msg-user">And the keyboard on iOS?</div>
     <div class="msg-assistant"><p>iOS keyboard animation fires scroll events that can fight sticky positioning. The scroll-lock guard (800ms window) suppresses these during programmatic scrolls. Without it, keyboard open/close resets <code>userScrolledUp</code> mid-animation.</p></div>
-    <div class="msg-user">One more message to ensure we have enough content to scroll.</div>
-    <div class="msg-assistant"><p>This should be plenty. Try scrolling — the input bar should stay fixed at the bottom. On iOS, try a Full Page screenshot in Safari — it should now capture all messages, not just one viewport.</p></div>
-    <div class="msg-user">Adding a few more for good measure.</div>
-    <div class="msg-assistant"><p>Padding the conversation with enough content to force body scroll on most phone screens. The key visual test: does the input area stick? Does scroll feel natural?</p></div>
+    <div class="msg-user">Tell me about the flex layout.</div>
+    <div class="msg-assistant"><p><code>flex: 1 0 auto</code> means grow to fill, never shrink, content-sized basis. With <code>flex: 1</code> (i.e. <code>1 1 0</code>), messages can collapse to zero height — that's why the full shorthand matters.</p></div>
+    <div class="msg-user">Why not position: fixed for the input area?</div>
+    <div class="msg-assistant"><p>On iOS, <code>position: fixed</code> is positioned relative to the visual viewport, which lies about its height in standalone mode (793px vs 852px). Sticky avoids this because it participates in document flow.</p></div>
+    <div class="msg-user">What about the calc(100dvh + 1px) trick?</div>
+    <div class="msg-assistant"><p>That was for the fixed-height layout — the 1px overflow triggered iOS to recalculate the viewport to the true height. Not needed with body-scroll because body naturally exceeds viewport when content is long.</p></div>
+    <div class="msg-user">How does Safari Full Page screenshot work?</div>
+    <div class="msg-assistant"><p>Safari captures <code>document.documentElement.scrollHeight</code>. If the page has content taller than the viewport, the "Full Page" tab appears in the screenshot editor. With the old layout (<code>.messages</code> as scroll container), the document was exactly one viewport tall — no Full Page option.</p></div>
+    <div class="msg-user">What should I check in this test?</div>
+    <div class="msg-assistant"><p>Three things: (1) Input bar stays at bottom while scrolling through messages. (2) Safari screenshot shows "Full Page" tab. (3) Keyboard open/close doesn't break the layout.</p></div>
+    <div class="msg-user">This is message 10 — should be well past one viewport by now.</div>
+    <div class="msg-assistant"><p>Yes, each message pair is roughly 80-100px. With 10+ pairs plus the diagnostic panel, we should be at 1500-2000px — well past any phone viewport (695-852px).</p></div>
+    <div class="msg-user">Adding more to be absolutely sure.</div>
+    <div class="msg-assistant"><p>Better too many than too few. The Full Page option only appears when there's genuine overflow to capture. More content = more confidence the test is valid.</p></div>
+    <div class="msg-user">What's the standalone media query issue?</div>
+    <div class="msg-assistant"><p>The main <code>style.css</code> has <code>html { overflow: hidden }</code> inside <code>@media (display-mode: standalone)</code>. That was needed for the fixed-height layout to prevent iOS viewport sliding, but it completely blocks body-scroll. The shell overrides this with <code>html { overflow: visible !important }</code>.</p></div>
+    <div class="msg-user">Last message — this conversation should be roughly 3x viewport height.</div>
+    <div class="msg-assistant"><p>If the input bar is still at the bottom and the page scrolls freely, the body-scroll approach works. Take a screenshot now — you should see the Full Page tab.</p></div>
   </div>
 
   <script>
@@ -116,29 +136,30 @@
     const bodyCS = getComputedStyle(document.body);
     const htmlCS = getComputedStyle(document.documentElement);
 
+    const docScrollH = document.documentElement.scrollHeight;
+    const overflow = docScrollH > window.innerHeight;
     d.textContent = [
       `mode:        ${standalone ? 'STANDALONE' : 'browser'}`,
       `screen.h:    ${screen.height}px`,
       `innerHeight: ${window.innerHeight}px`,
       `vv.height:   ${vv ? vv.height + 'px' : 'n/a'}`,
-      `vv.offsetTop:${vv ? vv.offsetTop + 'px' : 'n/a'}`,
-      `body.h (computed): ${bodyCS.height}`,
-      `html.h (computed): ${htmlCS.height}`,
-      `body.clientH: ${document.body.clientHeight}px`,
-      `html.clientH: ${document.documentElement.clientHeight}px`,
-      `body.offsetH: ${document.body.offsetHeight}px`,
-      `body.scrollH: ${document.body.scrollHeight}px`,
-      `devicePixelRatio: ${window.devicePixelRatio}`,
-      `gap (screen - body): ${screen.height - document.body.offsetHeight}px`,
       ``,
-      `safe-area-top:    ${getComputedStyle(document.documentElement).getPropertyValue('--safe-top')}`,
-      `safe-area-bottom: ${getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom')}`,
-      `sat (measured):   ${getComputedStyle(document.querySelector('.messages')).paddingTop}`,
+      `body.h (computed): ${bodyCS.height}`,
+      `body.scrollH:      ${document.body.scrollHeight}px`,
+      `doc.scrollH:       ${docScrollH}px`,
+      `window.scrollY:    ${Math.round(window.scrollY)}px`,
+      `OVERFLOW:          ${overflow ? 'YES ✓' : 'NO ✗ (need more content)'}`,
+      ``,
+      `html overflow:     ${htmlCS.overflow || htmlCS.overflowY || 'auto'}`,
+      `body.offsetH:      ${document.body.offsetHeight}px`,
+      `messages.h:        ${getComputedStyle(document.querySelector('.messages')).height}`,
+      `input sticky:      ${getComputedStyle(document.querySelector('.input-area')).position}`,
     ].join('\n');
   }
 
   measure();
   window.addEventListener('resize', measure);
+  window.addEventListener('scroll', measure);
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', measure);
     window.visualViewport.addEventListener('scroll', measure);
