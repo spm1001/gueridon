@@ -85,9 +85,8 @@
     gap: 8px; /* up from 6px, matches btn-bar gap and padding-top */
   }
 
-  /* Auto-grow textarea — pure CSS, no JavaScript needed. */
+  /* Uncap textarea height — JS auto-grow handles sizing */
   .input-field {
-    field-sizing: content;
     max-height: none; /* override style.css 120px cap */
   }
 
@@ -187,6 +186,15 @@
       <button class="btn-circle btn-send" aria-label="Send" id="sendBtn">&#x2191;</button>
     </div>
   </div>
+
+  <!-- After .input-area so the textarea exists in DOM -->
+  <script>
+  const ta = document.querySelector('.input-field');
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px'; // unlimited — no cap
+  });
+  </script>
 
 </body>
 </html>
