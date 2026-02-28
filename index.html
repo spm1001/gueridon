@@ -33,6 +33,10 @@
     <div id="askContent"></div>
   </div>
 
+  <div class="drop-overlay" id="dropOverlay">
+    <div class="drop-overlay-label">Drop files here</div>
+  </div>
+
   <div class="messages" id="messages"></div>
 
 
@@ -1714,7 +1718,10 @@ function renderStagedDeposits() {
 
 function uploadFiles(files) {
   if (!files.length) return;
-  if (!sseCurrentFolder || !bridgeUrl) return;
+  if (!sseCurrentFolder || !bridgeUrl) {
+    showStagedError('Connect to a folder first');
+    return;
+  }
   const fileBtn = document.getElementById('fileBtn');
   const targetFolder = sseCurrentFolder;
   const form = new FormData();
@@ -1749,11 +1756,43 @@ fileInput.addEventListener('change', () => {
   fileInput.value = '';
 });
 
-// Drag and drop on message area
-msgEl.addEventListener('dragover', (e) => e.preventDefault());
-msgEl.addEventListener('drop', (e) => {
+// Drag and drop — document-level with overlay
+const dropOverlay = document.getElementById('dropOverlay');
+let dragCounter = 0;
+
+document.addEventListener('dragenter', (e) => {
   e.preventDefault();
-  uploadFiles(e.dataTransfer.files);
+  if (e.dataTransfer?.types.includes('Files')) {
+    dragCounter++;
+    dropOverlay.classList.add('active');
+  }
+});
+
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+});
+
+document.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter <= 0) {
+    dragCounter = 0;
+    dropOverlay.classList.remove('active');
+  }
+});
+
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  dropOverlay.classList.remove('active');
+  if (e.dataTransfer?.files.length) {
+    if (!sseCurrentFolder || !bridgeUrl) {
+      showStagedError('Connect to a folder first');
+      return;
+    }
+    uploadFiles(e.dataTransfer.files);
+  }
 });
 </script>
 </body>
