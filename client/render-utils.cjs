@@ -7,6 +7,7 @@
  * Load order: marked.js → render-utils.js → (other client modules) → inline script
  */
 
+(function() {
 const THINKING_TRUNCATE = 500;
 
 /** HTML-escape a string. */
@@ -79,3 +80,4 @@ function shortModel(model) {
 const mod = { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, timeAgo, shortModel, THINKING_TRUNCATE };
 if (typeof window !== 'undefined') window.Gdn = { ...window.Gdn, ...mod };
 if (typeof module !== 'undefined') module.exports = mod;
+})();

@@ -12,6 +12,7 @@
  * Load order: marked.js → render-utils.js → render-chips.js → render-messages.js → inline script
  */
 
+(function() {
 // Dependencies — loaded by earlier <script> tags (browser) or test setup (Node/jsdom)
 const { attachCopyButton, renderChip, renderThinkingChip, renderLocalCommand,
         esc, trimText, truncateThinking } = window.Gdn;
@@ -196,3 +197,4 @@ function renderMessages(container, messages, opts) {
 const mod = { addCopyButtons, renderUserBubble, renderMessages };
 if (typeof window !== 'undefined') window.Gdn = { ...window.Gdn, ...mod };
 if (typeof module !== 'undefined') module.exports = mod;
+})();

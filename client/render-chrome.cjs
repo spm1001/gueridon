@@ -7,6 +7,7 @@
  * Load order: marked.js → render-utils.js → render-chips.js → render-messages.js → render-chrome.js → inline script
  */
 
+(function() {
 // Dependencies — loaded by earlier <script> tags (browser) or test setup (Node/jsdom)
 const { esc, timeAgo, shortModel } = window.Gdn;
 
@@ -297,3 +298,4 @@ function updateSendButton(sendBtn, opts) {
 const mod = { renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton };
 if (typeof window !== 'undefined') window.Gdn = { ...window.Gdn, ...mod };
 if (typeof module !== 'undefined') module.exports = mod;
+})();

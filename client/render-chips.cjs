@@ -8,6 +8,7 @@
  * Load order: marked.js → render-utils.js → render-chips.js → inline script
  */
 
+(function() {
 // Dependencies — loaded by earlier <script> tags (browser) or test setup (Node/jsdom)
 const { esc, trimToolOutput, truncateThinking, THINKING_TRUNCATE } = window.Gdn;
 const _marked = globalThis.marked;
@@ -127,3 +128,4 @@ function renderChip(tc) {
 const mod = { attachCopyButton, renderLocalCommand, renderThinkingChip, renderChip };
 if (typeof window !== 'undefined') window.Gdn = { ...window.Gdn, ...mod };
 if (typeof module !== 'undefined') module.exports = mod;
+})();
