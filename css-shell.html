@@ -14,6 +14,7 @@
      — that blocks document-level scrolling entirely. */
   html {
     overflow: visible !important;
+    scroll-snap-type: y proximity; /* auto-follow when near bottom, leave alone when scrolled up */
   }
 
   /* Body-scroll layout: body grows with content, enabling Safari Full Page
@@ -85,9 +86,17 @@
     gap: 8px; /* up from 6px, matches btn-bar gap and padding-top */
   }
 
-  /* Uncap textarea height — JS auto-grow handles sizing */
+  /* Auto-grow textarea — pure CSS, no JS event listener needed */
   .input-field {
+    field-sizing: content;
     max-height: none; /* override style.css 120px cap */
+  }
+
+  /* Scroll-snap sentinel: the last child of messages snaps to viewport bottom.
+     proximity = only snaps when close, doesn't yank when scrolled up reading. */
+  .snap-anchor {
+    scroll-snap-align: end;
+    height: 0; /* invisible — just a snap target */
   }
 
   /* 5. Context lozenge: show default when percentage is empty */
@@ -131,6 +140,7 @@
     <div class="msg-assistant"><p>The main <code>style.css</code> has <code>html { overflow: hidden }</code> inside <code>@media (display-mode: standalone)</code>. That was needed for the fixed-height layout to prevent iOS viewport sliding, but it completely blocks body-scroll. The shell overrides this with <code>html { overflow: visible !important }</code>.</p></div>
     <div class="msg-user">Last message — this conversation should be roughly 3x viewport height.</div>
     <div class="msg-assistant"><p>If the input bar is still at the bottom and the page scrolls freely, the body-scroll approach works. Take a screenshot now — you should see the Full Page tab.</p></div>
+    <div class="snap-anchor"></div>
   </div>
 
   <script>
@@ -187,13 +197,31 @@
     </div>
   </div>
 
-  <!-- After .input-area so the textarea exists in DOM -->
+  <!-- Streaming simulator — tests scroll-snap during rapid DOM appends -->
   <script>
-  const ta = document.querySelector('.input-field');
-  ta.addEventListener('input', () => {
-    ta.style.height = 'auto';
-    ta.style.height = ta.scrollHeight + 'px'; // unlimited — no cap
+  let streaming = false;
+  let streamCount = 0;
+  const sendBtn = document.getElementById('sendBtn');
+  const messages = document.getElementById('messages');
+  const anchor = messages.querySelector('.snap-anchor');
+
+  sendBtn.addEventListener('click', () => {
+    streaming = !streaming;
+    sendBtn.style.background = streaming ? 'var(--red)' : '';
+    if (streaming) appendStream();
   });
+
+  function appendStream() {
+    if (!streaming) return;
+    streamCount++;
+    const div = document.createElement('div');
+    div.className = streamCount % 2 ? 'msg-assistant' : 'msg-user';
+    div.innerHTML = streamCount % 2
+      ? `<p>Streamed response #${streamCount} — scroll-snap should follow if you're near the bottom, leave you alone if you've scrolled up.</p>`
+      : `Simulated message #${streamCount}`;
+    messages.insertBefore(div, anchor); // insert before snap anchor
+    setTimeout(appendStream, 800);
+  }
   </script>
 
 </body>
