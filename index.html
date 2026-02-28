@@ -206,7 +206,7 @@ async function pushSubscribe(vapidPublicKey) {
 /** Show local notification (when page is unfocused and SW available). */
 function pushNotify(body, opts = {}) {
   if (document.hasFocus()) return;
-  if (!pushPermissionGranted && Notification.permission !== 'granted') return;
+  if (!pushPermissionGranted && (typeof Notification === 'undefined' || Notification.permission !== 'granted')) return;
   const title = 'Guéridon';
   if (swRegistration) {
     swRegistration.showNotification(title, {
