@@ -623,7 +623,7 @@ body {
   padding: 9px 14px;
   color: var(--text);
   font-family: var(--font);
-  font-size: 0.93rem;
+  font-size: 16px; /* >=16px prevents iOS auto-zoom on focus */
   outline: none;
 }
 .slash-search:focus { border-color: var(--accent-dim); }
@@ -797,7 +797,7 @@ body[data-switcher-open] {
   padding: 9px 14px;
   color: var(--text);
   font-family: var(--font);
-  font-size: 0.93rem;
+  font-size: 16px; /* >=16px prevents iOS auto-zoom on focus */
   outline: none;
 }
 
