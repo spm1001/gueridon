@@ -71,6 +71,19 @@ body {
     <div class="snap-anchor"></div>
   </div>
 
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Message Claude..." rows="1" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+    <div class="staged-deposits" id="stagedDeposits"></div>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file" aria-label="Attach" id="fileBtn">+</button>
+      <button class="btn-circle btn-slash" aria-label="Commands" id="slashBtn">/</button>
+      <button class="btn-lozenge folder" id="folderBtn"><span class="label" id="project"></span></button>
+      <button class="btn-lozenge context" id="contextBtn"><span class="pct" id="contextPct"></span><span class="push-denied" id="pushDenied" title="Notifications blocked">🔇</span></button>
+      <button class="btn-circle btn-send" aria-label="Send" id="sendBtn">&#x2191;</button>
+    </div>
+  </div>
+
+  <!-- Diagnostics + streaming simulator — AFTER input-area so querySelector('.input-area') resolves -->
   <script>
   // Diagnostic readouts — updates live on resize/viewport change
   let keyboardOpen = false;
@@ -115,24 +128,8 @@ body {
     });
     window.visualViewport.addEventListener('scroll', measure);
   }
-  setTimeout(measure, 500);
 
-  </script>
-
-  <div class="input-area">
-    <textarea class="input-field" placeholder="Message Claude..." rows="1" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
-    <div class="staged-deposits" id="stagedDeposits"></div>
-    <div class="btn-bar">
-      <button class="btn-circle btn-file" aria-label="Attach" id="fileBtn">+</button>
-      <button class="btn-circle btn-slash" aria-label="Commands" id="slashBtn">/</button>
-      <button class="btn-lozenge folder" id="folderBtn"><span class="label" id="project"></span></button>
-      <button class="btn-lozenge context" id="contextBtn"><span class="pct" id="contextPct"></span><span class="push-denied" id="pushDenied" title="Notifications blocked">🔇</span></button>
-      <button class="btn-circle btn-send" aria-label="Send" id="sendBtn">&#x2191;</button>
-    </div>
-  </div>
-
-  <!-- Streaming simulator — tap send to toggle. Appends DOM nodes only, no JS scroll. -->
-  <script>
+  // Streaming simulator — tap send to toggle. Appends DOM nodes only, no JS scroll.
   let streaming = false;
   let streamCount = 0;
   const sendBtn = document.getElementById('sendBtn');
