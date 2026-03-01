@@ -335,8 +335,10 @@ body {
   gap: 8px;
 }
 /* Solid backdrop behind iOS keyboard accessory bar — the predictive text
-   strip is translucent and messages bleed through without this. */
-.input-area::after {
+   strip is translucent and messages bleed through without this.
+   Only when keyboard is open — otherwise it adds to scroll height and
+   triggers the iOS standalone viewport "docking" slide on initial load. */
+.input-area.keyboard-open::after {
   content: '';
   position: absolute;
   left: 0;
