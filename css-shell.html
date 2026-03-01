@@ -111,10 +111,6 @@ body {
     window.visualViewport.addEventListener('resize', () => {
       keyboardOpen = window.visualViewport.height < refHeight - 100;
       document.querySelector('.input-area').classList.toggle('keyboard-open', keyboardOpen);
-      // EXPERIMENT: scroll input into view when keyboard opens
-      if (keyboardOpen) {
-        window.scrollTo({ top: document.body.scrollHeight });
-      }
       measure();
     });
     window.visualViewport.addEventListener('scroll', measure);
@@ -135,7 +131,7 @@ body {
     </div>
   </div>
 
-  <!-- Streaming simulator — tap send to toggle. Tests auto-scroll during rapid DOM appends. -->
+  <!-- Streaming simulator — tap send to toggle. Appends DOM nodes only, no JS scroll. -->
   <script>
   let streaming = false;
   let streamCount = 0;
@@ -153,20 +149,12 @@ body {
     if (!streaming) return;
     streamCount++;
 
-    // Check near-bottom before DOM change (mirrors production sseRender)
-    const scrollGap = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-    const wasNearBottom = scrollGap < 150;
-
     const div = document.createElement('div');
     div.className = streamCount % 2 ? 'msg-assistant' : 'msg-user';
     div.innerHTML = streamCount % 2
-      ? `<p>Streamed response #${streamCount} — auto-scroll should follow if you're near the bottom, leave you alone if you've scrolled up.</p>`
+      ? `<p>Streamed response #${streamCount} — does the page follow? CSS only, no JS scroll.</p>`
       : `Simulated message #${streamCount}`;
     messages.insertBefore(div, anchor);
-
-    if (wasNearBottom) {
-      window.scrollTo({ top: document.body.scrollHeight });
-    }
 
     setTimeout(appendStream, 800);
   }
