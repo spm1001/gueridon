@@ -342,6 +342,12 @@ function wireProcess(session: Session): void {
     try {
       const event = JSON.parse(trimmed);
       session.lastOutputTime = Date.now();
+      // Diagnostic: log assistant events to catch dupe source (gdn-hehutu)
+      if (event.type === "assistant") {
+        const msg = event.message as Record<string, unknown> | undefined;
+        const mid = (msg?.id as string) || "NO_ID";
+        console.error(`[BRIDGE] assistant event id=${mid} hasMessage=${!!msg}`);
+      }
       if (isUserTextEcho(event)) return;
       handleCCEvent(session, event);
     } catch {
