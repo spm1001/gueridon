@@ -573,7 +573,8 @@ body {
   background: var(--surface);
   border-radius: 14px 14px 0 0;
   max-height: 60vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   padding: 12px 0 calc(var(--safe-bottom) + 12px);
 }
 .slash-sheet-handle {
@@ -590,6 +591,7 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 0 16px 8px;
+  touch-action: none;
 }
 .slash-sheet-title {
   font-size: 0.8rem;
@@ -626,6 +628,11 @@ body {
 }
 .slash-search:focus { border-color: var(--accent-dim); }
 .slash-search::placeholder { color: var(--text-dim); }
+#slashList {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .slash-cmd {
   display: flex;
   align-items: baseline;
