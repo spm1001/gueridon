@@ -127,11 +127,6 @@ let bridgeUrl = params.get('bridge'); // Explicit bridge URL: ?bridge=http://kub
     window.visualViewport.addEventListener('resize', () => {
       const keyboardOpen = window.visualViewport.height < refHeight - 100;
       inputArea.classList.toggle('keyboard-open', keyboardOpen);
-      // When keyboard opens, scroll so the input area is visible immediately
-      // (without this, sticky input stays below keyboard until first keystroke)
-      if (keyboardOpen) {
-        window.scrollTo({ top: document.body.scrollHeight });
-      }
     });
   }
 }
