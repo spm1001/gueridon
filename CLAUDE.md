@@ -68,7 +68,7 @@ The bridge is split across several modules in `server/`:
 | `folders.ts` | Folder scanning, session discovery, handoff reading |
 | `deposit.ts` | Multipart/binary upload parsing, file validation, mise-style deposit to disk |
 | `orphan.ts` | Orphan CC process reaping, debounced session persistence |
-| `push.ts` | Web Push (VAPID) notification delivery |
+| `push.ts` | Web Push (VAPID) notification delivery, subscribe-time stale endpoint pruning (MAX_SUBSCRIPTIONS=5) |
 | `upload.ts` | Upload validation, MIME detection via magic bytes, manifest building |
 | `event-bus.ts` | Typed event emitter decoupling event production from consumption |
 | `request-context.ts` | Per-request AsyncLocalStorage — auto-attaches correlation IDs to events |
