@@ -135,6 +135,10 @@ let bridgeUrl = params.get('bridge'); // Explicit bridge URL: ?bridge=http://kub
 let swRegistration = null;
 let swReady = null;
 let pushPermissionGranted = false;
+let lastPushTag = null; // dedup: skip replay of same idle state on SSE reconnect
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) lastPushTag = null; // page visible — allow next notification
+});
 
 // Register service worker immediately (needed for push + PWA install)
 if ('serviceWorker' in navigator) {
@@ -208,19 +212,25 @@ async function pushSubscribe(vapidPublicKey) {
 function pushNotify(body, opts = {}) {
   if (document.hasFocus()) return;
   if (!pushPermissionGranted && (typeof Notification === 'undefined' || Notification.permission !== 'granted')) return;
+  const tag = opts.tag || 'gueridon-default';
+  // Dedup: SSE reconnects replay the same idle state snapshot, which re-triggers
+  // this function. Skip if we already notified for this tag. Cleared when status
+  // transitions to 'working' (new turn) or when the page regains focus.
+  if (tag === lastPushTag) return;
+  lastPushTag = tag;
   const title = 'Guéridon';
   if (swRegistration) {
     swRegistration.showNotification(title, {
       body,
       icon: '/icon-192.svg',
       badge: '/icon-192.svg',
-      tag: opts.tag || 'gueridon-default',
+      tag,
       renotify: true,
       vibrate: opts.vibrate || [200],
       data: { folder: opts.folder || '' },
     });
   } else {
-    new Notification(title, { body, icon: '/icon-192.svg', tag: opts.tag || 'gueridon-default' });
+    new Notification(title, { body, icon: '/icon-192.svg', tag });
   }
 }
 
@@ -383,6 +393,7 @@ function handleSSEState(data) {
     liveState.session = { ...liveState.session, ...data.session };
   }
   if (data.status) liveState.status = data.status;
+  if (data.status === 'working') lastPushTag = null; // new turn — allow next idle notification
   if (data.slashCommands !== undefined) liveState.slashCommands = data.slashCommands;
   if (data.status === 'idle') {
     liveState._activity = null;
@@ -403,7 +414,7 @@ function handleSSEDelta(data) {
       liveState.status = data.status;
       if (data.status === 'idle') liveState._activity = null;
       if (data.status === 'working') {
-        // Working status = CC ingested queued messages
+        lastPushTag = null; // new turn — allow next idle notification
       }
       break;
 
