@@ -24,8 +24,10 @@
 html {
   font-size: 15px;
   overflow-x: hidden;
-  scroll-snap-type: y proximity; /* auto-follow at bottom, leave alone when scrolled up */
-  scroll-padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); /* clear sticky input */
+  /* scroll-snap disabled — fights iOS keyboard animation, causing ghost input area.
+     Auto-follow during streaming handled by JS scrollTo in renderMessages. */
+  /* scroll-snap-type: y proximity; */
+  /* scroll-padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); */
 }
 
 body {
@@ -360,9 +362,9 @@ body {
   field-sizing: content;
 }
 
-/* Snap sentinel — appended by renderMessages at end of message list */
+/* Snap sentinel — kept in DOM for future use, snap disabled for now */
 .snap-anchor {
-  scroll-snap-align: end;
+  /* scroll-snap-align: end; */
   height: 0;
 }
 

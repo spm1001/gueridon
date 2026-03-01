@@ -603,12 +603,21 @@ function sseRender() {
     sseRenderQueued = false;
     cachedState = liveState;
     renderStatusBar(liveState, chromeEls);
+    // Auto-scroll if user is near the bottom (within 150px).
+    // Replaces scroll-snap which fought iOS keyboard animation.
+    const scrollGap = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+    const wasNearBottom = scrollGap < 150;
+
     renderMessages(document.getElementById('messages'), liveState.messages, {
       status: liveState.status,
       connection: liveState.connection,
       activity: liveState._activity,
       onError: reportError,
     });
+
+    if (wasNearBottom) {
+      window.scrollTo({ top: document.body.scrollHeight });
+    }
     refreshSwitcher();
     refreshSendButton();
     // Show action buttons when any folder is connected (local commands always available)
