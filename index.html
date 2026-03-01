@@ -43,7 +43,10 @@
   <div class="slash-sheet-overlay" id="slashSheet">
     <div class="slash-sheet">
       <div class="slash-sheet-handle"></div>
-      <div class="slash-sheet-title">Commands</div>
+      <div class="slash-sheet-header">
+        <div class="slash-sheet-title">Commands</div>
+        <button class="slash-close" aria-label="Close">&#x2715;</button>
+      </div>
       <input class="slash-search" id="slashSearch" type="text" placeholder="Filter commands…">
       <div id="slashList"></div>
     </div>
@@ -997,6 +1000,55 @@ slashBtn.addEventListener('click', () => openSlashSheet(slashOpts()));
 slashEls.sheet.addEventListener('click', (e) => {
   if (e.target === slashEls.sheet) slashEls.sheet.classList.remove('open');
 });
+
+// Slash sheet: X button and swipe-down-to-dismiss
+{
+  const slashOverlay = slashEls.sheet;
+  const slashInner = slashOverlay.querySelector('.slash-sheet');
+  const slashHandle = slashInner.querySelector('.slash-sheet-handle');
+  const slashHeader = slashInner.querySelector('.slash-sheet-header');
+
+  function closeSlashSheet() { slashOverlay.classList.remove('open'); }
+
+  // X button
+  slashInner.querySelector('.slash-close').addEventListener('click', closeSlashSheet);
+
+  // Tap handle to dismiss
+  slashHandle.addEventListener('click', closeSlashSheet);
+
+  // Swipe-down from handle or header area
+  let swipeStartY = null;
+  let swipeStartTranslate = 0;
+
+  for (const el of [slashHandle, slashHeader]) {
+    el.addEventListener('touchstart', (e) => {
+      swipeStartY = e.touches[0].clientY;
+      swipeStartTranslate = 0;
+      slashInner.style.transition = 'none';
+    }, { passive: true });
+
+    el.addEventListener('touchmove', (e) => {
+      if (swipeStartY === null) return;
+      const dy = e.touches[0].clientY - swipeStartY;
+      if (dy > 0) {
+        swipeStartTranslate = dy;
+        slashInner.style.transform = `translateY(${dy}px)`;
+      }
+    }, { passive: true });
+
+    el.addEventListener('touchend', () => {
+      slashInner.style.transition = '';
+      if (swipeStartTranslate > 80) {
+        slashInner.style.transform = 'translateY(100%)';
+        closeSlashSheet();
+        setTimeout(() => { slashInner.style.transform = ''; }, 300);
+      } else {
+        slashInner.style.transform = '';
+      }
+      swipeStartY = null;
+    });
+  }
+}
 
 // === File upload ===
 const fileInput = document.createElement('input');

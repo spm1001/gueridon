@@ -582,13 +582,34 @@ body {
   background: var(--border);
   border-radius: 2px;
   margin: 0 auto 10px;
+  cursor: pointer;
+  touch-action: none;
+}
+.slash-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px 8px;
 }
 .slash-sheet-title {
-  padding: 0 16px 8px;
   font-size: 0.8rem;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+.slash-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 .slash-search {
   display: block;
