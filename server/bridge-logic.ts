@@ -112,25 +112,51 @@ export function classifyRestart(
 
 /**
  * Build the resume injection message based on restart classification.
+ * When lastToolCall is provided, the message includes the exact action
+ * that was in flight — prevents Claude from confabulating a different
+ * "last action" on resume. (gdn-hubohe)
  */
-export function buildResumeInjection(reason: RestartReason): string {
+export function buildResumeInjection(
+  reason: RestartReason,
+  lastToolCall?: LastToolCall | null,
+): string {
+  const tool = lastToolCall ? formatToolCallSummary(lastToolCall.name, lastToolCall.input) : null;
+
   switch (reason) {
-    case "self-caused":
+    case "self-caused": {
+      const base = "[guéridon:system] The bridge was restarted while you were mid-turn.";
+      if (tool) {
+        return (
+          `${base} Your last action was:\n\n  ${tool}\n\n` +
+          "This caused the restart — the command already took effect. " +
+          "Do NOT run it again. Review the outcome and continue."
+        );
+      }
       return (
-        "[guéridon:system] The bridge was restarted while you were mid-turn — " +
-        "your last action likely caused this (e.g. systemctl restart, deployment). " +
+        `${base} Your last action likely caused this (e.g. systemctl restart, deployment). ` +
         "Review what you were doing and verify it took effect before continuing."
       );
-    case "external":
-      return (
-        "[guéridon:system] The bridge was restarted externally and your session has been resumed. " +
-        "Review the conversation and continue where you left off."
-      );
-    case "crash":
-      return (
-        "[guéridon:system] The bridge crashed and your session has been recovered. " +
-        "Context may be incomplete — review the conversation before continuing."
-      );
+    }
+    case "external": {
+      const base = "[guéridon:system] The bridge was restarted externally and your session has been resumed.";
+      if (tool) {
+        return (
+          `${base} You were mid-action when interrupted:\n\n  ${tool}\n\n` +
+          "This action may not have completed. Check its outcome before continuing."
+        );
+      }
+      return base + " Review the conversation and continue where you left off.";
+    }
+    case "crash": {
+      const base = "[guéridon:system] The bridge crashed and your session has been recovered.";
+      if (tool) {
+        return (
+          `${base} Your last action was:\n\n  ${tool}\n\n` +
+          "This action may not have completed. Context may be incomplete — review before continuing."
+        );
+      }
+      return base + " Context may be incomplete — review the conversation before continuing.";
+    }
   }
 }
 
@@ -509,6 +535,90 @@ export function extractLocalCommandOutput(jsonlContent: string): string | null {
     }
   }
   return null;
+}
+
+// --- Last tool call extraction (gdn-hubohe) ---
+
+/** Info about the last tool call in a JSONL tail. */
+export interface LastToolCall {
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/** Max chars for formatted tool input in resume injection. */
+export const TOOL_SUMMARY_MAX_CHARS = 500;
+
+/**
+ * Extract the last tool_use block from JSONL content (searched from end).
+ *
+ * Scans backward through assistant messages looking for a content block
+ * with `type: "tool_use"`. Returns the name and input of the most recent
+ * one, or null if no tool calls are found.
+ *
+ * Pure function — caller provides the file content (via tailRead).
+ */
+export function extractLastToolCall(jsonlContent: string): LastToolCall | null {
+  const lines = jsonlContent.trimEnd().split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(lines[i]);
+      if (parsed.type !== "assistant") continue;
+      const content = parsed.message?.content;
+      if (!Array.isArray(content)) continue;
+      // Scan content blocks backward within the message
+      for (let j = content.length - 1; j >= 0; j--) {
+        if (content[j].type === "tool_use") {
+          return {
+            name: content[j].name || "Unknown",
+            input: content[j].input || {},
+          };
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * Format a tool call into a human-readable one-liner for the resume injection.
+ * Returns "ToolName: summary" truncated to TOOL_SUMMARY_MAX_CHARS.
+ */
+export function formatToolCallSummary(
+  name: string,
+  input: Record<string, unknown>,
+): string {
+  let detail: string;
+  switch (name) {
+    case "Bash":
+      detail = String(input.command || "");
+      break;
+    case "Read":
+    case "Write":
+    case "Edit":
+      detail = String(input.file_path || "");
+      break;
+    case "Grep":
+    case "Glob":
+      detail = `pattern=${JSON.stringify(input.pattern || "")} path=${input.path || "."}`;
+      break;
+    case "WebSearch":
+      detail = String(input.query || "");
+      break;
+    case "Task":
+      detail = String(input.prompt || "").slice(0, 200);
+      break;
+    case "Skill":
+      detail = `${input.skill || ""}${input.args ? ` ${input.args}` : ""}`;
+      break;
+    default:
+      detail = JSON.stringify(input);
+      break;
+  }
+  const raw = `${name}: ${detail}`;
+  if (raw.length <= TOOL_SUMMARY_MAX_CHARS) return raw;
+  return raw.slice(0, TOOL_SUMMARY_MAX_CHARS - 3) + "...";
 }
 
 /** Accumulated delta state for one content block index + delta type. */

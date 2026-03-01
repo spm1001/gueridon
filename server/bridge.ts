@@ -36,6 +36,7 @@ import {
   coalescePrompts,
   classifyRestart,
   buildResumeInjection,
+  extractLastToolCall,
   type PendingDelta,
   type SessionProcessInfo,
   type ShutdownContext,
@@ -888,8 +889,17 @@ async function handleSession(
   if (session.wasInterrupted) {
     session.wasInterrupted = false; // one-shot
     const reason = classifyRestart(lastShutdownCtx, session.folder);
+
+    // Extract last tool call from JSONL tail for context-aware resume injection (gdn-hubohe)
+    let lastToolCall = null;
+    try {
+      const jsonlPath = getSessionJSONLPath(session.folder, session.id);
+      const tail = await tailRead(jsonlPath, 8192);
+      if (tail) lastToolCall = extractLastToolCall(tail);
+    } catch { /* JSONL may not exist yet */ }
+
     deliverPrompt(session, {
-      text: buildResumeInjection(reason),
+      text: buildResumeInjection(reason, lastToolCall),
     });
     // Broadcast state so the synthetic resume message renders immediately
     broadcastToSession(session, "state", {

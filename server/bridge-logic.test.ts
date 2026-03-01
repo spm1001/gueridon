@@ -18,9 +18,12 @@ import {
   coalescePrompts,
   classifyRestart,
   buildResumeInjection,
+  extractLastToolCall,
+  formatToolCallSummary,
   HANDOFF_STALE_THRESHOLD_MS,
   SHUTDOWN_STALE_MS,
   LOCAL_CMD_TAIL_LINES,
+  TOOL_SUMMARY_MAX_CHARS,
   CONFLATION_INTERVAL_MS,
   type SessionProcessInfo,
   type PendingDelta,
@@ -1496,6 +1499,180 @@ describe("buildResumeInjection", () => {
   it("all messages start with [guéridon:system] prefix", () => {
     for (const reason of ["crash", "self-caused", "external"] as const) {
       expect(buildResumeInjection(reason)).toMatch(/^\[guéridon:system\]/);
+    }
+  });
+});
+
+// --- extractLastToolCall (gdn-hubohe) ---
+
+describe("extractLastToolCall", () => {
+  function assistantLine(content: unknown[]): string {
+    return JSON.stringify({
+      type: "assistant",
+      message: { id: "msg_1", role: "assistant", content },
+    });
+  }
+
+  it("extracts Bash tool call from last assistant message", () => {
+    const content = assistantLine([
+      { type: "text", text: "Deploying now" },
+      { type: "tool_use", id: "toolu_1", name: "Bash",
+        input: { command: "sudo systemctl restart gueridon" } },
+    ]);
+    const result = extractLastToolCall(content);
+    expect(result).toEqual({
+      name: "Bash",
+      input: { command: "sudo systemctl restart gueridon" },
+    });
+  });
+
+  it("returns last tool_use when multiple exist in one message", () => {
+    const content = assistantLine([
+      { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/a.ts" } },
+      { type: "tool_use", id: "toolu_2", name: "Bash", input: { command: "npm test" } },
+    ]);
+    const result = extractLastToolCall(content);
+    expect(result?.name).toBe("Bash");
+  });
+
+  it("finds tool call in earlier message when last is text-only", () => {
+    const content = [
+      assistantLine([
+        { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "git push" } },
+      ]),
+      JSON.stringify({
+        type: "assistant",
+        message: { id: "msg_2", role: "assistant",
+          content: [{ type: "text", text: "Done deploying" }] },
+      }),
+    ].join("\n");
+    const result = extractLastToolCall(content);
+    expect(result?.name).toBe("Bash");
+    expect(result?.input).toEqual({ command: "git push" });
+  });
+
+  it("returns null when no tool calls exist", () => {
+    const content = [
+      JSON.stringify({ type: "user", message: { role: "user", content: "hello" } }),
+      assistantLine([{ type: "text", text: "Hi there" }]),
+    ].join("\n");
+    expect(extractLastToolCall(content)).toBeNull();
+  });
+
+  it("returns null for empty string", () => {
+    expect(extractLastToolCall("")).toBeNull();
+  });
+
+  it("handles corrupted JSON lines gracefully", () => {
+    const content = [
+      "not valid json",
+      assistantLine([
+        { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/x" } },
+      ]),
+    ].join("\n");
+    expect(extractLastToolCall(content)?.name).toBe("Read");
+  });
+
+  it("skips user messages", () => {
+    const content = [
+      assistantLine([
+        { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } },
+      ]),
+      JSON.stringify({
+        type: "user",
+        message: { role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "output" }] },
+      }),
+    ].join("\n");
+    expect(extractLastToolCall(content)?.name).toBe("Bash");
+  });
+
+  it("extracts MCP tool calls", () => {
+    const content = assistantLine([
+      { type: "tool_use", id: "toolu_1", name: "mcp__mise__fetch",
+        input: { file_id: "https://example.com" } },
+    ]);
+    expect(extractLastToolCall(content)?.name).toBe("mcp__mise__fetch");
+  });
+});
+
+// --- formatToolCallSummary ---
+
+describe("formatToolCallSummary", () => {
+  it("formats Bash with command", () => {
+    expect(formatToolCallSummary("Bash", { command: "ls -la" })).toBe("Bash: ls -la");
+  });
+
+  it("formats Read with file_path", () => {
+    expect(formatToolCallSummary("Read", { file_path: "/home/modha/foo.ts" }))
+      .toBe("Read: /home/modha/foo.ts");
+  });
+
+  it("formats Write/Edit with file_path", () => {
+    expect(formatToolCallSummary("Edit", { file_path: "/tmp/x.ts" })).toBe("Edit: /tmp/x.ts");
+    expect(formatToolCallSummary("Write", { file_path: "/tmp/y.ts" })).toBe("Write: /tmp/y.ts");
+  });
+
+  it("formats Grep with pattern and path", () => {
+    expect(formatToolCallSummary("Grep", { pattern: "TODO", path: "/src" }))
+      .toBe('Grep: pattern="TODO" path=/src');
+  });
+
+  it("formats Skill with name and args", () => {
+    expect(formatToolCallSummary("Skill", { skill: "bon", args: "list" }))
+      .toBe("Skill: bon list");
+  });
+
+  it("formats unknown tools with JSON", () => {
+    expect(formatToolCallSummary("CustomTool", { key: "value" }))
+      .toBe('CustomTool: {"key":"value"}');
+  });
+
+  it("truncates long inputs", () => {
+    const longCmd = "a".repeat(600);
+    const result = formatToolCallSummary("Bash", { command: longCmd });
+    expect(result.length).toBe(TOOL_SUMMARY_MAX_CHARS);
+    expect(result).toMatch(/\.\.\.$/);
+  });
+});
+
+// --- buildResumeInjection with tool context (gdn-hubohe) ---
+
+describe("buildResumeInjection with lastToolCall", () => {
+  const bashDeploy = { name: "Bash", input: { command: "sudo systemctl restart gueridon" } };
+
+  it("self-caused: includes exact tool call and warns not to repeat", () => {
+    const msg = buildResumeInjection("self-caused", bashDeploy);
+    expect(msg).toContain("sudo systemctl restart gueridon");
+    expect(msg).toContain("Do NOT run it again");
+    expect(msg).toContain("already took effect");
+  });
+
+  it("self-caused: falls back to vague message without tool call", () => {
+    const msg = buildResumeInjection("self-caused");
+    expect(msg).toContain("likely caused this");
+  });
+
+  it("self-caused: falls back when tool call is null", () => {
+    const msg = buildResumeInjection("self-caused", null);
+    expect(msg).toContain("likely caused this");
+  });
+
+  it("external: includes interrupted tool call", () => {
+    const msg = buildResumeInjection("external", { name: "Read", input: { file_path: "/foo.ts" } });
+    expect(msg).toContain("Read: /foo.ts");
+    expect(msg).toContain("may not have completed");
+  });
+
+  it("crash: includes last tool call", () => {
+    const msg = buildResumeInjection("crash", { name: "Edit", input: { file_path: "/bar.ts" } });
+    expect(msg).toContain("Edit: /bar.ts");
+    expect(msg).toContain("may not have completed");
+  });
+
+  it("all variants still start with [guéridon:system]", () => {
+    for (const reason of ["crash", "self-caused", "external"] as const) {
+      expect(buildResumeInjection(reason, bashDeploy)).toMatch(/^\[guéridon:system\]/);
     }
   });
 });
