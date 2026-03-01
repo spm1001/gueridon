@@ -608,10 +608,30 @@ function killWithEscalation(proc: ChildProcess, context?: { folder: string; reas
 
 // -- Session resolution --
 
+// Guard against concurrent session creation for the same folder.
+// Without this, multiple requests arriving during bridge startup all see
+// sessions.get() === undefined, each creates a session + CC process,
+// producing duplicate messages and orphaned processes. (gdn-hehutu)
+const pendingSessions = new Map<string, Promise<Session>>();
+
 async function resolveOrCreateSession(folderPath: string): Promise<Session> {
   const existing = sessions.get(folderPath);
   if (existing) return existing;
 
+  // If another request is already creating this session, wait for it
+  const pending = pendingSessions.get(folderPath);
+  if (pending) return pending;
+
+  const promise = createSession(folderPath);
+  pendingSessions.set(folderPath, promise);
+  try {
+    return await promise;
+  } finally {
+    pendingSessions.delete(folderPath);
+  }
+}
+
+async function createSession(folderPath: string): Promise<Session> {
   const folderName = basename(folderPath);
   const latestSession = await getLatestSession(folderPath);
   const handoff = await getLatestHandoff(folderPath);

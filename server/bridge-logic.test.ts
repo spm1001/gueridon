@@ -1559,3 +1559,78 @@ describe("parseSessionJSONL → StateBuilder replay integration", () => {
     expect(metrics.toolCalls).toBeGreaterThan(0);
   });
 });
+
+// --- Concurrent session creation guard (gdn-hehutu) ---
+// The bridge uses a pendingSessions Map to prevent multiple concurrent callers
+// from each creating separate sessions for the same folder. This test verifies
+// the pattern: concurrent async calls to a guarded factory share one result.
+
+describe("pendingSessions concurrency guard pattern", () => {
+  it("concurrent calls to a guarded async factory share one result", async () => {
+    // Simulate the pattern used in bridge.ts resolveOrCreateSession
+    const pending = new Map<string, Promise<{ id: string }>>();
+    let factoryCallCount = 0;
+
+    async function guardedFactory(key: string): Promise<{ id: string }> {
+      const inflight = pending.get(key);
+      if (inflight) return inflight;
+
+      const promise = (async () => {
+        factoryCallCount++;
+        // Simulate async work (JSONL read, session creation)
+        await new Promise((r) => setTimeout(r, 10));
+        return { id: `session-${factoryCallCount}` };
+      })();
+      pending.set(key, promise);
+      try {
+        return await promise;
+      } finally {
+        pending.delete(key);
+      }
+    }
+
+    // Launch 3 concurrent calls — the scenario from the bridge logs
+    const [s1, s2, s3] = await Promise.all([
+      guardedFactory("/home/modha/Repos/gueridon"),
+      guardedFactory("/home/modha/Repos/gueridon"),
+      guardedFactory("/home/modha/Repos/gueridon"),
+    ]);
+
+    // All three get the same session
+    expect(s1).toBe(s2);
+    expect(s2).toBe(s3);
+    // Factory was called exactly once
+    expect(factoryCallCount).toBe(1);
+  });
+
+  it("different keys create separate sessions", async () => {
+    const pending = new Map<string, Promise<{ id: string }>>();
+    let factoryCallCount = 0;
+
+    async function guardedFactory(key: string): Promise<{ id: string }> {
+      const inflight = pending.get(key);
+      if (inflight) return inflight;
+
+      const promise = (async () => {
+        factoryCallCount++;
+        await new Promise((r) => setTimeout(r, 10));
+        return { id: `session-${key}` };
+      })();
+      pending.set(key, promise);
+      try {
+        return await promise;
+      } finally {
+        pending.delete(key);
+      }
+    }
+
+    const [s1, s2] = await Promise.all([
+      guardedFactory("folder-a"),
+      guardedFactory("folder-b"),
+    ]);
+
+    expect(s1.id).toBe("session-folder-a");
+    expect(s2.id).toBe("session-folder-b");
+    expect(factoryCallCount).toBe(2);
+  });
+});
