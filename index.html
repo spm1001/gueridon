@@ -391,7 +391,6 @@ function handleSSEState(data) {
   if (data.messages) {
     console.log('[bb] state snapshot:', data.messages.length, 'msgs');
     liveState.messages = data.messages;
-    toolCompletedSinceLastContent = false; // state snapshot = fresh start
   }
   if (data.session && typeof data.session === 'object') {
     liveState.session = { ...liveState.session, ...data.session };
@@ -423,10 +422,9 @@ function handleSSEDelta(data) {
       break;
 
     case 'message_start':
-      toolCompletedSinceLastContent = false;
-      // Ensure an assistant skeleton exists — but don't push a duplicate if
-      // the last message is already an assistant (multi-API-call turns).
-      ensureAssistantMessage();
+      // New message boundary — either outer turn start or inner API call
+      // (mini-reset). Always push a fresh assistant message.
+      liveState.messages.push({ role: 'assistant', content: null });
       console.log('[bb] message_start, now', liveState.messages.length, 'msgs');
       break;
 
@@ -466,7 +464,6 @@ function handleSSEDelta(data) {
         last.tool_calls[data.index].status = data.status;
         if (data.output) last.tool_calls[data.index].output = data.output;
       }
-      toolCompletedSinceLastContent = true;
       break;
     }
 
@@ -497,16 +494,12 @@ function handleSSEDelta(data) {
   sseRender();
 }
 
-// After tool_complete, the next content/thinking delta means a new inner API call
-// has started — Claude processed tool results and is responding again. Without this,
-// ensureAssistantMessage reuses the existing message and new text overwrites the old.
-let toolCompletedSinceLastContent = false;
-
-/** Ensure the last message is an assistant message — create one if not. */
+/** Ensure the last message is an assistant message — create one if not.
+ * Message splitting is driven by message_start deltas from the server
+ * (emitted at turn start and on inner API call index collisions). */
 function ensureAssistantMessage() {
   const last = liveState.messages[liveState.messages.length - 1];
-  if (last && last.role === 'assistant' && !toolCompletedSinceLastContent) return last;
-  toolCompletedSinceLastContent = false;
+  if (last && last.role === 'assistant') return last;
   const msg = { role: 'assistant', content: null };
   liveState.messages.push(msg);
   return msg;

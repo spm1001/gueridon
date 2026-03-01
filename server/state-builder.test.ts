@@ -164,7 +164,7 @@ describe("StateBuilder", () => {
 
       // init → working
       const d1 = sb.handleEvent(systemInit());
-      expect(d1).toEqual({ type: "status", status: "working" });
+      expect(d1).toEqual([{ type: "status", status: "working" }]);
       expect(sb.getState().status).toBe("working");
 
       // message_start
@@ -172,15 +172,15 @@ describe("StateBuilder", () => {
 
       // text block start
       const d2 = sb.handleEvent(textBlockStart(0));
-      expect(d2).toEqual({ type: "activity", activity: "writing" });
+      expect(d2).toEqual([{ type: "activity", activity: "writing" }]);
 
       // text deltas — accumulated, no delta emitted
-      expect(sb.handleEvent(textDelta(0, "Hello "))).toBeNull();
-      expect(sb.handleEvent(textDelta(0, "world"))).toBeNull();
+      expect(sb.handleEvent(textDelta(0, "Hello "))).toEqual([]);
+      expect(sb.handleEvent(textDelta(0, "world"))).toEqual([]);
 
       // block stop — emits content delta with full text
       const d3 = sb.handleEvent(blockStop(0));
-      expect(d3).toEqual({ type: "content", index: 0, text: "Hello world" });
+      expect(d3).toEqual([{ type: "content", index: 0, text: "Hello world" }]);
 
       // assistant complete message
       sb.handleEvent(
@@ -189,7 +189,7 @@ describe("StateBuilder", () => {
 
       // result → idle
       const d4 = sb.handleEvent(resultEvent());
-      expect(d4).toEqual({ type: "status", status: "idle" });
+      expect(d4).toEqual([{ type: "status", status: "idle" }]);
       expect(sb.getState().status).toBe("idle");
 
       // State has one assistant message
@@ -216,7 +216,7 @@ describe("StateBuilder", () => {
 
       // tool block start
       const d1 = sb.handleEvent(toolBlockStart(0, "Bash", "toolu_001"));
-      expect(d1).toEqual({ type: "activity", activity: "tool" });
+      expect(d1).toEqual([{ type: "activity", activity: "tool" }]);
 
       // input JSON arrives in fragments
       sb.handleEvent(inputJsonDelta(0, '{"comma'));
@@ -224,12 +224,12 @@ describe("StateBuilder", () => {
 
       // block stop — parses JSON, extracts tool input
       const d2 = sb.handleEvent(blockStop(0));
-      expect(d2).toEqual({
+      expect(d2).toEqual([{
         type: "tool_start",
         index: 0,
         name: "Bash",
         input: "ls -la",
-      });
+      }]);
 
       // assistant complete message (with tool_use in content)
       sb.handleEvent(
@@ -240,12 +240,12 @@ describe("StateBuilder", () => {
 
       // tool result
       const d3 = sb.handleEvent(toolResult("toolu_001", "file1.txt\nfile2.txt"));
-      expect(d3).toEqual({
+      expect(d3).toEqual([{
         type: "tool_complete",
         index: 0,
         status: "completed",
         output: "file1.txt\nfile2.txt",
-      });
+      }]);
 
       // result
       sb.handleEvent(resultEvent());
@@ -277,7 +277,7 @@ describe("StateBuilder", () => {
       );
 
       const d = sb.handleEvent(toolResult("toolu_err", "exit code 1", true));
-      expect(d).toMatchObject({ type: "tool_complete", status: "error" });
+      expect(d).toEqual([expect.objectContaining({ type: "tool_complete", status: "error" })]);
 
       sb.handleEvent(resultEvent());
       const call = sb.getState().messages[0].tool_calls![0];
@@ -994,7 +994,7 @@ describe("StateBuilder", () => {
 
       // content_block_stop fires AFTER assistant — must still emit real text
       const delta = sb.handleEvent(blockStop(0));
-      expect(delta).toEqual({ type: "content", index: 0, text: "Second response" });
+      expect(delta).toEqual([{ type: "content", index: 0, text: "Second response" }]);
 
       // State must have the message with real content
       const state = sb.getState();
@@ -1034,7 +1034,7 @@ describe("StateBuilder", () => {
 
       // Text block stop — must patch the committed message
       const delta = sb.handleEvent(blockStop(1));
-      expect(delta).toEqual({ type: "content", index: 1, text: "Hello!" });
+      expect(delta).toEqual([{ type: "content", index: 1, text: "Hello!" }]);
 
       // The critical check: state.messages must have content, not null
       sb.handleEvent(resultEvent());
@@ -1128,15 +1128,15 @@ describe("StateBuilder", () => {
       // Thinking block
       sb.handleEvent(thinkingBlockStart(0));
       const d1 = sb.handleEvent(thinkingDelta(0, "Let me think"));
-      expect(d1).toBeNull(); // accumulated, not emitted yet
+      expect(d1).toEqual([]); // accumulated, not emitted yet
 
       sb.handleEvent(thinkingDelta(0, " about this carefully."));
 
       const d2 = sb.handleEvent(blockStop(0));
-      expect(d2).toEqual({
+      expect(d2).toEqual([{
         type: "thinking_content",
         text: "Let me think about this carefully.",
-      });
+      }]);
     });
 
     it("includes thinking text on the committed assistant message", () => {
@@ -1214,10 +1214,10 @@ describe("StateBuilder", () => {
       sb.handleEvent(blockStart(1, { type: "thinking", thinking: "" }));
       sb.handleEvent(thinkingDelta(1, "Second thought"));
       const d = sb.handleEvent(blockStop(1));
-      expect(d).toEqual({
+      expect(d).toEqual([{
         type: "thinking_content",
         text: "First thought\n\nSecond thought",
-      });
+      }]);
     });
 
     it("does not emit thinking_content when thinking is empty", () => {
@@ -1228,7 +1228,7 @@ describe("StateBuilder", () => {
       sb.handleEvent(thinkingBlockStart(0));
       // No thinking deltas
       const d = sb.handleEvent(blockStop(0));
-      expect(d).toBeNull();
+      expect(d).toEqual([]);
     });
 
     it("clears thinking between messages", () => {
@@ -1460,7 +1460,7 @@ describe("StateBuilder", () => {
       const delta = sb.handleEvent(
         apiErrorMessage("err-1", 400, "invalid_request_error", "Could not process image"),
       );
-      expect(delta).toEqual({ type: "api_error", error: "API error 400: Could not process image" });
+      expect(delta).toEqual([{ type: "api_error", error: "API error 400: Could not process image" }]);
     });
 
     it("pushes error as assistant message and sets status to idle", () => {
@@ -1506,7 +1506,7 @@ describe("StateBuilder", () => {
         },
       };
       const delta = sb.handleEvent(event);
-      expect(delta).toEqual({ type: "api_error", error: "API Error: 500 not-json" });
+      expect(delta).toEqual([{ type: "api_error", error: "API Error: 500 not-json" }]);
     });
 
     it("replays API error from JSONL as inline message", () => {
@@ -1665,6 +1665,404 @@ describe("StateBuilder", () => {
       const liveAssistant = liveMsgs.filter(m => m.role === "assistant");
       const replayAssistant = replayMsgs.filter(m => m.role === "assistant");
       expect(liveAssistant.length).toBe(replayAssistant.length);
+    });
+
+    it("inner API call mini-reset emits [message_start, activity] as array", () => {
+      // When a new inner API call reuses block index 0, onContentBlockStart
+      // detects the collision and emits both a message_start (so the client
+      // splits the message) and an activity delta in a single array return.
+      const sb = new StateBuilder("sess-multi-delta", "test-project");
+      sb.handleEvent(systemInit());
+
+      // --- First API call: text block at index 0 ---
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Planning."));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg-1", [
+        { type: "text", text: "Planning." },
+      ]));
+
+      // Tool at index 1
+      sb.handleEvent(toolBlockStart(1, "Bash", "toolu_b1"));
+      sb.handleEvent(inputJsonDelta(1, '{"command":"echo hi"}'));
+      sb.handleEvent(blockStop(1));
+      sb.handleEvent(toolResult("toolu_b1", "hi"));
+
+      // --- Second API call (inner): text block reuses index 0 ---
+      // The assistant event for the inner call
+      sb.handleEvent(assistantMessage("msg-2", [
+        { type: "text", text: "Done." },
+      ]));
+
+      // content_block_start at index 0 — triggers mini-reset because blockTypes
+      // already has index 0 from the first API call
+      const deltas = sb.handleEvent(textBlockStart(0));
+
+      // Should return both message_start AND activity in a single array
+      expect(deltas).toEqual([
+        { type: "message_start" },
+        { type: "activity", activity: "writing" },
+      ]);
+    });
+
+    it("pipeline tool execution: tool_complete mid-API-call does NOT trigger message_start (gdn-dakena)", () => {
+      // Reproduces the real bug from session e701960b: CC pipelines tool execution
+      // during a single API call with 3 parallel Bash tools. The first tool_result
+      // arrives WHILE the model is still streaming subsequent tool_use blocks.
+      //
+      // Old client behaviour: toolCompletedSinceLastContent flag caused a split
+      // on the next content/tool delta, creating phantom empty messages.
+      //
+      // Fixed behaviour: message_start only fires on index collision (new inner API
+      // call). Within the same API call, all block indices are unique — no split.
+      const sb = new StateBuilder("sess-pipeline", "test-project");
+      sb.handleEvent(systemInit());
+
+      // --- Single API call: text + 3 parallel Bash tools ---
+      sb.handleEvent(messageStart());
+
+      // Block 0: text
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Let me run parallel searches."));
+      sb.handleEvent(blockStop(0));
+
+      // Block 1: first Bash tool
+      sb.handleEvent(toolBlockStart(1, "Bash", "toolu_bash1"));
+      sb.handleEvent(inputJsonDelta(1, '{"command":"grep error *.jsonl"}'));
+      sb.handleEvent(blockStop(1)); // → tool_start(0)
+
+      // Assistant partial emission (same msg_id, partial)
+      sb.handleEvent(assistantMessage("msg-pipeline", [
+        { type: "text", text: "Let me run parallel searches." },
+        { type: "tool_use", id: "toolu_bash1", name: "Bash", input: { command: "grep error *.jsonl" } },
+      ]));
+
+      // *** PIPELINE: first tool result arrives DURING streaming ***
+      const toolCompleteDelta = sb.handleEvent(toolResult("toolu_bash1", "3 errors found"));
+      expect(toolCompleteDelta).toEqual([expect.objectContaining({ type: "tool_complete" })]);
+
+      // Block 2: second Bash tool — SAME API call, unique index (no collision)
+      const d2 = sb.handleEvent(toolBlockStart(2, "Bash", "toolu_bash2"));
+      // Should be just activity, NOT [message_start, activity]
+      expect(d2).toEqual([{ type: "activity", activity: "tool" }]);
+
+      sb.handleEvent(inputJsonDelta(2, '{"command":"grep fail *.jsonl"}'));
+      sb.handleEvent(blockStop(2)); // → tool_start(1)
+
+      // Block 3: third Bash tool — still same API call
+      const d3 = sb.handleEvent(toolBlockStart(3, "Bash", "toolu_bash3"));
+      expect(d3).toEqual([{ type: "activity", activity: "tool" }]);
+
+      sb.handleEvent(inputJsonDelta(3, '{"command":"grep retry *.jsonl"}'));
+      sb.handleEvent(blockStop(3)); // → tool_start(2)
+
+      // Remaining tool results
+      sb.handleEvent(toolResult("toolu_bash2", "1 failure"));
+      sb.handleEvent(toolResult("toolu_bash3", "2 retries"));
+
+      sb.handleEvent(resultEvent());
+
+      // --- Assertions ---
+      const state = sb.getState();
+      const assistantMsgs = state.messages.filter(m => m.role === "assistant");
+
+      // ONE assistant message with text + 3 tool calls (no phantom split)
+      expect(assistantMsgs).toHaveLength(1);
+      expect(assistantMsgs[0].content).toBe("Let me run parallel searches.");
+      expect(assistantMsgs[0].tool_calls).toHaveLength(3);
+      expect(assistantMsgs[0].tool_calls![0].name).toBe("Bash");
+      expect(assistantMsgs[0].tool_calls![0].status).toBe("completed");
+      expect(assistantMsgs[0].tool_calls![1].name).toBe("Bash");
+      expect(assistantMsgs[0].tool_calls![1].status).toBe("completed");
+      expect(assistantMsgs[0].tool_calls![2].name).toBe("Bash");
+      expect(assistantMsgs[0].tool_calls![2].status).toBe("completed");
+    });
+
+    it("inner API call mini-reset emits [message_start] alone for suppressed blocks", () => {
+      // When the inner API call's first block is AskUserQuestion (suppressed),
+      // only message_start is emitted — no activity delta.
+      const sb = new StateBuilder("sess-ask-reset", "test-project");
+      sb.handleEvent(systemInit());
+
+      // --- First API call: tool at index 0 ---
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "Bash", "toolu_b1"));
+      sb.handleEvent(inputJsonDelta(0, '{"command":"ls"}'));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg-1", [
+        { type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "ls" } },
+      ]));
+      sb.handleEvent(toolResult("toolu_b1", "output"));
+
+      // --- Second API call: AskUserQuestion at reused index 0 ---
+      sb.handleEvent(assistantMessage("msg-2", [
+        { type: "tool_use", id: "toolu_ask1", name: "AskUserQuestion",
+          input: { questions: [{ question: "Continue?", header: "h", options: [], multiSelect: false }] } },
+      ]));
+
+      const deltas = sb.handleEvent(toolBlockStart(0, "AskUserQuestion", "toolu_ask1"));
+
+      // AskUserQuestion is suppressed — only message_start from the mini-reset
+      expect(deltas).toEqual([{ type: "message_start" }]);
+    });
+  });
+
+  // ==========================================================================
+  describe("live delta → client parity (gdn-digoli)", () => {
+    // Simulated client delta handler — mirrors index.html's handleSSEDelta
+    // + ensureAssistantMessage. Builds a message list from deltas alone.
+    interface ClientMsg {
+      role: string;
+      content: string | null;
+      tool_calls?: Array<{ name: string; status: string; input: string; output: string | null }>;
+      thinking?: string;
+    }
+
+    function simulateClient(allDeltas: ReturnType<StateBuilder["handleEvent"]>) {
+      const messages: ClientMsg[] = [];
+
+      function ensureAssistant(): ClientMsg {
+        const last = messages[messages.length - 1];
+        if (last && last.role === "assistant") return last;
+        const msg: ClientMsg = { role: "assistant", content: null };
+        messages.push(msg);
+        return msg;
+      }
+
+      for (const d of allDeltas) {
+        switch (d.type) {
+          case "message_start":
+            messages.push({ role: "assistant", content: null });
+            break;
+
+          case "activity":
+            ensureAssistant();
+            break;
+
+          case "content": {
+            const msg = ensureAssistant();
+            msg.content = (d as { text: string }).text;
+            break;
+          }
+
+          case "thinking_content": {
+            const msg = ensureAssistant();
+            msg.thinking = (d as { text: string }).text;
+            break;
+          }
+
+          case "tool_start": {
+            const msg = ensureAssistant();
+            if (!msg.tool_calls) msg.tool_calls = [];
+            const idx = (d as { index: number }).index;
+            while (msg.tool_calls.length <= idx) {
+              msg.tool_calls.push({ name: "", status: "running", input: "", output: null });
+            }
+            msg.tool_calls[idx] = {
+              name: (d as { name: string }).name,
+              status: "running",
+              input: (d as { input: string }).input || "",
+              output: null,
+            };
+            break;
+          }
+
+          case "tool_complete": {
+            const last = messages[messages.length - 1];
+            const idx = (d as { index: number }).index;
+            if (last?.tool_calls?.[idx]) {
+              last.tool_calls[idx].status = (d as { status: string }).status;
+              if ((d as { output?: string }).output) {
+                last.tool_calls[idx].output = (d as { output?: string }).output!;
+              }
+            }
+            break;
+          }
+
+          case "status":
+          case "ask_user":
+          case "api_error":
+            break;
+        }
+      }
+
+      return messages;
+    }
+
+    // Compare message structures, ignoring fields the client doesn't track
+    function compareMessages(
+      clientMsgs: ClientMsg[],
+      serverMsgs: Array<{ role: string; content: string | null; tool_calls?: unknown[]; thinking?: string }>,
+    ) {
+      // Same count of assistant messages
+      const clientAssistant = clientMsgs.filter(m => m.role === "assistant" && (m.content || m.tool_calls?.length));
+      const serverAssistant = serverMsgs.filter(m => m.role === "assistant");
+      expect(clientAssistant.length).toBe(serverAssistant.length);
+
+      // Each message matches on content, tool count, and tool names
+      for (let i = 0; i < serverAssistant.length; i++) {
+        const s = serverAssistant[i];
+        const c = clientAssistant[i];
+        expect(c.content).toBe(s.content);
+        expect(c.tool_calls?.length ?? 0).toBe(s.tool_calls?.length ?? 0);
+        if (s.tool_calls) {
+          for (let j = 0; j < s.tool_calls.length; j++) {
+            const st = s.tool_calls[j] as { name: string };
+            expect(c.tool_calls![j].name).toBe(st.name);
+          }
+        }
+      }
+    }
+
+    it("sequential tool calls: Read → Grep → text response", () => {
+      // 3 inner API calls: text+Read, text+Grep, text-only
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      const allDeltas: ReturnType<StateBuilder["handleEvent"]> = [];
+      function collect(event: Record<string, unknown>) {
+        allDeltas.push(...sb.handleEvent(event));
+      }
+
+      // API call 1: text + Read
+      collect(messageStart());
+      collect(textBlockStart(0));
+      collect(textDelta(0, "Let me read that."));
+      collect(blockStop(0));
+      collect(toolBlockStart(1, "Read", "toolu_r1"));
+      collect(inputJsonDelta(1, '{"file_path":"/app.ts"}'));
+      collect(blockStop(1));
+      collect(assistantMessage("msg1", [
+        { type: "text", text: "Let me read that." },
+        { type: "tool_use", id: "toolu_r1", name: "Read", input: { file_path: "/app.ts" } },
+      ]));
+      collect(toolResult("toolu_r1", "file contents"));
+
+      // API call 2: text + Grep (index collision → mini-reset → message_start)
+      collect(textBlockStart(0));
+      collect(textDelta(0, "Now searching."));
+      collect(blockStop(0));
+      collect(toolBlockStart(1, "Grep", "toolu_g1"));
+      collect(inputJsonDelta(1, '{"pattern":"handleEvent"}'));
+      collect(blockStop(1));
+      collect(assistantMessage("msg2", [
+        { type: "text", text: "Now searching." },
+        { type: "tool_use", id: "toolu_g1", name: "Grep", input: { pattern: "handleEvent" } },
+      ]));
+      collect(toolResult("toolu_g1", "match"));
+
+      // API call 3: text only
+      collect(textBlockStart(0));
+      collect(textDelta(0, "Found it."));
+      collect(blockStop(0));
+      collect(assistantMessage("msg3", [{ type: "text", text: "Found it." }]));
+      collect(resultEvent());
+
+      const serverState = sb.getState();
+      const clientMsgs = simulateClient(allDeltas);
+      compareMessages(clientMsgs, serverState.messages);
+    });
+
+    it("pipeline tool execution: 3 parallel Bash in one API call", () => {
+      // Single API call with text + 3 Bash tools. Tool results arrive
+      // interleaved due to pipeline execution. No over-split.
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      const allDeltas: ReturnType<StateBuilder["handleEvent"]> = [];
+      function collect(event: Record<string, unknown>) {
+        allDeltas.push(...sb.handleEvent(event));
+      }
+
+      collect(messageStart());
+      collect(textBlockStart(0));
+      collect(textDelta(0, "Running parallel searches."));
+      collect(blockStop(0));
+
+      // Tool 1
+      collect(toolBlockStart(1, "Bash", "toolu_b1"));
+      collect(inputJsonDelta(1, '{"command":"grep error"}'));
+      collect(blockStop(1));
+
+      // Partial emission + pipeline tool result for tool 1
+      collect(assistantMessage("msg-p", [
+        { type: "text", text: "Running parallel searches." },
+        { type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "grep error" } },
+      ]));
+      collect(toolResult("toolu_b1", "3 errors"));
+
+      // Tool 2 (same API call, unique index)
+      collect(toolBlockStart(2, "Bash", "toolu_b2"));
+      collect(inputJsonDelta(2, '{"command":"grep fail"}'));
+      collect(blockStop(2));
+
+      // Tool 3
+      collect(toolBlockStart(3, "Bash", "toolu_b3"));
+      collect(inputJsonDelta(3, '{"command":"grep retry"}'));
+      collect(blockStop(3));
+
+      // Remaining tool results
+      collect(toolResult("toolu_b2", "1 failure"));
+      collect(toolResult("toolu_b3", "2 retries"));
+
+      // Second API call: text response
+      collect(textBlockStart(0)); // index collision → message_start
+      collect(textDelta(0, "Found issues."));
+      collect(blockStop(0));
+      collect(assistantMessage("msg-final", [{ type: "text", text: "Found issues." }]));
+      collect(resultEvent());
+
+      const serverState = sb.getState();
+      const clientMsgs = simulateClient(allDeltas);
+      compareMessages(clientMsgs, serverState.messages);
+
+      // Verify specifics: 2 assistant messages (1 with 3 tools, 1 text-only)
+      const serverAssistant = serverState.messages.filter(m => m.role === "assistant");
+      expect(serverAssistant).toHaveLength(2);
+      expect(serverAssistant[0].tool_calls).toHaveLength(3);
+      expect(serverAssistant[1].content).toBe("Found issues.");
+    });
+
+    it("thinking + tool + text in single API call", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      const allDeltas: ReturnType<StateBuilder["handleEvent"]> = [];
+      function collect(event: Record<string, unknown>) {
+        allDeltas.push(...sb.handleEvent(event));
+      }
+
+      collect(messageStart());
+      collect(thinkingBlockStart(0));
+      collect(thinkingDelta(0, "Planning approach."));
+      collect(blockStop(0));
+      collect(textBlockStart(1));
+      collect(textDelta(1, "Here's the plan."));
+      collect(blockStop(1));
+      collect(toolBlockStart(2, "Bash", "toolu_b1"));
+      collect(inputJsonDelta(2, '{"command":"npm test"}'));
+      collect(blockStop(2));
+      collect(assistantMessage("msg-1", [
+        { type: "thinking", thinking: "Planning approach." },
+        { type: "text", text: "Here's the plan." },
+        { type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "npm test" } },
+      ]));
+      collect(toolResult("toolu_b1", "pass"));
+
+      // Response after tool
+      collect(thinkingBlockStart(0));
+      collect(thinkingDelta(0, "Tests passed."));
+      collect(blockStop(0));
+      collect(textBlockStart(1));
+      collect(textDelta(1, "All good."));
+      collect(blockStop(1));
+      collect(assistantMessage("msg-2", [
+        { type: "thinking", thinking: "Tests passed." },
+        { type: "text", text: "All good." },
+      ]));
+      collect(resultEvent());
+
+      const serverState = sb.getState();
+      const clientMsgs = simulateClient(allDeltas);
+      compareMessages(clientMsgs, serverState.messages);
     });
   });
 });

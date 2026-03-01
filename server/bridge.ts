@@ -436,8 +436,8 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
   flushPendingDeltas(session);
 
   // Route through state builder
-  const delta = session.stateBuilder.handleEvent(event);
-  if (delta) {
+  const deltas = session.stateBuilder.handleEvent(event);
+  for (const delta of deltas) {
     broadcastToSession(session, "delta", delta);
     // Push notification when Claude asks a question and user isn't watching
     if (delta.type === "ask_user" && session.clients.size === 0) {
@@ -451,7 +451,7 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
   // API error — no result event follows, so trigger turn completion here.
   // The state builder returns an api_error delta which the client uses to
   // show the error inline. Without this, the turn silently stalls.
-  if (delta?.type === "api_error") {
+  if (deltas.some(d => d.type === "api_error")) {
     const state = session.stateBuilder.getState();
     session.contextPct = state.session.context_pct;
     onTurnComplete(session);
@@ -472,8 +472,9 @@ function flushPendingDeltas(session: Session): void {
   }
   for (const pending of session.pendingDeltas.values()) {
     const merged = buildMergedDelta(pending);
-    const delta = session.stateBuilder.handleEvent(merged);
-    if (delta) broadcastToSession(session, "delta", delta);
+    for (const delta of session.stateBuilder.handleEvent(merged)) {
+      broadcastToSession(session, "delta", delta);
+    }
   }
   session.pendingDeltas.clear();
 }

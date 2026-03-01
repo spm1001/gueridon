@@ -199,22 +199,30 @@ export class StateBuilder {
     };
   }
 
-  /** Process a CC event, return an SSE delta to broadcast (or null). */
-  handleEvent(event: Record<string, unknown>): SSEDelta {
+  /** Process a CC event, return SSE deltas to broadcast. */
+  handleEvent(event: Record<string, unknown>): NonNullable<SSEDelta>[] {
+    let raw: SSEDelta | SSEDelta[];
     switch (event.type) {
       case "system":
-        return this.handleSystem(event);
+        raw = this.handleSystem(event);
+        break;
       case "stream_event":
-        return this.handleStreamEvent(event);
+        raw = this.handleStreamEvent(event);
+        break;
       case "assistant":
-        return this.handleAssistant(event);
+        raw = this.handleAssistant(event);
+        break;
       case "user":
-        return this.handleUser(event);
+        raw = this.handleUser(event);
+        break;
       case "result":
-        return this.handleResult(event);
+        raw = this.handleResult(event);
+        break;
       default:
-        return null;
+        raw = null;
     }
+    if (Array.isArray(raw)) return raw.filter((d): d is NonNullable<SSEDelta> => d !== null);
+    return raw ? [raw as NonNullable<SSEDelta>] : [];
   }
 
   /** Replay JSONL events (from parseSessionJSONL). Builds state silently — no deltas. */
@@ -269,7 +277,7 @@ export class StateBuilder {
     return { type: "status", status: "working" };
   }
 
-  private handleStreamEvent(event: Record<string, unknown>): SSEDelta {
+  private handleStreamEvent(event: Record<string, unknown>): SSEDelta | SSEDelta[] {
     const inner = event.event as Record<string, unknown> | undefined;
     if (!inner) return null;
 
@@ -302,7 +310,7 @@ export class StateBuilder {
     return { type: "message_start" };
   }
 
-  private onContentBlockStart(inner: Record<string, unknown>): SSEDelta {
+  private onContentBlockStart(inner: Record<string, unknown>): SSEDelta | SSEDelta[] {
     const index = inner.index as number;
     const block = inner.content_block as Record<string, unknown> | undefined;
     if (!block) return null;
@@ -314,6 +322,10 @@ export class StateBuilder {
     // emits message_start for the FIRST call. Subsequent calls reuse block indices
     // starting from 0. If blockTypes already has this index, we're in a new API
     // call — clear streaming accumulation to prevent text/thinking/tool leakage.
+    // Emit message_start so the client creates a new assistant message (replaces
+    // the old toolCompletedSinceLastContent flag which over-split on pipeline
+    // tool execution within the same API call).
+    let isNewApiCall = false;
     if (this.blockTypes.has(index)) {
       this.currentText = "";
       this.textBlocks.clear();
@@ -325,15 +337,16 @@ export class StateBuilder {
       this.askUserBlockIndices.clear();
       this.askUserBlockToolId.clear();
       this.currentMessagePushed = false;
+      isNewApiCall = true;
     }
 
     this.blockTypes.set(index, blockType);
 
-    if (blockType === "text") {
-      return { type: "activity", activity: "writing" };
-    }
+    let activity: SSEDelta = null;
 
-    if (blockType === "tool_use") {
+    if (blockType === "text") {
+      activity = { type: "activity", activity: "writing" };
+    } else if (blockType === "tool_use") {
       const name = (block.name as string) || "Unknown";
       const toolId = block.id as string;
 
@@ -344,7 +357,7 @@ export class StateBuilder {
           this.askUserToolIds.add(toolId);
           this.askUserBlockToolId.set(index, toolId);
         }
-        return null; // no tool activity — overlay handles it
+        return isNewApiCall ? { type: "message_start" } : null;
       }
 
       const call: BBToolCall = {
@@ -358,14 +371,19 @@ export class StateBuilder {
       this.currentToolCalls.push(call);
       if (toolId) this.toolIdToIndex.set(toolId, callIndex);
       this.toolBlockToCallIndex.set(index, callIndex);
-      return { type: "activity", activity: "tool" };
+      activity = { type: "activity", activity: "tool" };
+    } else if (blockType === "thinking") {
+      activity = { type: "activity", activity: "thinking" };
     }
 
-    if (blockType === "thinking") {
-      return { type: "activity", activity: "thinking" };
+    // On new inner API call, prepend message_start so client splits correctly
+    if (isNewApiCall && activity) {
+      return [{ type: "message_start" }, activity];
     }
-
-    return null;
+    if (isNewApiCall) {
+      return { type: "message_start" };
+    }
+    return activity;
   }
 
   private onContentBlockDelta(inner: Record<string, unknown>): SSEDelta {
