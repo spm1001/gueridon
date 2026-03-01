@@ -255,6 +255,7 @@ function maybeStartGraceTimer(session: Session): void {
     // just momentarily disconnected (iOS SSE drops during screen lock).
     const PROMPT_RECENCY_MS = 10 * 60 * 1000; // 10 minutes
     if (session.lastPromptAt && (Date.now() - session.lastPromptAt) < PROMPT_RECENCY_MS) {
+      emit({ type: "grace:skip", folder: session.folderName, reason: "prompt-recent", ageMs: Date.now() - session.lastPromptAt });
       return;
     }
     startGraceTimer(session);
@@ -595,6 +596,9 @@ function deliverPrompt(
 
 function killWithEscalation(proc: ChildProcess, context?: { folder: string; reason: string }): void {
   if (!proc.pid) return;
+  if (context) {
+    emit({ type: "process:kill", folder: context.folder, pid: proc.pid, reason: context.reason });
+  }
   proc.kill("SIGTERM");
   const timer = setTimeout(() => {
     try {

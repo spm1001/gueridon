@@ -30,6 +30,7 @@ export type BridgeEvent =
   // Grace timer
   | { type: "grace:start"; folder: string; sessionId: string; graceMs: number }
   | { type: "grace:expire"; folder: string; sessionId: string }
+  | { type: "grace:skip"; folder: string; reason: string; ageMs: number }
 
   // Prompt delivery
   | { type: "prompt:deliver"; folder: string; sessionId: string }
@@ -106,6 +107,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "sse:disconnect": "info",
   "grace:start": "info",
   "grace:expire": "info",
+  "grace:skip": "debug",
   "prompt:deliver": "info",
   "prompt:queue": "debug",
   "prompt:outrider": "debug",
