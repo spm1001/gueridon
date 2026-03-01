@@ -37,6 +37,8 @@ import {
   classifyRestart,
   buildResumeInjection,
   extractLastToolCall,
+  STATIC_FILES,
+  CSP,
   type PendingDelta,
   type SessionProcessInfo,
   type ShutdownContext,
@@ -1093,35 +1095,7 @@ async function handleShareUpload(req: IncomingMessage, res: ServerResponse): Pro
 
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const STATIC_FILES: Record<string, { file: string; mime: string }> = {
-  "/": { file: "index.html", mime: "text/html; charset=utf-8" },
-  "/index.html": { file: "index.html", mime: "text/html; charset=utf-8" },
-  "/style.css": { file: "style.css", mime: "text/css; charset=utf-8" },
-  "/sw.js": { file: "sw.js", mime: "application/javascript" },
-  "/manifest.json": { file: "manifest.json", mime: "application/json" },
-  "/icon-192.svg": { file: "icon-192.svg", mime: "image/svg+xml" },
-  "/icon-512.svg": { file: "icon-512.svg", mime: "image/svg+xml" },
-  "/marked.js": { file: "node_modules/marked/lib/marked.umd.js", mime: "application/javascript" },
-  "/mockup": { file: "mockup.html", mime: "text/html; charset=utf-8" },
-  "/css-shell": { file: "css-shell.html", mime: "text/html; charset=utf-8" },
-  "/render-utils.js": { file: "client/render-utils.cjs", mime: "application/javascript" },
-  "/render-chips.js": { file: "client/render-chips.cjs", mime: "application/javascript" },
-  "/render-messages.js": { file: "client/render-messages.cjs", mime: "application/javascript" },
-  "/render-chrome.js": { file: "client/render-chrome.cjs", mime: "application/javascript" },
-  "/render-overlays.js": { file: "client/render-overlays.cjs", mime: "application/javascript" },
-  "/fixtures.js": { file: "client/fixtures.cjs", mime: "application/javascript" },
-};
-
-// CSP: restrict what index.html can load (gdn-tilozu).
-// 'unsafe-inline' required for inline <script> and <style> in index.html.
-// connect-src 'self' allows SSE + POST to same origin only.
-const CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "connect-src 'self'",
-  "img-src 'self' data:",
-].join("; ");
+// STATIC_FILES and CSP imported from bridge-logic.ts
 
 function serveStatic(pathname: string, res: ServerResponse): boolean {
   const entry = STATIC_FILES[pathname];

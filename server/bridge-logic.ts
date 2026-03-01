@@ -12,6 +12,38 @@ import { homedir, hostname } from "node:os";
 
 export const KILL_ESCALATION_MS = 3_000; // SIGTERM → SIGKILL after 3 seconds
 
+// Static files served by the bridge. Keys are URL paths, values are
+// on-disk file paths (relative to PROJECT_ROOT) and MIME types.
+export const STATIC_FILES: Record<string, { file: string; mime: string }> = {
+  "/": { file: "index.html", mime: "text/html; charset=utf-8" },
+  "/index.html": { file: "index.html", mime: "text/html; charset=utf-8" },
+  "/style.css": { file: "style.css", mime: "text/css; charset=utf-8" },
+  "/sw.js": { file: "sw.js", mime: "application/javascript" },
+  "/manifest.json": { file: "manifest.json", mime: "application/json" },
+  "/icon-192.svg": { file: "icon-192.svg", mime: "image/svg+xml" },
+  "/icon-512.svg": { file: "icon-512.svg", mime: "image/svg+xml" },
+  "/marked.js": { file: "node_modules/marked/lib/marked.umd.js", mime: "application/javascript" },
+  "/mockup": { file: "mockup.html", mime: "text/html; charset=utf-8" },
+  "/css-shell": { file: "css-shell.html", mime: "text/html; charset=utf-8" },
+  "/render-utils.js": { file: "client/render-utils.cjs", mime: "application/javascript" },
+  "/render-chips.js": { file: "client/render-chips.cjs", mime: "application/javascript" },
+  "/render-messages.js": { file: "client/render-messages.cjs", mime: "application/javascript" },
+  "/render-chrome.js": { file: "client/render-chrome.cjs", mime: "application/javascript" },
+  "/render-overlays.js": { file: "client/render-overlays.cjs", mime: "application/javascript" },
+  "/fixtures.js": { file: "client/fixtures.cjs", mime: "application/javascript" },
+};
+
+// CSP: restrict what index.html can load (gdn-tilozu).
+// 'unsafe-inline' required for inline <script> and <style> in index.html.
+// connect-src 'self' allows SSE + POST to same origin only.
+export const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
+].join("; ");
+
 // Tools auto-approved via --allowed-tools. This is permissive by design —
 // Task subagents bypass --allowed-tools entirely (CC #27099), so restricting
 // the parent without restricting Task is security theater. We list everything

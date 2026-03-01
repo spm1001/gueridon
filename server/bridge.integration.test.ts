@@ -13,6 +13,7 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:f
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { STATIC_FILES, CSP } from "./bridge-logic.js";
 
 const PROJECT_ROOT = join(fileURLToPath(import.meta.url), "../..");
 
@@ -623,5 +624,36 @@ describe("bridge HTTP smoke tests", () => {
     const parsed = JSON.parse(rejection!);
     expect(parsed.requestId).toBeTruthy();
     expect(parsed.requestId).toHaveLength(8); // 4 random bytes → 8 hex chars
+  });
+
+  // -- STATIC_FILES smoke test (gdn-wuwevi) --
+
+  describe("STATIC_FILES coverage", () => {
+    for (const [urlPath, entry] of Object.entries(STATIC_FILES)) {
+      it(`GET ${urlPath} → 200 with ${entry.mime}`, async () => {
+        const res = await fetch(`${baseUrl}${urlPath}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe(entry.mime);
+      });
+    }
+
+    it("HTML responses include CSP header, non-HTML responses do not", async () => {
+      for (const [urlPath, entry] of Object.entries(STATIC_FILES)) {
+        const res = await fetch(`${baseUrl}${urlPath}`);
+        const csp = res.headers.get("content-security-policy");
+        if (entry.mime.startsWith("text/html")) {
+          expect(csp).toBe(CSP);
+        } else {
+          expect(csp).toBeNull();
+        }
+      }
+    });
+
+    it("all responses include no-cache header", async () => {
+      for (const [urlPath] of Object.entries(STATIC_FILES)) {
+        const res = await fetch(`${baseUrl}${urlPath}`);
+        expect(res.headers.get("cache-control")).toBe("no-cache");
+      }
+    });
   });
 });

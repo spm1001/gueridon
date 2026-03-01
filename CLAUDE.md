@@ -164,11 +164,11 @@ Full list: https://code.claude.com/docs/en/settings
 
 ### Client modules (`client/`)
 
-Pure utility and render functions are being extracted from `index.html` into `client/*.cjs` files. Each file is served by STATIC_FILES as `/filename.js` and loaded via `<script>` tags before the inline script.
+All render logic lives in `client/*.cjs` modules. Each file is served by STATIC_FILES as `/filename.js` and loaded via `<script>` tags before the inline script. The inline script retains only mutable state, event wiring, and orchestrator wrappers.
 
 **Load order matters** — classic `<script>` tags execute sequentially:
 ```
-marked.js → render-utils.js → render-chips.js → render-messages.js → render-chrome.js → inline script
+marked.js → render-utils.js → render-chips.js → render-messages.js → render-chrome.js → render-overlays.js → inline script
 ```
 
 **The `.cjs` pattern:** `package.json` has `"type": "module"`, making `.js` files ESM. Client files use `module.exports` (CJS) so they work as both classic browser scripts and vitest imports. The `.cjs` extension forces CJS regardless of the package type setting.
@@ -185,13 +185,13 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 
 **Orchestrator wrappers:** The inline script defines thin wrappers (`refreshSendButton`, `refreshPlaceholder`, `refreshSwitcher`) that read mutable state (e.g., `liveState`, `sseCurrentFolder`, `stagedDeposits`) and pass it as explicit arguments to the extracted module functions. This avoids 5+ callers each computing the same state. Do NOT inline the module calls at each call site — use the wrappers.
 
-| File | Contents | Status |
-|------|----------|--------|
-| `render-utils.cjs` | `esc`, `trimText`, `trimToolOutput`, `truncateThinking`, `buildDepositNoteClient`, `timeAgo`, `shortModel` | Done |
-| `render-chips.cjs` | `renderChip`, `renderThinkingChip`, `renderLocalCommand`, `attachCopyButton` | Done |
-| `render-messages.cjs` | `renderUserBubble`, `addCopyButtons`, `renderMessages` | Done |
-| `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` | Done |
-| `render-overlays.cjs` | AskUser overlay, slash menu, staged deposits | Planned (gdn-sugopa) |
+| File | Exports |
+|------|---------|
+| `render-utils.cjs` | `esc`, `trimText`, `trimToolOutput`, `truncateThinking`, `buildDepositNoteClient`, `timeAgo`, `shortModel` |
+| `render-chips.cjs` | `renderChip`, `renderThinkingChip`, `renderLocalCommand`, `attachCopyButton` |
+| `render-messages.cjs` | `renderUserBubble`, `addCopyButtons`, `renderMessages` |
+| `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` |
+| `render-overlays.cjs` | `showAskUserOverlay`, `hideAskUserOverlay`, `getSlashCommands`, `renderSlashList`, `openSlashSheet`, `renderStagedDeposits` |
 
 ### Layout model — body-scroll
 
