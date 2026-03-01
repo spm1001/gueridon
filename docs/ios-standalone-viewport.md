@@ -87,7 +87,9 @@ The body is 1px taller than the screen — completely imperceptible.
 
 **In Safari:** body = 696px (695 + 1). The 1px overshoot is invisible. Safari doesn't trigger any recalculation because its viewport isn't lying. Effectively neutral.
 
-## The Fix
+## The Fix (historical)
+
+> **Superseded** — see "Body-scroll layout" section below. Kept for reference.
 
 ```css
 /* iOS standalone: viewport units lie (793px vs 852px screen).
@@ -98,15 +100,13 @@ html, body {
 }
 ```
 
-This is a **CSS-only fix** that replaces the previous JS-only approach:
+This replaced the earlier JS-only approach:
 
 ```javascript
 // Previous: JS sets screen.height on html+body
 document.documentElement.style.height = screen.height + 'px';
 document.body.style.height = screen.height + 'px';
 ```
-
-The JS fix remains useful for keyboard resize handling (`visualViewport` resize events set height to `visualViewport.height` when keyboard opens, `screen.height` when it closes). But the initial layout no longer depends on JS.
 
 ## `display-mode: standalone` media query doesn't match
 
@@ -116,9 +116,29 @@ The `calc(100dvh + 1px)` fix is applied unconditionally (not behind a standalone
 1. The media query is unreliable on iOS
 2. The effect is neutral in Safari (+1px is invisible)
 
+## Body-scroll layout (2026-03 update)
+
+The `calc(100dvh + 1px)` fix above is **obsolete**. Guéridon now uses a body-scroll layout where the document body scrolls naturally:
+
+```css
+body { min-height: 100dvh; }
+.messages { flex: 1 0 auto; }     /* grows with content */
+.input-area { position: sticky; bottom: 0; }
+```
+
+The viewport lie (793px vs 852px) no longer matters because:
+
+1. **Body grows with content.** Any page with actual messages exceeds 793px immediately, triggering iOS's viewport recalculation as a side effect.
+2. **No fixed height.** `min-height: 100dvh` sets a floor, not a ceiling. The body is never clamped to the lying value.
+3. **Sticky input area** stays at the viewport bottom regardless of whether iOS has recalculated — it's positioned relative to the viewport, not the body height.
+
+The +1px trick worked by forcing an overflow to trigger recalculation. Body-scroll gets the same recalculation for free because real content provides the overflow.
+
+**Do not re-add `calc(100dvh + 1px)` or `height: screen.height`** — these fight the body-scroll model. The JS `screen.height` fix remains only for keyboard resize handling (`visualViewport` resize events).
+
 ## Related
 
-- `style.css` line 321: comment about standalone height
-- `index.html` line 119: JS standalone viewport fix (keyboard resize handling)
+- `style.css`: `min-height: 100dvh` on body
+- `index.html`: JS standalone viewport fix (keyboard resize handling only)
 - MEMORY.md: iOS standalone viewport gap entry
-- `docs/device-emulation-and-inner-loop.md` line 184: fidelity caveat about WebKit vs Blink
+- `docs/device-emulation-and-inner-loop.md`: fidelity caveat about WebKit vs Blink

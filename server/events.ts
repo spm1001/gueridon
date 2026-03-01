@@ -69,6 +69,7 @@ export type BridgeEvent =
   | { type: "push:send-ok"; sent: number; tag: string }
   | { type: "push:send-fail"; endpoint: string; error: string }
   | { type: "push:expired-cleanup"; count: number }
+  | { type: "push:subscribe-prune"; pruned: number; remaining: number }
 
   // Folder management
   | { type: "folder:create"; folder: string }
@@ -132,6 +133,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "push:send-ok": "debug",
   "push:send-fail": "warn",
   "push:expired-cleanup": "info",
+  "push:subscribe-prune": "info",
   "folder:create": "info",
   "folders:scan-error": "warn",
   "client:error": "warn",

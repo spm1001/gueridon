@@ -24,6 +24,9 @@ let publicKey = "";
 // Subscription keyed by endpoint URL (deduplicates re-subscribes)
 let subscriptions: Map<string, webpush.PushSubscription> = new Map();
 
+// Safety cap — prevents unbounded growth across SW re-registrations
+const MAX_SUBSCRIPTIONS = 5;
+
 function init(): void {
   if (!existsSync(VAPID_PATH)) {
     emit({ type: "push:init", status: "disabled", detail: VAPID_PATH });
@@ -69,8 +72,50 @@ export function getVapidPublicKey(): string | null {
 /** Store a push subscription from a client. */
 export function addSubscription(sub: webpush.PushSubscription): void {
   subscriptions.set(sub.endpoint, sub);
+
+  // Cap: if over limit, drop oldest (Map preserves insertion order)
+  while (subscriptions.size > MAX_SUBSCRIPTIONS) {
+    const oldest = subscriptions.keys().next().value;
+    if (oldest && oldest !== sub.endpoint) {
+      subscriptions.delete(oldest);
+    } else break;
+  }
+
   saveSubscriptions();
   emit({ type: "push:subscribe", total: subscriptions.size });
+
+  // Validate existing subs in the background — prune dead endpoints
+  pruneStaleSubscriptions(sub.endpoint).catch(() => {});
+}
+
+/**
+ * Validate all existing subscriptions by sending a zero-TTL ping.
+ * Dead endpoints return 410/404/403 from the push service without
+ * reaching the browser. Any that fail are pruned.
+ */
+async function pruneStaleSubscriptions(excludeEndpoint: string): Promise<void> {
+  if (!vapidReady) return;
+
+  const stale: string[] = [];
+
+  for (const [endpoint, sub] of subscriptions) {
+    if (endpoint === excludeEndpoint) continue;
+    try {
+      await webpush.sendNotification(sub, JSON.stringify({ type: "validate" }), { TTL: 0 });
+    } catch (err: unknown) {
+      const statusCode = (err as { statusCode?: number }).statusCode;
+      if (statusCode === 410 || statusCode === 404 || statusCode === 403) {
+        stale.push(endpoint);
+      }
+      // Other errors (network, 429) — leave the sub alone
+    }
+  }
+
+  if (stale.length > 0) {
+    for (const ep of stale) subscriptions.delete(ep);
+    saveSubscriptions();
+    emit({ type: "push:subscribe-prune", pruned: stale.length, remaining: subscriptions.size });
+  }
 }
 
 /** Remove a push subscription. */
@@ -151,6 +196,16 @@ export function pushAskUser(folder: string): Promise<void> {
     vibrate: [200, 100, 200],
   });
 }
+
+// For unit testing — reset module state without re-importing
+export const _testing = {
+  reset(subs: Map<string, webpush.PushSubscription> = new Map()) {
+    subscriptions = subs;
+    vapidReady = true;
+  },
+  getSubscriptions() { return subscriptions; },
+  pruneStaleSubscriptions,
+};
 
 // Initialize on module load
 init();

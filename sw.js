@@ -72,6 +72,10 @@ self.addEventListener("fetch", (event) => {
 
 self.addEventListener("push", (event) => {
   const data = event.data ? event.data.json() : {};
+
+  // Validation pings from subscribe-time pruning — silently acknowledge
+  if (data.type === "validate") return;
+
   const title = data.title || "Guéridon";
   const options = {
     body: data.body || "Claude finished",
