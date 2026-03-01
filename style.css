@@ -334,6 +334,17 @@ body {
   flex-direction: column;
   gap: 8px;
 }
+/* Solid backdrop behind iOS keyboard accessory bar — the predictive text
+   strip is translucent and messages bleed through without this. */
+.input-area::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 120px;
+  background: var(--surface);
+}
 
 /* Standalone PWA: adjust safe-area padding when keyboard is open/closed. */
 @media (display-mode: standalone) {
