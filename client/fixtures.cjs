@@ -278,6 +278,28 @@
     MSG_ASSISTANT_SHORT,
   ];
 
+  // --- Markdown corpus (real CC output patterns for fidelity tests) ---
+
+  const MD_FENCED_CODE_WITH_LANG = "Here's the fix:\n\n```css\n.input-area {\n  gap: 8px;\n  position: sticky;\n  bottom: 0;\n}\n```\n\nThis aligns the gap with the button bar.";
+
+  const MD_FENCED_CODE_NO_LANG = "The output was:\n\n```\n✓ 474 tests passed\n  14 test files\n  Duration: 7.41s\n```\n\nAll green.";
+
+  const MD_NESTED_BULLETS = "The architecture has three layers:\n\n- **Server** (`server/`)\n  - `bridge.ts` — HTTP + SSE\n  - `state-builder.ts` — event → state\n  - `bridge-logic.ts` — pure functions\n- **Client** (`client/`)\n  - `render-utils.cjs` — pure utilities\n  - `render-messages.cjs` — message rendering\n- **Shared**\n  - `fixtures.cjs` — test data";
+
+  const MD_TABLE = "| File | Exports |\n|------|--------|\n| `render-utils.cjs` | `esc`, `trimText` |\n| `render-chips.cjs` | `renderChip` |\n| `render-chrome.cjs` | `renderStatusBar` |";
+
+  const MD_INLINE_CODE_IN_BOLD = "The **`renderMessages`** function takes an explicit `opts` object. Use **`marked.parse()`** for block content and `marked.parseInline()` for inline.";
+
+  const MD_HTML_ENTITIES = "The tool output contained `&lt;div&gt;` tags and `&amp;` entities. Escape with `esc()` before rendering — never use `innerHTML` with raw tool output.";
+
+  const MD_MIXED_FORMATTING = "I've updated three files:\n\n1. **`bridge.ts`** — moved `STATIC_FILES` to bridge-logic\n2. **`bridge-logic.ts`** — added exports for `STATIC_FILES` and `CSP`\n3. **`bridge.integration.test.ts`** — added smoke tests\n\n> The test dynamically iterates every entry, so adding a new file to the map without creating it on disk will fail.\n\n```typescript\nfor (const [urlPath, entry] of Object.entries(STATIC_FILES)) {\n  it(`GET ${urlPath}`, async () => {\n    const res = await fetch(urlPath);\n    expect(res.status).toBe(200);\n  });\n}\n```\n\nAll **519** tests pass.";
+
+  const MD_HEADING_WITH_CODE = "## The `--what` flag\n\nDefines what we'll produce. Use numbered steps:\n\n### Example\n\n```bash\nbon new \"Rate limiting\" --what \"1. Redis limiter 2. Headers\"\n```";
+
+  const MD_LINK_AND_IMAGE = "See [CC #27099](https://github.com/anthropics/claude-code/issues/27099) for the upstream issue. The workaround is documented in `CLAUDE.md`.";
+
+  const MD_CONSECUTIVE_CODE_BLOCKS = "Before:\n\n```javascript\nconst x = 1;\n```\n\nAfter:\n\n```javascript\nconst x = 2;\n```\n\nThe diff is minimal.";
+
   // --- Exports ---
 
   var mod = {
@@ -327,6 +349,18 @@
     // Deposits
     DEPOSIT_SINGLE,
     DEPOSIT_MULTI,
+
+    // Markdown corpus
+    MD_FENCED_CODE_WITH_LANG,
+    MD_FENCED_CODE_NO_LANG,
+    MD_NESTED_BULLETS,
+    MD_TABLE,
+    MD_INLINE_CODE_IN_BOLD,
+    MD_HTML_ENTITIES,
+    MD_MIXED_FORMATTING,
+    MD_HEADING_WITH_CODE,
+    MD_LINK_AND_IMAGE,
+    MD_CONSECUTIVE_CODE_BLOCKS,
 
     // Composite scenes
     SCENE_CONVERSATION,
