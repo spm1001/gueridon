@@ -532,6 +532,13 @@ export class StateBuilder {
       this.seenMessageIds.add(msgId);
     }
 
+    // Diagnostic: log every push to catch dupe source (gdn-hehutu investigation)
+    const contentBlocks = message.content as unknown[] | undefined;
+    const diagText = Array.isArray(contentBlocks)
+      ? contentBlocks.filter((b: unknown) => (b as Record<string, unknown>).type === "text").map((b: unknown) => (b as Record<string, unknown>).text as string).join("").slice(0, 40)
+      : "";
+    console.error(`[SB] PUSH assistant id=${msgId || "NO_ID"} #${this.state.messages.length} text="${diagText}" hasThinking=${this.thinkingBlocks.size > 0} replaying=${this.replaying}`);
+
     // Build assistant message — prefer streaming accumulation, fall back to
     // content array from complete message (JSONL replay has no streaming events)
     let text = this.currentText || null;
