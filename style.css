@@ -329,21 +329,14 @@ body {
   will-change: transform;
   background: var(--surface);
   border-top: 1px solid var(--border);
-  padding: 8px 14px calc(var(--safe-bottom) + 4px);
+  padding: 8px 14px var(--safe-bottom);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-
-
-/* Standalone PWA: adjust safe-area padding when keyboard is open/closed. */
-@media (display-mode: standalone) {
-  .input-area {
-    padding-bottom: max(env(safe-area-inset-bottom, 0px), 4px);
-  }
-  .input-area.keyboard-open {
-    padding-bottom: 4px;
-  }
+/* Keyboard open: home indicator hidden behind keyboard, drop safe-area padding */
+.input-area.keyboard-open {
+  padding-bottom: 4px;
 }
 
 .input-field {
