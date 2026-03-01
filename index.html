@@ -719,6 +719,20 @@ function refreshSwitcher() {
       switcherExpandedFolder = folder;
       refreshSwitcher();
     },
+    onCreate: (name) => {
+      if (!bridgeUrl) return;
+      fetch(bridgeUrl + '/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(name ? { name } : {}),
+      })
+        .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
+        .then(d => {
+          sseConnectFolder({ name: d.name, path: d.path });
+          closeSwitcher();
+        })
+        .catch(e => alert(e.error || 'Failed to create folder'));
+    },
   });
 }
 

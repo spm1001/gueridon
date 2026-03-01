@@ -151,6 +151,11 @@ export class StateBuilder {
   // onMessageStart and the inner-API-call mini-reset in onContentBlockStart.
   private currentMessagePushed = false;
 
+  // True after handleAssistant pushes ANY message since the last onMessageStart.
+  // Unlike currentMessagePushed, NOT cleared by the mini-reset — used to detect
+  // inner API calls where stale streaming state would otherwise leak.
+  private turnHasAssistant = false;
+
   // Dedup & context
   private seenMessageIds = new Set<string>();
   private contextWindow = DEFAULT_CONTEXT_WINDOW;
@@ -293,6 +298,7 @@ export class StateBuilder {
     this.askUserBlockIndices.clear();
     this.askUserBlockToolId.clear();
     this.currentMessagePushed = false;
+    this.turnHasAssistant = false;
     return { type: "message_start" };
   }
 
@@ -532,14 +538,18 @@ export class StateBuilder {
       this.seenMessageIds.add(msgId);
     }
 
-    // Diagnostic: log every push to catch dupe source (gdn-hehutu investigation)
-    const contentBlocks = message.content as unknown[] | undefined;
-    const diagText = Array.isArray(contentBlocks)
-      ? contentBlocks.filter((b: unknown) => (b as Record<string, unknown>).type === "text").map((b: unknown) => (b as Record<string, unknown>).text as string).join("").slice(0, 40)
-      : "";
-    const streamText = (this.currentText || "").slice(0, 40);
-    const streamTools = this.currentToolCalls.map(t => t.name).join(",");
-    console.error(`[SB] PUSH assistant id=${msgId || "NO_ID"} #${this.state.messages.length} msgText="${diagText}" streamText="${streamText}" streamTools=${streamTools || "none"} hasThinking=${this.thinkingBlocks.size > 0} pushed=${this.currentMessagePushed} replaying=${this.replaying}`);
+    // Inner API call guard: if we've already pushed an assistant message in this
+    // turn (since the last onMessageStart), the current streaming state is stale
+    // — it belongs to the PREVIOUS message. Clear it so the new message builds
+    // from its own content blocks, not the old accumulation. Uses turnHasAssistant
+    // (not currentMessagePushed) because the mini-reset clears currentMessagePushed.
+    if (this.turnHasAssistant && !this.replaying) {
+      this.currentText = "";
+      this.textBlocks.clear();
+      this.thinkingBlocks.clear();
+      this.currentToolCalls = [];
+      this.pendingToolJson.clear();
+    }
 
     // Build assistant message — prefer streaming accumulation, fall back to
     // content array from complete message (JSONL replay has no streaming events)
@@ -600,6 +610,7 @@ export class StateBuilder {
     };
     this.state.messages.push(msg);
     this.currentMessagePushed = true;
+    this.turnHasAssistant = true;
 
     // Save this message's tool calls so handleUser can attach results to them.
     // toolIdToIndex is intentionally NOT cleared here — handleUser needs it next,

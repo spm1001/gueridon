@@ -64,10 +64,11 @@ function renderStatusBar(state, els) {
  * @param {HTMLElement} opts.els.body - document.body
  * @param {Function} opts.onConnect - (folder, sessionId?) => void — connect to a folder/session
  * @param {Function} opts.onExpand - (folderName|null) => void — expand/collapse a folder's session list
+ * @param {Function} [opts.onCreate] - (name: string) => void — create a new folder
  */
 function renderSwitcher(state, opts) {
   const { switcherOpen, currentFolder, expandedFolder, filter,
-          els, onConnect, onExpand } = opts;
+          els, onConnect, onExpand, onCreate } = opts;
 
   if (!state.switcher || !switcherOpen) {
     els.switcher.dataset.open = 'false';
@@ -83,8 +84,12 @@ function renderSwitcher(state, opts) {
   const currentId = state.session ? state.session.id : null;
   const sessions = state.switcher.sessions || [];
 
-  // Group: current first, then Now (active+paused), Previous (closed with history), fresh hidden
-  const groups = { now: [], previous: [] };
+  // Group: current pinned, then Recent (active/paused/touched within 72h),
+  // Previous (older with history), fresh hidden unless searching
+  const RECENT_MS = 72 * 60 * 60 * 1000;
+  const recentCutoff = Date.now() - RECENT_MS;
+  const recent = [];
+  const previous = [];
   const freshPool = [];
   let top = null; // current session or most recently ended
 
@@ -92,9 +97,18 @@ function renderSwitcher(state, opts) {
     if (filter && !s.project.toLowerCase().includes(filter)) continue;
     if (s.project === currentFolder) { top = s; continue; }
     if (s.status === 'ended' && !top) { top = s; continue; }
-    if (s.status === 'now') groups.now.push(s);
-    else if (s.status === 'previous' && s.humanSessionCount > 0) groups.previous.push(s);
-    else freshPool.push(s);
+    // Fresh = never had a human session
+    if (s.humanSessionCount === 0 && s.backendState !== 'active' && s.backendState !== 'paused') {
+      freshPool.push(s);
+      continue;
+    }
+    // Recent = active/paused OR last activity within 72h
+    const lastActive = s.updated ? new Date(s.updated).getTime() : 0;
+    if (s.backendState === 'active' || s.backendState === 'paused' || lastActive > recentCutoff) {
+      recent.push(s);
+    } else {
+      previous.push(s);
+    }
   }
 
   function makeItem(s, isCurrent) {
@@ -200,32 +214,54 @@ function renderSwitcher(state, opts) {
     return item;
   }
 
-  if (top) els.list.appendChild(makeItem(top, true));
-
-  if (groups.now.length) {
-    const label = document.createElement('div');
-    label.className = 'switcher-section';
-    label.textContent = 'Now';
-    els.list.appendChild(label);
-    for (const s of groups.now) els.list.appendChild(makeItem(s, false));
+  // New Project button — shown at top when no filter, calls onCreate with no name
+  if (onCreate && !filter) {
+    const btn = document.createElement('div');
+    btn.className = 'switcher-create';
+    btn.innerHTML = '<span class="switcher-create-icon">+</span> New Project';
+    btn.addEventListener('click', () => onCreate(''));
+    els.list.appendChild(btn);
   }
 
-  if (groups.previous.length) {
+  if (top) els.list.appendChild(makeItem(top, true));
+
+  if (recent.length) {
+    const label = document.createElement('div');
+    label.className = 'switcher-section';
+    label.textContent = 'Recent';
+    els.list.appendChild(label);
+    for (const s of recent) els.list.appendChild(makeItem(s, false));
+  }
+
+  if (previous.length) {
     const label = document.createElement('div');
     label.className = 'switcher-section';
     label.textContent = 'Previous';
     els.list.appendChild(label);
-    for (const s of groups.previous) els.list.appendChild(makeItem(s, false));
+    for (const s of previous) els.list.appendChild(makeItem(s, false));
   }
 
   // Fresh pool: only show when filtering or when nothing else exists
-  const showFresh = freshPool.length && (filter || (!groups.now.length && !groups.previous.length && !top));
+  const showFresh = freshPool.length && (filter || (!recent.length && !previous.length && !top));
   if (showFresh) {
     const label = document.createElement('div');
     label.className = 'switcher-section';
     label.textContent = filter ? 'Other' : 'All Projects';
     els.list.appendChild(label);
     for (const s of freshPool) els.list.appendChild(makeItem(s, false));
+  }
+
+  // Create folder: show when filter is a valid name with no exact match
+  if (onCreate && filter) {
+    const exactMatch = sessions.some(s => s.project.toLowerCase() === filter);
+    const validName = /^[a-z0-9][a-z0-9-]*$/.test(filter) && filter.length <= 64;
+    if (!exactMatch && validName) {
+      const row = document.createElement('div');
+      row.className = 'switcher-create';
+      row.innerHTML = `<span class="switcher-create-icon">+</span> Create <strong>${esc(filter)}</strong>`;
+      row.addEventListener('click', () => onCreate(filter));
+      els.list.appendChild(row);
+    }
   }
 }
 

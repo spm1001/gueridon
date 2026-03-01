@@ -5,11 +5,12 @@
  * SSE stream:   GET /events
  * Commands:     POST /session/:folder, /prompt/:folder, /abort/:folder, /exit/:folder
  * Queries:      GET /folders
+ * Management:   POST /folders (create)
  * Push:         POST /push/subscribe, /push/unsubscribe
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -342,12 +343,6 @@ function wireProcess(session: Session): void {
     try {
       const event = JSON.parse(trimmed);
       session.lastOutputTime = Date.now();
-      // Diagnostic: log assistant events to catch dupe source (gdn-hehutu)
-      if (event.type === "assistant") {
-        const msg = event.message as Record<string, unknown> | undefined;
-        const mid = (msg?.id as string) || "NO_ID";
-        console.error(`[BRIDGE] assistant event id=${mid} hasMessage=${!!msg}`);
-      }
       if (isUserTextEcho(event)) return;
       handleCCEvent(session, event);
     } catch {
@@ -1198,6 +1193,46 @@ const server = createServer((req, res) => {
     const folders = await scanFolders(buildActiveSessionsMap());
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ folders }));
+    return;
+  }
+
+  // POST /folders — create a new project folder
+  if (req.method === "POST" && url.pathname === "/folders") {
+    const CT = { "Content-Type": "application/json" };
+    try {
+      const body = await readBody(req);
+      const parsed = body ? JSON.parse(body) : {};
+      let clean: string;
+      if (parsed.name && typeof parsed.name === "string") {
+        clean = parsed.name.trim().toLowerCase();
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(clean) || clean.length > 64) {
+          res.writeHead(400, CT);
+          res.end(JSON.stringify({ error: "Name must be alphanumeric + hyphens, start with a letter or digit, max 64 chars" }));
+          return;
+        }
+      } else {
+        clean = await generateFolderName(SCAN_ROOT);
+      }
+      const folderPath = join(SCAN_ROOT, clean);
+      if (!validateFolderPath(folderPath, SCAN_ROOT)) {
+        res.writeHead(400, CT);
+        res.end(JSON.stringify({ error: "Invalid folder path" }));
+        return;
+      }
+      if (existsSync(folderPath)) {
+        res.writeHead(409, CT);
+        res.end(JSON.stringify({ error: "Folder already exists" }));
+        return;
+      }
+      mkdirSync(folderPath, { recursive: true });
+      execSync("git init", { cwd: folderPath, stdio: "ignore" });
+      emit({ type: "folder:create", folder: clean });
+      res.writeHead(201, CT);
+      res.end(JSON.stringify({ name: clean, path: folderPath }));
+    } catch (e: any) {
+      res.writeHead(500, CT);
+      res.end(JSON.stringify({ error: e.message || "Failed to create folder" }));
+    }
     return;
   }
 

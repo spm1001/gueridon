@@ -180,12 +180,13 @@ describe("renderSwitcher", () => {
     };
   }
 
+  const now = new Date().toISOString();
   const baseState = {
     session: { id: "sess-1" },
     switcher: {
       sessions: [
-        { project: "alpha", id: "/alpha", status: "now", context_pct: 40, humanSessionCount: 1 },
-        { project: "beta", id: "/beta", status: "previous", context_pct: 80, humanSessionCount: 2, sessions: [
+        { project: "alpha", id: "/alpha", status: "now", backendState: "active", context_pct: 40, humanSessionCount: 1, updated: now },
+        { project: "beta", id: "/beta", status: "previous", backendState: "closed", context_pct: 80, humanSessionCount: 2, updated: now, sessions: [
           { id: "s1-full-uuid", humanInteraction: true, contextPct: 80, model: "claude-sonnet-4-5-20250514" },
           { id: "s2-full-uuid", humanInteraction: true, contextPct: 20, model: "claude-opus-4-6", closed: true },
         ] },
@@ -244,5 +245,133 @@ describe("renderSwitcher", () => {
     const items = els.list.querySelectorAll(".switcher-item");
     expect(items.length).toBe(1);
     expect(items[0].querySelector(".switcher-project")!.textContent).toBe("alpha");
+  });
+
+  it("groups recently-active folders into Recent section", () => {
+    const els = makeSwitcherEls();
+    renderSwitcher(baseState, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "", els, onConnect: vi.fn(), onExpand: vi.fn(),
+    });
+    const sections = els.list.querySelectorAll(".switcher-section");
+    // Both alpha and beta have recent timestamps, so one "Recent" section
+    expect(sections.length).toBe(1);
+    expect(sections[0].textContent).toBe("Recent");
+  });
+
+  it("puts old folders in Previous section", () => {
+    const oldDate = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(); // 4 days ago
+    const stateWithOld = {
+      session: { id: "sess-1" },
+      switcher: {
+        sessions: [
+          { project: "recent-proj", id: "/recent", status: "now", backendState: "active", context_pct: 40, humanSessionCount: 1, updated: now },
+          { project: "old-proj", id: "/old", status: "previous", backendState: "closed", context_pct: 50, humanSessionCount: 3, updated: oldDate },
+        ],
+      },
+    };
+    const els = makeSwitcherEls();
+    renderSwitcher(stateWithOld, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "", els, onConnect: vi.fn(), onExpand: vi.fn(),
+    });
+    const sections = els.list.querySelectorAll(".switcher-section");
+    expect(sections.length).toBe(2);
+    expect(sections[0].textContent).toBe("Recent");
+    expect(sections[1].textContent).toBe("Previous");
+  });
+
+  it("paused folder always appears in Recent regardless of age", () => {
+    const oldDate = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString();
+    const stateWithPaused = {
+      session: { id: "sess-1" },
+      switcher: {
+        sessions: [
+          { project: "paused-proj", id: "/paused", status: "now", backendState: "paused", context_pct: 60, humanSessionCount: 1, updated: oldDate },
+        ],
+      },
+    };
+    const els = makeSwitcherEls();
+    renderSwitcher(stateWithPaused, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "", els, onConnect: vi.fn(), onExpand: vi.fn(),
+    });
+    const sections = els.list.querySelectorAll(".switcher-section");
+    expect(sections.length).toBe(1);
+    expect(sections[0].textContent).toBe("Recent");
+  });
+
+  it("shows create option when filter has no exact match", () => {
+    const els = makeSwitcherEls();
+    const onCreate = vi.fn();
+    renderSwitcher(baseState, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "new-project", els, onConnect: vi.fn(), onExpand: vi.fn(), onCreate,
+    });
+    const create = els.list.querySelector(".switcher-create") as HTMLElement;
+    expect(create).not.toBeNull();
+    expect(create.textContent).toContain("new-project");
+  });
+
+  it("calls onCreate when create row clicked", () => {
+    const els = makeSwitcherEls();
+    const onCreate = vi.fn();
+    renderSwitcher(baseState, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "my-app", els, onConnect: vi.fn(), onExpand: vi.fn(), onCreate,
+    });
+    const create = els.list.querySelector(".switcher-create") as HTMLElement;
+    create.click();
+    expect(onCreate).toHaveBeenCalledWith("my-app");
+  });
+
+  it("hides create when filter exactly matches an existing folder", () => {
+    const els = makeSwitcherEls();
+    renderSwitcher(baseState, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "alpha", els, onConnect: vi.fn(), onExpand: vi.fn(), onCreate: vi.fn(),
+    });
+    expect(els.list.querySelector(".switcher-create")).toBeNull();
+  });
+
+  it("hides create when filter has invalid characters", () => {
+    const els = makeSwitcherEls();
+    renderSwitcher(baseState, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "my project!", els, onConnect: vi.fn(), onExpand: vi.fn(), onCreate: vi.fn(),
+    });
+    expect(els.list.querySelector(".switcher-create")).toBeNull();
+  });
+
+  it("hides create when no onCreate callback provided", () => {
+    const els = makeSwitcherEls();
+    renderSwitcher(baseState, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "new-project", els, onConnect: vi.fn(), onExpand: vi.fn(),
+    });
+    expect(els.list.querySelector(".switcher-create")).toBeNull();
+  });
+
+  it("shows New Project button when no filter and onCreate provided", () => {
+    const els = makeSwitcherEls();
+    const onCreate = vi.fn();
+    renderSwitcher(baseState, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "", els, onConnect: vi.fn(), onExpand: vi.fn(), onCreate,
+    });
+    const create = els.list.querySelector(".switcher-create") as HTMLElement;
+    expect(create).not.toBeNull();
+    expect(create.textContent).toContain("New Project");
+    create.click();
+    expect(onCreate).toHaveBeenCalledWith("");
+  });
+
+  it("hides create when filter starts with hyphen", () => {
+    const els = makeSwitcherEls();
+    renderSwitcher(baseState, {
+      switcherOpen: true, currentFolder: null, expandedFolder: null,
+      filter: "-bad-name", els, onConnect: vi.fn(), onExpand: vi.fn(), onCreate: vi.fn(),
+    });
+    expect(els.list.querySelector(".switcher-create")).toBeNull();
   });
 });

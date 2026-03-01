@@ -69,7 +69,8 @@ export type BridgeEvent =
   | { type: "push:send-fail"; endpoint: string; error: string }
   | { type: "push:expired-cleanup"; count: number }
 
-  // Folder scanning
+  // Folder management
+  | { type: "folder:create"; folder: string }
   | { type: "folders:scan-error"; scanRoot: string; error: string }
 
   // Client error reporting
@@ -129,6 +130,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "push:send-ok": "debug",
   "push:send-fail": "warn",
   "push:expired-cleanup": "info",
+  "folder:create": "info",
   "folders:scan-error": "warn",
   "client:error": "warn",
   "upload:deposited": "info",

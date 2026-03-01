@@ -1524,4 +1524,147 @@ describe("StateBuilder", () => {
       ]);
     });
   });
+
+  // ==========================================================================
+  // Inner API call duplication (gdn-jogote)
+  // ==========================================================================
+  describe("inner API call duplication (gdn-jogote)", () => {
+    it("does not duplicate text+tools from first assistant into inner API call messages", () => {
+      // Reproduces the exact CC event sequence when an Agent tool spawns inner API calls.
+      // CC only emits message_start for the FIRST API call; subsequent calls reuse
+      // block indices from 0. The bug: stale currentText/currentToolCalls from the
+      // first assistant leak into subsequent assistant events pushed before the
+      // mini-reset in onContentBlockStart(0) fires.
+      const sb = new StateBuilder("sess-dupe", "test-project");
+      sb.handleEvent(systemInit());
+
+      // --- First API call: text + tool_use ---
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Four steps."));
+      sb.handleEvent(toolBlockStart(1, "Agent", "toolu_agent_1"));
+      sb.handleEvent(inputJsonDelta(1, '{"prompt":"explore"}'));
+
+      // CC sends the assistant event BEFORE content_block_stop on 2nd+ turns
+      sb.handleEvent(assistantMessage("msg-A", [
+        { type: "text", text: "Four steps." },
+        { type: "tool_use", id: "toolu_agent_1", name: "Agent", input: { prompt: "explore" } },
+      ]));
+
+      // content_block_stop arrives after assistant — patches the committed message
+      sb.handleEvent(blockStop(0)); // text
+      sb.handleEvent(blockStop(1)); // tool_use
+
+      // Tool result
+      sb.handleEvent(toolResult("toolu_agent_1", "Agent result here"));
+
+      // --- Second API call (inner): tool_use only, no message_start ---
+      // The assistant event arrives BEFORE content_block_start(0) of the new call
+      sb.handleEvent(assistantMessage("msg-B", [
+        { type: "tool_use", id: "toolu_read_1", name: "Read", input: { file_path: "/foo" } },
+      ]));
+
+      // Mini-reset fires here (too late if bug is present)
+      sb.handleEvent(toolBlockStart(0, "Read", "toolu_read_1"));
+      sb.handleEvent(inputJsonDelta(0, '{"file_path":"/foo"}'));
+      sb.handleEvent(blockStop(0));
+
+      sb.handleEvent(toolResult("toolu_read_1", "file contents"));
+
+      // --- Third API call (inner): another tool ---
+      sb.handleEvent(assistantMessage("msg-C", [
+        { type: "tool_use", id: "toolu_bash_1", name: "Bash", input: { command: "ls" } },
+      ]));
+
+      sb.handleEvent(toolBlockStart(0, "Bash", "toolu_bash_1"));
+      sb.handleEvent(inputJsonDelta(0, '{"command":"ls"}'));
+      sb.handleEvent(blockStop(0));
+
+      sb.handleEvent(toolResult("toolu_bash_1", "output"));
+
+      // --- Final API call: text response ---
+      sb.handleEvent(assistantMessage("msg-D", [
+        { type: "text", text: "Done exploring." },
+      ]));
+
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Done exploring."));
+      sb.handleEvent(blockStop(0));
+
+      sb.handleEvent(resultEvent());
+
+      const state = sb.getState();
+      const assistantMsgs = state.messages.filter(m => m.role === "assistant");
+
+      // Should be exactly 4 assistant messages, each with unique content
+      expect(assistantMsgs.length).toBe(4);
+      expect(assistantMsgs[0].content).toBe("Four steps.");
+      expect(assistantMsgs[0].tool_calls?.length).toBe(1);
+      expect(assistantMsgs[0].tool_calls?.[0].name).toBe("Agent");
+
+      // Inner API calls should NOT have "Four steps." text
+      expect(assistantMsgs[1].content).toBeNull();
+      expect(assistantMsgs[1].tool_calls?.[0].name).toBe("Read");
+
+      expect(assistantMsgs[2].content).toBeNull();
+      expect(assistantMsgs[2].tool_calls?.[0].name).toBe("Bash");
+
+      expect(assistantMsgs[3].content).toBe("Done exploring.");
+      expect(assistantMsgs[3].tool_calls).toBeUndefined();
+    });
+
+    it("replay and live produce identical message counts for inner API calls", () => {
+      // Same event sequence, once live and once via JSONL replay.
+      // Both should produce the same number of messages.
+      const events = [
+        systemInit(),
+        messageStart(),
+        textBlockStart(0),
+        textDelta(0, "Hello."),
+        toolBlockStart(1, "Agent", "toolu_a1"),
+        inputJsonDelta(1, '{"prompt":"go"}'),
+        assistantMessage("msg-1", [
+          { type: "text", text: "Hello." },
+          { type: "tool_use", id: "toolu_a1", name: "Agent", input: { prompt: "go" } },
+        ]),
+        blockStop(0),
+        blockStop(1),
+        toolResult("toolu_a1", "done"),
+        assistantMessage("msg-2", [
+          { type: "tool_use", id: "toolu_r1", name: "Read", input: { file_path: "/x" } },
+        ]),
+        toolBlockStart(0, "Read", "toolu_r1"),
+        inputJsonDelta(0, '{"file_path":"/x"}'),
+        blockStop(0),
+        toolResult("toolu_r1", "content"),
+        assistantMessage("msg-3", [
+          { type: "text", text: "All done." },
+        ]),
+        textBlockStart(0),
+        textDelta(0, "All done."),
+        blockStop(0),
+        resultEvent(),
+      ];
+
+      // Live path
+      const sbLive = new StateBuilder("sess-live", "test");
+      for (const e of events) sbLive.handleEvent(e);
+
+      // Replay path — only assistant, user, result, system events (no stream_events)
+      const replayEvents = events
+        .filter(e => ["assistant", "user", "result", "system"].includes(e.type as string))
+        .map(e => JSON.stringify({ event: e }));
+      const sbReplay = new StateBuilder("sess-replay", "test");
+      sbReplay.replayFromJSONL(replayEvents);
+
+      const liveMsgs = sbLive.getState().messages;
+      const replayMsgs = sbReplay.getState().messages;
+
+      expect(liveMsgs.length).toBe(replayMsgs.length);
+      // Both should have same assistant message count
+      const liveAssistant = liveMsgs.filter(m => m.role === "assistant");
+      const replayAssistant = replayMsgs.filter(m => m.role === "assistant");
+      expect(liveAssistant.length).toBe(replayAssistant.length);
+    });
+  });
 });

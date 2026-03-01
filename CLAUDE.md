@@ -83,6 +83,7 @@ The bridge is split across several modules in `server/`:
 | GET | `/` | Serve index.html |
 | GET | `/events` | SSE stream (hello, folders, state, delta, ping) |
 | GET | `/folders` | List available project folders |
+| POST | `/folders` | Create new project folder (git-initialised, fun-name if unnamed) |
 | POST | `/session/:folder` | Connect to a folder's CC session |
 | POST | `/prompt/:folder` | Send prompt (or queue if busy) |
 | POST | `/abort/:folder` | SIGTERM the CC process |
