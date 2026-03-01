@@ -203,6 +203,38 @@ describe("links", () => {
 });
 
 // ============================================================
+// Thinking blocks with code
+// ============================================================
+describe("thinking blocks with code", () => {
+  it("renders thinking chip with code preserved in detail", () => {
+    const container = document.createElement("div");
+    renderMessages(
+      container,
+      [{ role: "assistant", content: "Moved the map.", thinking: FIX.MD_THINKING_WITH_CODE }],
+      {
+        liveState: null,
+        isStreaming: false,
+        pendingAskUser: null,
+        stagedDeposits: [],
+        onAskAnswer: () => {},
+        onAskDismiss: () => {},
+      },
+    );
+    // Thinking chip should exist
+    const chip = container.querySelector(".chip.thinking-done");
+    expect(chip).toBeTruthy();
+    // Detail should contain code content (escaped, not parsed)
+    const detail = chip!.querySelector(".c-detail");
+    expect(detail).toBeTruthy();
+    expect(detail!.textContent).toContain("STATIC_FILES");
+    // Assistant content should be rendered via marked
+    const assistant = container.querySelector(".msg-assistant");
+    expect(assistant).toBeTruthy();
+    expect(assistant!.textContent).toContain("Moved the map.");
+  });
+});
+
+// ============================================================
 // renderUserBubble with inline markdown
 // ============================================================
 describe("renderUserBubble", () => {

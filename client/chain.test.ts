@@ -37,7 +37,7 @@ const Gdn = (window as any).Gdn;
 const EXPECTED_EXPORTS: Record<string, string[]> = {
   "render-utils": [
     "esc", "trimText", "trimToolOutput", "truncateThinking",
-    "buildDepositNoteClient", "timeAgo", "shortModel",
+    "buildDepositNoteClient", "timeAgo", "shortModel", "THINKING_TRUNCATE",
   ],
   "render-chips": [
     "renderChip", "renderThinkingChip", "renderLocalCommand", "attachCopyButton",
@@ -50,7 +50,7 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
   ],
   "render-overlays": [
     "showAskUserOverlay", "hideAskUserOverlay", "getSlashCommands",
-    "renderSlashList", "openSlashSheet", "renderStagedDeposits",
+    "renderSlashList", "openSlashSheet", "showStagedError", "renderStagedDeposits",
   ],
 };
 
@@ -65,11 +65,19 @@ describe("client module chain", () => {
       for (const fn of fns) {
         it(`exports ${fn}`, () => {
           expect(Gdn[fn]).toBeDefined();
-          expect(typeof Gdn[fn]).toBe("function");
         });
       }
     });
   }
+
+  it("Gdn has no unexpected exports beyond EXPECTED_EXPORTS", () => {
+    const allExpected = new Set(
+      Object.values(EXPECTED_EXPORTS).flat(),
+    );
+    const actual = Object.keys(Gdn);
+    const unexpected = actual.filter((k) => !allExpected.has(k));
+    expect(unexpected).toEqual([]);
+  });
 
   it("renderMessages produces DOM from a simple assistant message", () => {
     const container = document.createElement("div");

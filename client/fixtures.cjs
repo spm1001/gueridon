@@ -300,6 +300,8 @@
 
   const MD_CONSECUTIVE_CODE_BLOCKS = "Before:\n\n```javascript\nconst x = 1;\n```\n\nAfter:\n\n```javascript\nconst x = 2;\n```\n\nThe diff is minimal.";
 
+  const MD_THINKING_WITH_CODE = "The user wants to move STATIC_FILES. Let me check the current structure:\n\n```\nbridge.ts:1096  const STATIC_FILES = {\n  \"/\": { file: \"index.html\" },\n  \"/style.css\": { file: \"style.css\" },\n};\n```\n\nThis is a pure config map — no IO, no side effects. It belongs in bridge-logic.ts alongside the other constants. The test can then import it directly rather than spawning a subprocess.";
+
   // --- Exports ---
 
   var mod = {
@@ -361,6 +363,7 @@
     MD_HEADING_WITH_CODE,
     MD_LINK_AND_IMAGE,
     MD_CONSECUTIVE_CODE_BLOCKS,
+    MD_THINKING_WITH_CODE,
 
     // Composite scenes
     SCENE_CONVERSATION,

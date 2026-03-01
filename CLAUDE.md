@@ -191,7 +191,7 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 | `render-chips.cjs` | `renderChip`, `renderThinkingChip`, `renderLocalCommand`, `attachCopyButton` |
 | `render-messages.cjs` | `renderUserBubble`, `addCopyButtons`, `renderMessages` |
 | `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` |
-| `render-overlays.cjs` | `showAskUserOverlay`, `hideAskUserOverlay`, `getSlashCommands`, `renderSlashList`, `openSlashSheet`, `renderStagedDeposits` |
+| `render-overlays.cjs` | `showAskUserOverlay`, `hideAskUserOverlay`, `getSlashCommands`, `renderSlashList`, `openSlashSheet`, `showStagedError`, `renderStagedDeposits` |
 
 ### Layout model — body-scroll
 
