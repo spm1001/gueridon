@@ -84,14 +84,14 @@ body {
   max-width: 92%;
   font-size: 0.93rem;
   padding: 2px 0;
-  color: var(--accent);
+  color: var(--text);
   line-height: 1.5;
 }
 
 /* Markdown in assistant messages */
 .msg-assistant p { margin-bottom: 8px; }
 .msg-assistant p:last-child { margin-bottom: 0; }
-.msg-assistant strong { font-weight: 600; }
+.msg-assistant strong { font-weight: 600; color: var(--accent); }
 .msg-assistant em { font-style: italic; }
 .msg-assistant del { text-decoration: line-through; color: var(--text-dim); }
 .msg-assistant a { color: var(--blue); text-decoration: underline; }
@@ -101,9 +101,9 @@ body {
   font-weight: 600;
   margin: 12px 0 4px;
 }
-.msg-assistant h1 { font-size: 1.25rem; }
-.msg-assistant h2 { font-size: 1.12rem; }
-.msg-assistant h3 { font-size: 1.0rem; }
+.msg-assistant h1 { font-size: 1.25rem; color: var(--accent); }
+.msg-assistant h2 { font-size: 1.12rem; color: var(--accent); }
+.msg-assistant h3 { font-size: 1.0rem; color: var(--accent); }
 .msg-assistant h4, .msg-assistant h5, .msg-assistant h6 { font-size: 0.93rem; color: var(--text-mid); }
 
 .msg-assistant .task-list { list-style: none; margin-left: 4px; }
@@ -185,7 +185,7 @@ body {
 }
 
 .msg-assistant blockquote {
-  border-left: 3px solid var(--text-dim);
+  border-left: 3px solid var(--accent);
   margin: 8px 0;
   padding: 2px 12px;
   color: var(--text-mid);

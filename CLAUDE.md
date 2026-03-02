@@ -29,11 +29,16 @@ Runs on **tube** (Debian Linux, Tailscale). Single systemd service.
 - **`/opt/gueridon`** — production checkout. The systemd service runs from here.
 - **`~/Repos/gueridon`** — development. Edit, test, commit, push here.
 
-**Deploy workflow:**
+**Deploy workflow (all three steps, in order):**
 ```bash
-# After pushing from ~/Repos/gueridon:
+# 1. Commit and push from dev
+git add <files> && git commit -m "..." && git push
+
+# 2. Pull into production and restart
 cd /opt/gueridon && git pull && npm install && sudo systemctl restart gueridon
 ```
+
+Production serves from `/opt/gueridon`, not `~/Repos/gueridon`. Changes that aren't committed and pushed won't appear in production — `git pull` in `/opt` has nothing to pull.
 
 **Service management:**
 ```bash
