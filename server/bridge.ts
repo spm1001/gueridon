@@ -1025,12 +1025,33 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
     const { depositFolder, manifest } = await depositFiles(req, folderPath);
 
     if (!stage) {
-      // Auto-inject deposit note as prompt (original behaviour, used by share-sheet)
+      // Auto-inject deposit note as prompt (share-sheet flow)
       const note = buildDepositNote(depositFolder, manifest);
-      deliverPrompt(session, { text: note });
 
-      // Broadcast state so the synthetic deposit message renders immediately
-      // as a system chip. Without this, clients only see it at turn end.
+      if (session.turnInProgress) {
+        // Mid-turn: track in state builder and write directly to stdin
+        session.stateBuilder.handleEvent({
+          type: "user",
+          message: { role: "user", content: note },
+        });
+        if (session.process?.stdin?.writable) {
+          const envelope = JSON.stringify({
+            type: "user",
+            message: { role: "user", content: note },
+          });
+          try {
+            session.process.stdin.write(envelope + "\n");
+            session.lastPromptAt = Date.now();
+            emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id });
+          } catch (err) {
+            emit({ type: "process:stdin-error", folder: session.folderName, sessionId: session.id, error: errorDetail(err) });
+          }
+        }
+      } else {
+        deliverPrompt(session, { text: note });
+      }
+
+      // Broadcast state so the deposit message renders immediately
       broadcastToSession(session, "state", {
         ...session.stateBuilder.getState(),
       });
