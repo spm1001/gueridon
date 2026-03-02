@@ -33,7 +33,6 @@ import {
   getActiveSessions,
   resolveSessionForFolder,
   isHandoffStale,
-  coalescePrompts,
   classifyRestart,
   buildResumeInjection,
   extractLastToolCall,
@@ -112,7 +111,6 @@ interface Session {
   turnInProgress: boolean;
   hadContentThisTurn: boolean;
   lastOutputTime: number | null;
-  promptQueue: { text?: string; content?: unknown[] }[];
   lastPromptAt: number | null;
   pendingDeltas: Map<string, PendingDelta>;
   flushTimer: ReturnType<typeof setTimeout> | null;
@@ -368,7 +366,6 @@ function wireProcess(session: Session): void {
     session.process = null;
     session.spawnedAt = null;
     session.turnInProgress = false;
-    session.promptQueue = [];
     flushPendingDeltas(session);
 
     // Only synthesise result if CC died mid-turn (no result event was emitted).
@@ -539,15 +536,6 @@ async function onTurnComplete(session: Session): Promise<void> {
   }
   session.pushedAskThisTurn = false;
 
-  // Flush prompt queue — coalesce all queued prompts into a single delivery.
-  // One turn instead of N serial roundtrips. Individual messages were already
-  // added to the state builder at queue time, so skip the state message.
-  if (session.promptQueue.length > 0) {
-    const batch = session.promptQueue.splice(0);
-    const coalesced = coalescePrompts(batch);
-    if (coalesced) deliverPrompt(session, coalesced, { skipStateMessage: true });
-  }
-
   maybeStartGraceTimer(session);
 }
 
@@ -556,7 +544,6 @@ async function onTurnComplete(session: Session): Promise<void> {
 function deliverPrompt(
   session: Session,
   msg: { text?: string; content?: unknown[] },
-  opts?: { skipStateMessage?: boolean },
 ): void {
   if (!session.process || session.process.exitCode !== null) {
     spawnCC(session);
@@ -569,9 +556,8 @@ function deliverPrompt(
   }
   session.lastPromptAt = Date.now();
 
-  // Add user message to state immediately (skip for coalesced deliveries
-  // where the individual messages were already added at queue time)
-  if (msg.text && !opts?.skipStateMessage) {
+  // Add user message to state immediately
+  if (msg.text) {
     session.stateBuilder.handleEvent({
       type: "user",
       message: { role: "user", content: msg.text },
@@ -688,7 +674,6 @@ async function createSession(folderPath: string): Promise<Session> {
     turnInProgress: false,
     hadContentThisTurn: false,
     lastOutputTime: null,
-    promptQueue: [],
     lastPromptAt: null,
     pendingDeltas: new Map(),
     flushTimer: null,
@@ -812,7 +797,6 @@ async function createSessionWithId(
     turnInProgress: false,
     hadContentThisTurn: false,
     lastOutputTime: null,
-    promptQueue: [],
     lastPromptAt: null,
     pendingDeltas: new Map(),
     flushTimer: null,
@@ -949,8 +933,7 @@ async function handlePrompt(
   }
 
   if (session.turnInProgress) {
-    // Queue the prompt and add to state so the user message appears in snapshots
-    session.promptQueue.push(parsed);
+    // Track in state builder so the user message appears in snapshots
     if (parsed.text) {
       session.stateBuilder.handleEvent({
         type: "user",
@@ -958,25 +941,25 @@ async function handlePrompt(
       });
     }
 
-    // Outrider: on the first queued message, write a nudge to CC's stdin.
-    // CC buffers stdin mid-turn and processes it after the current result.
-    // The hypothesis: CC may see this during tool execution pauses and wrap
-    // up sooner. If not, it just becomes the next turn and gets consumed
-    // before the coalesced delivery. Experimental — may remove.
-    if (session.promptQueue.length === 1 && session.process?.stdin?.writable) {
-      const nudge = JSON.stringify({
+    // Deliver directly to CC stdin — CC buffers mid-turn and processes
+    // each message as a new turn after the current one completes.
+    if (session.process?.stdin?.writable) {
+      const ccContent = parsed.content || parsed.text || "";
+      const envelope = JSON.stringify({
         type: "user",
-        message: { role: "user", content: "The user has sent a follow-up message. Finish your current work at the next natural stopping point, then stop so you can read it." },
+        message: { role: "user", content: ccContent },
       });
       try {
-        session.process.stdin.write(nudge + "\n");
-        emit({ type: "prompt:outrider", folder: session.folderName, sessionId: session.id });
-      } catch { /* stdin may be closed */ }
+        session.process.stdin.write(envelope + "\n");
+        session.lastPromptAt = Date.now();
+        emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id });
+      } catch (err) {
+        emit({ type: "process:stdin-error", folder: session.folderName, sessionId: session.id, error: errorDetail(err) });
+      }
     }
 
-    emit({ type: "prompt:queue", folder: session.folderName, sessionId: session.id, depth: session.promptQueue.length });
     res.writeHead(202, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ queued: true, position: session.promptQueue.length }));
+    res.end(JSON.stringify({ delivered: true }));
     return;
   }
 
@@ -1244,7 +1227,6 @@ const server = createServer((req, res) => {
       contextPct: s.contextPct,
       turnInProgress: s.turnInProgress,
       clients: s.clients.size,
-      queueDepth: s.promptQueue.length,
       stderrBuffer: s.stderrBuffer,
     }));
     const mem = process.memoryUsage();

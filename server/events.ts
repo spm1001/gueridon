@@ -34,8 +34,6 @@ export type BridgeEvent =
 
   // Prompt delivery
   | { type: "prompt:deliver"; folder: string; sessionId: string }
-  | { type: "prompt:queue"; folder: string; sessionId: string; depth: number }
-  | { type: "prompt:outrider"; folder: string; sessionId: string }
 
   // Process management
   | { type: "init:timeout"; folder: string; sessionId: string; pid: number }
@@ -110,8 +108,6 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "grace:expire": "info",
   "grace:skip": "debug",
   "prompt:deliver": "info",
-  "prompt:queue": "debug",
-  "prompt:outrider": "debug",
   "init:timeout": "error",
   "process:kill": "warn",
   "process:stdin-error": "error",

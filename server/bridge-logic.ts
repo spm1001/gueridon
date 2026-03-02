@@ -663,38 +663,6 @@ export interface PendingDelta {
 
 // -- Prompt coalescing --
 
-export interface QueuedPrompt {
-  text?: string;
-  content?: unknown[];
-}
-
-/**
- * Coalesce multiple queued prompts into a single delivery.
- * Returns null if the queue is empty.
- *
- * Single message: passed through unchanged.
- * Multiple messages: text is concatenated with numbered markers so CC can
- * distinguish them; content arrays from all prompts are merged in order.
- */
-export function coalescePrompts(queue: QueuedPrompt[]): QueuedPrompt | null {
-  if (queue.length === 0) return null;
-  if (queue.length === 1) return queue[0];
-
-  // Number and concatenate text from each prompt
-  const texts = queue.map((p) => p.text || "");
-  const numbered = texts.map((t, i) => `[${i + 1}/${texts.length}] ${t}`);
-
-  // Merge content arrays from all prompts (preserves file references, tool results)
-  const allContent: unknown[] = [];
-  for (const p of queue) {
-    if (p.content) allContent.push(...p.content);
-  }
-
-  const result: QueuedPrompt = { text: numbered.join("\n\n") };
-  if (allContent.length > 0) result.content = allContent;
-  return result;
-}
-
 /**
  * Build a merged content_block_delta event from accumulated delta text.
  * The adapter sees one delta with a larger chunk instead of many tiny ones.

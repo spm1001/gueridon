@@ -913,12 +913,25 @@ sendBtn.addEventListener('click', () => {
       ssePostAbort(sseCurrentFolder);
     }
   } else if (hasContent) {
+    // Intercept typed slash commands — route through the same handler as the menu
+    const userText = ta.value.trim();
+    if (!hasDeposits && /^\/\w+$/.test(userText)) {
+      const name = userText.slice(1);
+      const locals = getSlashCommands({ ccCommands: liveState.slashCommands });
+      const cmd = locals.find(c => c.name === name);
+      if (cmd) {
+        ta.value = '';
+        refreshSendButton();
+        handleSlashSelect(cmd);
+        return;
+      }
+    }
+
     // Compose prompt: deposit notes first, then user text
     const parts = [];
     stagedDeposits.forEach(dep => {
       parts.push(buildDepositNoteClient(dep.folder, dep.manifest));
     });
-    const userText = ta.value.trim();
     if (userText) parts.push(userText);
     const text = parts.join('\n\n');
 

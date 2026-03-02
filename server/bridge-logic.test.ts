@@ -15,7 +15,6 @@ import {
   buildMergedDelta,
   isUserTextEcho,
   extractLocalCommandOutput,
-  coalescePrompts,
   classifyRestart,
   buildResumeInjection,
   extractLastToolCall,
@@ -1326,102 +1325,6 @@ describe("extractLocalCommandOutput", () => {
 
     const result = extractLocalCommandOutput(content);
     expect(result).not.toBeNull();
-  });
-});
-
-describe("coalescePrompts", () => {
-  it("returns null for empty queue", () => {
-    expect(coalescePrompts([])).toBeNull();
-  });
-
-  it("passes single message through unchanged", () => {
-    const msg = { text: "hello" };
-    expect(coalescePrompts([msg])).toBe(msg);
-  });
-
-  it("concatenates two messages with numbered markers", () => {
-    const result = coalescePrompts([
-      { text: "first" },
-      { text: "second" },
-    ]);
-    expect(result).toEqual({ text: "[1/2] first\n\n[2/2] second" });
-  });
-
-  it("concatenates three messages with correct numbering", () => {
-    const result = coalescePrompts([
-      { text: "alpha" },
-      { text: "beta" },
-      { text: "gamma" },
-    ]);
-    expect(result!.text).toBe("[1/3] alpha\n\n[2/3] beta\n\n[3/3] gamma");
-  });
-
-  it("handles empty text in some prompts", () => {
-    const result = coalescePrompts([
-      { text: "real message" },
-      { text: "" },
-      { text: "another" },
-    ]);
-    expect(result!.text).toBe("[1/3] real message\n\n[2/3] \n\n[3/3] another");
-  });
-
-  it("handles prompts with no text field", () => {
-    const result = coalescePrompts([
-      { text: "has text" },
-      { content: [{ type: "text", text: "content array" }] },
-    ]);
-    expect(result!.text).toBe("[1/2] has text\n\n[2/2] ");
-    expect(result!.content).toEqual([{ type: "text", text: "content array" }]);
-  });
-
-  it("preserves content arrays from all merged prompts", () => {
-    const fileRef1 = { type: "image", source: { type: "base64", data: "abc" } };
-    const fileRef2 = { type: "image", source: { type: "base64", data: "def" } };
-    const result = coalescePrompts([
-      { text: "first", content: [fileRef1] },
-      { text: "second", content: [fileRef2] },
-    ]);
-    expect(result!.text).toBe("[1/2] first\n\n[2/2] second");
-    expect(result!.content).toEqual([fileRef1, fileRef2]);
-  });
-
-  it("merges content arrays when only some prompts have content", () => {
-    const fileRef = { type: "image", source: { type: "base64", data: "abc" } };
-    const result = coalescePrompts([
-      { text: "just text" },
-      { text: "with file", content: [fileRef] },
-      { text: "more text" },
-    ]);
-    expect(result!.text).toContain("[1/3]");
-    expect(result!.content).toEqual([fileRef]);
-  });
-
-  it("omits content key when no prompts have content arrays", () => {
-    const result = coalescePrompts([
-      { text: "first" },
-      { text: "second" },
-    ]);
-    expect(result).toEqual({ text: "[1/2] first\n\n[2/2] second" });
-    expect(result).not.toHaveProperty("content");
-  });
-
-  it("preserves content array for single prompt passthrough", () => {
-    const fileRef = { type: "tool_result", content: "result data" };
-    const msg = { text: "upload", content: [fileRef] };
-    const result = coalescePrompts([msg]);
-    expect(result).toBe(msg); // identity — same object
-    expect(result!.content).toEqual([fileRef]);
-  });
-
-  it("handles content-only prompts (no text at all)", () => {
-    const fileRef1 = { type: "image", data: "img1" };
-    const fileRef2 = { type: "image", data: "img2" };
-    const result = coalescePrompts([
-      { content: [fileRef1] },
-      { content: [fileRef2] },
-    ]);
-    expect(result!.content).toEqual([fileRef1, fileRef2]);
-    expect(result!.text).toBe("[1/2] \n\n[2/2] ");
   });
 });
 
