@@ -374,11 +374,16 @@ function wireProcess(session: Session): void {
     // Only synthesise result if CC died mid-turn (no result event was emitted).
     // Clean exit after a completed turn already broadcast state via onTurnComplete.
     if (wasMidTurn) {
+      const isError = !!(signal || (code !== null && code !== 0));
       session.stateBuilder.handleEvent({
         type: "result",
-        subtype: signal ? "aborted" : "success",
-        is_error: !!signal,
-        result: signal ? `Process killed (${signal})` : "",
+        subtype: isError ? "aborted" : "success",
+        is_error: isError,
+        result: signal
+          ? `Process killed (${signal})`
+          : code !== 0
+            ? `Process exited with code ${code}`
+            : "",
       });
     }
     broadcastToSession(session, "state", {

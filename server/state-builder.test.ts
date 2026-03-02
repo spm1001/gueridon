@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { createRequire } from "node:module";
 import { StateBuilder } from "./state-builder.js";
+import { buildDepositNote, type UploadManifest } from "./upload.js";
+const require = createRequire(import.meta.url);
+const { buildDepositNoteClient } = require("../client/render-utils.cjs" as string);
 
 // -- Canned event factories --
 
@@ -952,6 +956,73 @@ describe("StateBuilder", () => {
       expect(msg.synthetic).toBe(true);
       expect(msg.content).toBe("File deposited: report.pdf (2.3 MB)");
     });
+
+    // -- Deposit note parity triangle (gdn-bujoba) --
+    // These tests use the real buildDepositNote / buildDepositNoteClient output
+    // to verify StateBuilder's detection stays coupled to the actual template.
+
+    it("real buildDepositNote output is detected as synthetic (gdn-bujoba)", () => {
+      const manifest: UploadManifest = {
+        type: "upload", title: "photo", id: "abc123", fetched_at: new Date().toISOString(), file_count: 1,
+        files: [
+          { original_name: "photo.jpg", deposited_as: "photo.jpg", mime_type: "image/jpeg", size_bytes: 54321 },
+        ],
+        warnings: [],
+      };
+      const note = buildDepositNote("mise/upload--photo--abc123", manifest);
+
+      const sb = makeBuilder();
+      sb.handleEvent({
+        type: "user",
+        message: { role: "user", content: note },
+      });
+
+      const msg = sb.getState().messages[0];
+      expect(msg.synthetic).toBe(true);
+      expect(msg.content).not.toContain("[guéridon:");
+    });
+
+    it("real buildDepositNoteClient + user text is NOT synthetic (gdn-bujoba)", () => {
+      // Staged upload: client composes deposit note + user's typed text.
+      // StateBuilder must detect the user text and keep as real message.
+      const files = [
+        { original_name: "photo.jpg", deposited_as: "photo.jpg", mime_type: "image/jpeg", size_bytes: 54321 },
+      ];
+      const note = buildDepositNoteClient("mise/upload--photo--abc123", { files, warnings: [] });
+      const combined = note + "\n\nWhat do you see in this photo?";
+
+      const sb = makeBuilder();
+      sb.handleEvent({
+        type: "user",
+        message: { role: "user", content: combined },
+      });
+
+      const msg = sb.getState().messages[0];
+      expect(msg.synthetic).toBeUndefined();
+      // Full content preserved (including deposit block + user text)
+      expect(msg.content).toContain("What do you see in this photo?");
+      expect(msg.content).toContain("[guéridon:upload]");
+    });
+
+    it("real buildDepositNote with warnings is detected as synthetic (gdn-bujoba)", () => {
+      const manifest: UploadManifest = {
+        type: "upload", title: "data", id: "xyz789", fetched_at: new Date().toISOString(), file_count: 1,
+        files: [
+          { original_name: "data.csv", deposited_as: "data.csv", mime_type: "text/csv", size_bytes: 1024 },
+        ],
+        warnings: ["MIME type corrected: application/octet-stream → text/csv"],
+      };
+      const note = buildDepositNote("mise/upload--data--xyz789", manifest);
+
+      const sb = makeBuilder();
+      sb.handleEvent({
+        type: "user",
+        message: { role: "user", content: note },
+      });
+
+      const msg = sb.getState().messages[0];
+      expect(msg.synthetic).toBe(true);
+    });
   });
 
   describe("live event ordering: assistant before content_block_stop (bb-lonego)", () => {
@@ -1522,6 +1593,75 @@ describe("StateBuilder", () => {
       expect(state.messages).toEqual([
         { role: "assistant", content: "API error 400: Could not process image" },
       ]);
+    });
+  });
+
+  // ==========================================================================
+  // Process exit error classification (gdn-hocava)
+  // ==========================================================================
+  describe("process exit error classification (gdn-hocava)", () => {
+    it("non-signal non-zero exit surfaces error message", () => {
+      // When CC exits with code 1 (no signal), the bridge synthesises a result
+      // event with is_error: true. handleResult should push an error message
+      // and return an api_error delta so the UI shows it.
+      const sb = new StateBuilder("sess-exit", "test-project");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Working on it."));
+      sb.handleEvent(blockStop(0));
+
+      // Simulate process exit with code 1 (no signal)
+      const delta = sb.handleEvent({
+        type: "result",
+        subtype: "aborted",
+        is_error: true,
+        result: "Process exited with code 1",
+      });
+
+      expect(delta).toEqual([{ type: "api_error", error: "Process exited with code 1" }]);
+      const state = sb.getState();
+      expect(state.status).toBe("idle");
+      // Error message appears after the assistant's text
+      const lastMsg = state.messages[state.messages.length - 1];
+      expect(lastMsg.content).toBe("Process exited with code 1");
+    });
+
+    it("signal exit surfaces error message", () => {
+      const sb = new StateBuilder("sess-signal", "test-project");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      const delta = sb.handleEvent({
+        type: "result",
+        subtype: "aborted",
+        is_error: true,
+        result: "Process killed (SIGTERM)",
+      });
+
+      expect(delta).toEqual([{ type: "api_error", error: "Process killed (SIGTERM)" }]);
+      expect(sb.getState().status).toBe("idle");
+    });
+
+    it("clean exit does not surface error", () => {
+      const sb = new StateBuilder("sess-clean", "test-project");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Done."));
+      sb.handleEvent(blockStop(0));
+
+      const delta = sb.handleEvent({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "",
+      });
+
+      expect(delta).toEqual([{ type: "status", status: "idle" }]);
+      // No error message pushed
+      const msgs = sb.getState().messages;
+      expect(msgs.every(m => m.content !== "")).toBe(true);
     });
   });
 

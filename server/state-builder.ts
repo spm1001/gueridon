@@ -736,6 +736,15 @@ export class StateBuilder {
   private handleResult(event: Record<string, unknown>): SSEDelta {
     this.state.status = "idle";
 
+    // Process exit error — surface as inline error message (like api_error)
+    if (event.is_error && typeof event.result === "string" && event.result) {
+      this.state.messages.push({
+        role: "assistant",
+        content: event.result,
+      });
+      return { type: "api_error", error: event.result };
+    }
+
     // Extract contextWindow from modelUsage
     const modelUsage = event.modelUsage as Record<string, Record<string, unknown>> | undefined;
     if (modelUsage) {
