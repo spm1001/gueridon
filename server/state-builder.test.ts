@@ -942,21 +942,6 @@ describe("StateBuilder", () => {
       expect(sb.getState().messages[0].synthetic).toBeUndefined();
     });
 
-    it("strips [guéridon:upload] prefix for upload deposit notes", () => {
-      const sb = makeBuilder();
-      sb.handleEvent({
-        type: "user",
-        message: {
-          role: "user",
-          content: "[guéridon:upload] File deposited: report.pdf (2.3 MB)",
-        },
-      });
-
-      const msg = sb.getState().messages[0];
-      expect(msg.synthetic).toBe(true);
-      expect(msg.content).toBe("File deposited: report.pdf (2.3 MB)");
-    });
-
     // -- Deposit note parity triangle (gdn-bujoba) --
     // These tests use the real buildDepositNote / buildDepositNoteClient output
     // to verify StateBuilder's detection stays coupled to the actual template.
