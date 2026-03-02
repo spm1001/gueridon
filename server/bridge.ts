@@ -373,6 +373,9 @@ function wireProcess(session: Session): void {
 
     // Only synthesise result if CC died mid-turn (no result event was emitted).
     // Clean exit after a completed turn already broadcast state via onTurnComplete.
+    // Note: handleEvent returns deltas (may include api_error for error exits) but
+    // we don't broadcast them — the state snapshot below carries the error message.
+    // turnInProgress is already false (line above), so stale api_error deltas are safe.
     if (wasMidTurn) {
       const isError = !!(signal || (code !== null && code !== 0));
       session.stateBuilder.handleEvent({
