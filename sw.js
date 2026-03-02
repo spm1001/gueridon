@@ -2,7 +2,7 @@
 // Deep-link via hash fragments (/#folder-name).
 
 const CACHE_NAME = "gueridon-shell-v3";
-const SHELL_URLS = ["/", "/manifest.json", "/icon-192.svg", "/icon-512.svg"];
+const SHELL_URLS = ["/", "/manifest.json", "/icon-192.svg", "/icon-512.svg", "/apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {
   // Precache the app shell so it loads offline
