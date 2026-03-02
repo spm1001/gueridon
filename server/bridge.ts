@@ -125,6 +125,8 @@ interface Session {
   wasInterrupted?: boolean;
   /** Filename from share-sheet upload, used to enrich push notifications. */
   shareContext?: { filename: string };
+  /** Why the process was killed — set before SIGTERM, read in exit handler for user-facing message. */
+  killReason?: string;
 }
 
 // -- State --
@@ -370,6 +372,8 @@ function wireProcess(session: Session): void {
     emit({ type: "session:exit", folder: session.folderName, sessionId: session.id, code, signal });
     if (session.initTimer) { clearTimeout(session.initTimer); session.initTimer = null; }
     const wasMidTurn = session.turnInProgress;
+    const killReason = session.killReason;
+    session.killReason = undefined;
     session.process = null;
     session.spawnedAt = null;
     session.turnInProgress = false;
@@ -386,11 +390,13 @@ function wireProcess(session: Session): void {
         type: "result",
         subtype: isError ? "aborted" : "success",
         is_error: isError,
-        result: signal
-          ? `Process killed (${signal})`
-          : code !== 0
-            ? `Process exited with code ${code}`
-            : "",
+        result: killReason === "abort"
+          ? "Stopped"
+          : signal
+            ? `Process killed (${signal})`
+            : code !== 0
+              ? `Process exited with code ${code}`
+              : "",
       });
     }
     broadcastToSession(session, "state", {
@@ -982,6 +988,7 @@ async function handleAbort(folderPath: string, res: ServerResponse): Promise<voi
     return;
   }
 
+  session.killReason = "abort";
   killWithEscalation(session.process, { folder: session.folderName, reason: "abort" });
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ aborted: true }));

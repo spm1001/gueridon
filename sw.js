@@ -1,7 +1,7 @@
 // Guéridon service worker — push notification handlers + offline app shell cache.
 // Deep-link via hash fragments (/#folder-name).
 
-const CACHE_NAME = "gueridon-shell-v2";
+const CACHE_NAME = "gueridon-shell-v3";
 const SHELL_URLS = ["/", "/manifest.json", "/icon-192.svg", "/icon-512.svg"];
 
 self.addEventListener("install", (event) => {
