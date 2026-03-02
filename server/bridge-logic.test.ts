@@ -19,6 +19,7 @@ import {
   buildResumeInjection,
   extractLastToolCall,
   formatToolCallSummary,
+  shouldSendEvent,
   HANDOFF_STALE_THRESHOLD_MS,
   SHUTDOWN_STALE_MS,
   LOCAL_CMD_TAIL_LINES,
@@ -1712,5 +1713,62 @@ describe("pendingSessions concurrency guard pattern", () => {
     expect(s1.id).toBe("session-folder-a");
     expect(s2.id).toBe("session-folder-b");
     expect(factoryCallCount).toBe(2);
+  });
+});
+
+// --- shouldSendEvent (mid-turn reconnect suppression, gdn-sahuvu) ---
+
+describe("shouldSendEvent", () => {
+  it("sends state events even when suppressed", () => {
+    const result = shouldSendEvent("state", true);
+    expect(result.send).toBe(true);
+    expect(result.clearSuppression).toBe(true);
+  });
+
+  it("suppresses delta events when flag is set", () => {
+    const result = shouldSendEvent("delta", true);
+    expect(result.send).toBe(false);
+    expect(result.clearSuppression).toBe(false);
+  });
+
+  it("sends delta events when not suppressed", () => {
+    const result = shouldSendEvent("delta", false);
+    expect(result.send).toBe(true);
+    expect(result.clearSuppression).toBe(false);
+  });
+
+  it("sends state events when not suppressed (and clears anyway)", () => {
+    const result = shouldSendEvent("state", false);
+    expect(result.send).toBe(true);
+    expect(result.clearSuppression).toBe(true);
+  });
+
+  it("sends non-delta/state events regardless of suppression", () => {
+    expect(shouldSendEvent("folders", true).send).toBe(true);
+    expect(shouldSendEvent("hello", true).send).toBe(true);
+    expect(shouldSendEvent("ping", false).send).toBe(true);
+  });
+
+  it("simulates full reconnect lifecycle", () => {
+    // Client reconnects mid-turn → suppressDeltas = true
+    let suppressed = true;
+
+    // Deltas are suppressed
+    const d1 = shouldSendEvent("delta", suppressed);
+    expect(d1.send).toBe(false);
+
+    // More deltas still suppressed
+    const d2 = shouldSendEvent("delta", suppressed);
+    expect(d2.send).toBe(false);
+
+    // Turn ends → state broadcast clears flag
+    const s1 = shouldSendEvent("state", suppressed);
+    expect(s1.send).toBe(true);
+    expect(s1.clearSuppression).toBe(true);
+    suppressed = false; // caller clears
+
+    // Next turn's deltas flow normally
+    const d3 = shouldSendEvent("delta", suppressed);
+    expect(d3.send).toBe(true);
   });
 });

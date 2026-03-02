@@ -661,7 +661,7 @@ export interface PendingDelta {
   accumulated: string;
 }
 
-// -- Prompt coalescing --
+// -- Delta conflation --
 
 /**
  * Build a merged content_block_delta event from accumulated delta text.
@@ -676,4 +676,29 @@ export function buildMergedDelta(pending: PendingDelta): Record<string, unknown>
       delta: { type: pending.deltaType, [pending.field]: pending.accumulated },
     },
   };
+}
+
+// -- Mid-turn reconnect suppression --
+
+/**
+ * Determine whether a client should receive a given SSE event.
+ *
+ * After mid-turn reconnect, `suppressDeltas` is true — the state snapshot
+ * the client received is authoritative, and streaming deltas would corrupt
+ * it (content deltas carry partial chunks that overwrite the snapshot's
+ * complete text). State events always pass through and clear suppression.
+ *
+ * Returns { send: boolean, clearSuppression: boolean }.
+ */
+export function shouldSendEvent(
+  event: string,
+  suppressDeltas: boolean,
+): { send: boolean; clearSuppression: boolean } {
+  if (event === "state") {
+    return { send: true, clearSuppression: true };
+  }
+  if (event === "delta" && suppressDeltas) {
+    return { send: false, clearSuppression: false };
+  }
+  return { send: true, clearSuppression: false };
 }

@@ -36,6 +36,7 @@ import {
   classifyRestart,
   buildResumeInjection,
   extractLastToolCall,
+  shouldSendEvent,
   STATIC_FILES,
   CSP,
   type PendingDelta,
@@ -184,13 +185,9 @@ function cleanupClient(client: SSEClient): void {
 function broadcastToSession(session: Session, event: string, data: unknown): void {
   const payload = { folder: session.folderName, ...(data as Record<string, unknown>) };
   for (const client of session.clients) {
-    // State snapshots are always sent and clear the suppression flag
-    // (snapshot at turn end means deltas for the next turn should flow)
-    if (event === "state") {
-      client.suppressDeltas = false;
-    } else if (event === "delta" && client.suppressDeltas) {
-      continue; // mid-turn reconnect — snapshot is authoritative
-    }
+    const decision = shouldSendEvent(event, client.suppressDeltas);
+    if (decision.clearSuppression) client.suppressDeltas = false;
+    if (!decision.send) continue;
     sendSSE(client, event, payload);
   }
 }
