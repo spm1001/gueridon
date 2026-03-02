@@ -42,7 +42,7 @@ sudo systemctl status gueridon     # Check health
 journalctl -u gueridon -f          # Tail logs
 ```
 
-- **`KillMode=process`** — bridge restart does NOT kill CC child processes. They become orphaned; the new bridge reaps them on startup (SIGTERM) and the next client connection resumes via `--resume`.
+- **`KillMode=process`** — systemd only kills the main PID (tsx launcher). The actual node server (tsx's child) and any CC processes survive as orphans in the cgroup, holding port 3001. The new bridge reaps CC orphans on startup (SIGTERM) and the next client connection resumes via `--resume`. **However**, the orphaned node server itself is NOT reaped — it holds the port and causes `EADDRINUSE` crash loops. If the service enters a restart loop after a crash, check `ss -tlnp 'sport = :3001'` and kill the orphan. Processes spawned by CC (chrome via Passe, python http.server, journalctl tails, etc.) accumulate in the cgroup and survive service restarts. A single gueridon cgroup was observed at 1.2GB with orphaned chrome renderer trees from past Passe skill invocations. Consider switching to `KillMode=control-group` if orphan accumulation becomes a problem (but this would also kill CC processes, breaking resume-after-restart).
 - **HTTPS terminated by `tailscale serve`** — bridge listens on HTTP :3001.
 - **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
 - **Session persistence** — `~/.config/gueridon/sse-sessions.json` tracks active CC PIDs so the bridge can reap orphans after restart.
@@ -108,7 +108,7 @@ The bridge is split across several modules in `server/`:
 - **`[guéridon:*]` prefix convention:** Bridge-injected messages use `[guéridon:system]`, `[guéridon:upload]` etc. StateBuilder detects these and marks as `synthetic: true` (rendered as system chips, prefix stripped). **Exception:** staged uploads contain a deposit note followed by user text — StateBuilder checks for text after the deposit suffix and keeps these as real user messages. The client's `renderUserBubble()` parses deposit notes into `📎 filename` references.
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
 
-## CC Process Flags
+## CC Process Flags (verified CC v2.1.63, 2026-03-02)
 
 ```bash
 claude -p --verbose \
@@ -126,13 +126,22 @@ claude -p --verbose \
 
 - `--verbose` is mandatory for stream-json mode.
 - `--allowed-tools` lists all tools permissively, including `mcp__*` for all MCP tools. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
-- `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`.
+- `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`. **The JSON file MUST contain a `"mcpServers"` key** (even `"mcpServers": {}` is fine). If the key is missing, CC hangs silently during init — no error, no stderr, no stdout. Debug log stops at "Parsed repository" (8 lines instead of 100+). This caused a 3-session outage in March 2026.
 - `--disallowedTools` hides tools from the model entirely: WebFetch (returns AI summaries, use curl instead), TodoWrite (use bon), NotebookEdit (no notebooks).
 - `--permission-mode default` respects settings.json allow/deny lists.
 - `--append-system-prompt` is built dynamically by `buildSystemPrompt()` in `bridge-logic.ts`. Includes: machine context (hostname, "this IS the production server, do not SSH here"), working directory, and AskUserQuestion coaching (tool returns error on mobile, user sees tappable buttons).
 - `--session-id <uuid>` for fresh sessions; `--resume <uuid>` for resuming after process kill. Decided by `resolveSessionForFolder()` in `bridge-logic.ts`.
 - **Local commands (`/context`, `/cost`, `/compact`) produce NO stdout.** Bridge reads JSONL tail on empty-result turns to recover output.
 - **Input format** (critical): `{"type":"user","message":{"role":"user","content":"..."}}`
+
+### CC Init Hang Diagnosis Checklist
+
+If CC spawns but produces zero stdout (init timeout after 30s):
+
+1. **Check the debug log** (`~/.claude/debug/<session-uuid>.txt`). Normal init = 100+ lines through permissions, MCP, setup, skills. If it stops at "Parsed repository" (8 lines), CC is hung during init.
+2. **Check `--mcp-config` target** — the JSON file must have `"mcpServers": {}`. Missing key = silent hang.
+3. **Check `settings.json` after any config refactor** — if mcpServers was never in the file (or was removed), the bridge-spawned CC will hang even though interactive CC works fine (because interactive CC doesn't use `--mcp-config`).
+4. **strace is the definitive tool** — attach to the bridge's Node child process (not the tsx launcher), trigger a session, and look for socket/connect/openat calls. A hung CC will show zero network sockets and zero stdout writes.
 
 ### CC Environment Variables
 

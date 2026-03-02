@@ -1,7 +1,7 @@
 # CC Event Reference
 
 Event shapes from Claude Code's `-p --output-format stream-json` mode.
-Captured during bb-lovise spike (Feb 2026, CC v2.1.45).
+Captured during bb-lovise spike (Feb 2026, CC v2.1.45). Verified still accurate on CC v2.1.63 (2026-03-02).
 
 ## Event Sequence Per Turn
 
