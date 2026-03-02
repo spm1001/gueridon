@@ -96,6 +96,7 @@ interface SSEClient {
   folder: string | null; // null = lobby mode
   eventSeq: number;      // monotonic event counter for Last-Event-ID
   pushToken: string;     // random token for authenticating push subscribe/unsubscribe (gdn-ricocu)
+  suppressDeltas: boolean; // true after mid-turn reconnect — snapshot is authoritative until turn ends
 }
 
 interface Session {
@@ -183,6 +184,13 @@ function cleanupClient(client: SSEClient): void {
 function broadcastToSession(session: Session, event: string, data: unknown): void {
   const payload = { folder: session.folderName, ...(data as Record<string, unknown>) };
   for (const client of session.clients) {
+    // State snapshots are always sent and clear the suppression flag
+    // (snapshot at turn end means deltas for the next turn should flow)
+    if (event === "state") {
+      client.suppressDeltas = false;
+    } else if (event === "delta" && client.suppressDeltas) {
+      continue; // mid-turn reconnect — snapshot is authoritative
+    }
     sendSSE(client, event, payload);
   }
 }
@@ -203,7 +211,7 @@ function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): 
   const reconnect = !!lastEventId;
 
   const pushToken = randomUUID().replace(/-/g, ""); // compact hex token (gdn-ricocu)
-  const client: SSEClient = { res, folder: null, eventSeq: 0, pushToken };
+  const client: SSEClient = { res, folder: null, eventSeq: 0, pushToken, suppressDeltas: false };
   allClients.add(client);
   clientsById.set(clientId, client);
   validPushTokens.add(pushToken);
@@ -236,6 +244,8 @@ function attachToSession(client: SSEClient, session: Session): void {
     session.graceTimer = null;
   }
   client.folder = session.folder;
+  // Mid-turn reconnect: snapshot is authoritative, suppress deltas until turn ends
+  client.suppressDeltas = session.turnInProgress;
   session.clients.add(client);
 }
 
