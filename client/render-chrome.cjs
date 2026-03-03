@@ -38,13 +38,13 @@ function renderStatusBar(state, els) {
     els.contextBtn.dataset.level = '';
   }
 
-  // Connection state
-  const connected = state.connection !== 'disconnected';
-  els.body.dataset.connection = connected ? 'connected' : 'disconnected';
-  els.connectionDot.dataset.state = connected ? 'connected' : 'disconnected';
+  // Connection state — 'loading' (session switch in progress) shows same amber tint as 'disconnected'
+  const showAmber = state.connection === 'disconnected' || state.connection === 'loading';
+  els.body.dataset.connection = showAmber ? 'disconnected' : 'connected';
+  els.connectionDot.dataset.state = showAmber ? 'disconnected' : 'connected';
 
   // Busy state — used by send button and activity chips
-  const busy = connected && state.status === 'working';
+  const busy = !showAmber && state.status === 'working';
   els.body.dataset.busy = busy;
 }
 
@@ -280,6 +280,8 @@ function updatePlaceholder(textarea, opts) {
   const { currentFolder, connection, status, activity, model } = opts;
   if (!currentFolder) {
     textarea.placeholder = 'Choose a folder\u2026';
+  } else if (connection === 'loading') {
+    textarea.placeholder = 'Resuming\u2026';
   } else if (connection === 'disconnected') {
     textarea.placeholder = 'Reconnecting\u2026';
   } else if (status === 'working') {

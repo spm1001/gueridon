@@ -270,9 +270,9 @@ function sseConnect() {
       location.reload();
       return;
     }
-    liveState.connection = 'connected';
+    // SSE connected, but if we need to reload session state, stay in 'loading'
+    // until the state snapshot arrives. Only set 'connected' if no session to restore.
     sseResetWatchdog();
-    sseRender();
 
     // Store bridge-issued push token for subscribe/unsubscribe auth (gdn-ricocu)
     ssePushToken = data.pushToken || null;
@@ -287,14 +287,18 @@ function sseConnect() {
     // Without this, deltas arriving between reconnect and state snapshot accumulate
     // on top of old messages, causing visual duplication.
     if (sseCurrentFolder) {
-      // Always clear stale messages when we have an active folder —
-      // both auto-reconnect (Last-Event-ID) and watchdog reconnect (fresh
-      // EventSource) need a clean slate before the state snapshot arrives.
+      // Stay in 'loading' (amber tint) until state snapshot arrives.
+      // Without this, 'connected' flashes before messages load.
+      liveState.connection = 'loading';
       liveState.messages = [];
       ssePostSession(sseCurrentFolder);
     } else if (location.hash.length > 1) {
+      liveState.connection = 'loading';
       ssePostSession(location.hash.slice(1));
+    } else {
+      liveState.connection = 'connected';
     }
+    sseRender();
   });
 
   sseSource.addEventListener('folders', (ev) => {
@@ -388,6 +392,9 @@ function handleSSEState(data) {
   // Bridge broadcasts: { session: folderName, ...getState() }
   // getState().session is {id, model, project, context_pct} — overwrites the string
   // (later properties win in spread). So data.session is the object.
+
+  // State snapshot arrived — clear loading/disconnected amber tint
+  liveState.connection = 'connected';
 
   if (data.messages) {
     console.log('[bb] state snapshot:', data.messages.length, 'msgs');
@@ -601,6 +608,7 @@ function sseConnectFolder(folder, sessionId) {
   liveState.messages = [];
   liveState.status = 'idle';
   liveState._activity = null;
+  liveState.connection = 'loading'; // amber tint until state snapshot arrives
   location.hash = name;
   stagedDeposits = [];
   renderStagedDeposits();
