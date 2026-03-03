@@ -114,7 +114,9 @@ function renderSwitcher(state, opts) {
   function makeItem(s, isCurrent) {
     const pct = s.context_pct;
     const level = pct >= 85 ? 'critical' : pct >= 70 ? 'low' : '';
-    const hasSessions = s.sessions && s.sessions.length > 1;
+    const humanSessions = s.sessions ? s.sessions.filter(sess => sess.humanInteraction !== false) : [];
+    const humanCount = humanSessions.length;
+    const hasSessions = humanCount >= 1;
     const isExpanded = expandedFolder === s.project;
     const item = document.createElement('div');
     item.className = 'switcher-item';
@@ -144,7 +146,6 @@ function renderSwitcher(state, opts) {
     row.appendChild(body);
 
     if (hasSessions) {
-      const humanCount = s.sessions.filter(sess => sess.humanInteraction !== false).length;
       const countBadge = document.createElement('span');
       countBadge.className = 'switcher-session-count';
       countBadge.textContent = humanCount;
@@ -178,9 +179,8 @@ function renderSwitcher(state, opts) {
       });
       sessionsDiv.appendChild(newRow);
 
-      // Filter to human-interactive sessions only (hide subagent spam)
-      const humanSessions = s.sessions.filter(sess => sess.humanInteraction !== false);
-      const hiddenCount = s.sessions.length - humanSessions.length;
+      // humanSessions already filtered above; compute hidden count for display
+      const hiddenCount = s.sessions.length - humanCount;
 
       for (const sess of humanSessions) {
         const sessionPct = sess.contextPct;
