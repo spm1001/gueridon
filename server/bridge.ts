@@ -242,6 +242,7 @@ function attachToSession(client: SSEClient, session: Session): void {
   if (session.graceTimer) {
     clearTimeout(session.graceTimer);
     session.graceTimer = null;
+    emit({ type: "grace:cancel", folder: session.folderName, sessionId: session.id, reason: "client-reconnect" });
   }
   client.folder = session.folder;
   // Mid-turn reconnect: snapshot is authoritative, suppress deltas until turn ends
@@ -258,14 +259,20 @@ function detachFromSession(client: SSEClient): void {
   maybeStartGraceTimer(session);
 }
 
-/** Start grace timer only when idle with no audience and no recent prompt activity. */
+/** Start grace timer only when idle with no audience and no recent activity. */
 function maybeStartGraceTimer(session: Session): void {
   if (session.clients.size === 0 && session.process && !session.turnInProgress) {
-    // Don't start grace if a prompt arrived recently — the user is active,
-    // just momentarily disconnected (iOS SSE drops during screen lock).
-    const PROMPT_RECENCY_MS = 10 * 60 * 1000; // 10 minutes
-    if (session.lastPromptAt && (Date.now() - session.lastPromptAt) < PROMPT_RECENCY_MS) {
-      emit({ type: "grace:skip", folder: session.folderName, reason: "prompt-recent", ageMs: Date.now() - session.lastPromptAt });
+    // Don't start grace if there was recent activity — user or CC.
+    // Prompt recency catches "user active, momentarily disconnected" (iOS SSE drops).
+    // Output recency catches "CC just finished a long turn" (phone in pocket during agents).
+    const RECENCY_MS = 10 * 60 * 1000; // 10 minutes
+    const now = Date.now();
+    if (session.lastPromptAt && (now - session.lastPromptAt) < RECENCY_MS) {
+      emit({ type: "grace:skip", folder: session.folderName, reason: "prompt-recent", ageMs: now - session.lastPromptAt });
+      return;
+    }
+    if (session.lastOutputTime && (now - session.lastOutputTime) < RECENCY_MS) {
+      emit({ type: "grace:skip", folder: session.folderName, reason: "output-recent", ageMs: now - session.lastOutputTime });
       return;
     }
     startGraceTimer(session);
@@ -567,6 +574,7 @@ function deliverPrompt(
   if (session.graceTimer) {
     clearTimeout(session.graceTimer);
     session.graceTimer = null;
+    emit({ type: "grace:cancel", folder: session.folderName, sessionId: session.id, reason: "prompt-arrived" });
   }
   session.lastPromptAt = Date.now();
 

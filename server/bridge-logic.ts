@@ -26,6 +26,7 @@ export const STATIC_FILES: Record<string, { file: string; mime: string }> = {
   "/marked.js": { file: "node_modules/marked/lib/marked.umd.js", mime: "application/javascript" },
   "/mockup": { file: "mockup.html", mime: "text/html; charset=utf-8" },
   "/css-shell": { file: "css-shell.html", mime: "text/html; charset=utf-8" },
+  "/css-empty": { file: "css-empty.html", mime: "text/html; charset=utf-8" },
   "/render-utils.js": { file: "client/render-utils.cjs", mime: "application/javascript" },
   "/render-chips.js": { file: "client/render-chips.cjs", mime: "application/javascript" },
   "/render-messages.js": { file: "client/render-messages.cjs", mime: "application/javascript" },

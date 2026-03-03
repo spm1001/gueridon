@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CSS Empty Shell</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/style.css">
+<style>
+  /* Show + and / buttons without JS (production shows via .visible class) */
+  .btn-slash, .btn-file { display: flex !important; }
+</style>
+</head>
+<body>
+
+  <!-- Empty messages area — zero content, testing docking -->
+  <div class="messages" id="messages">
+    <div class="snap-anchor"></div>
+  </div>
+
+  <div class="input-area">
+    <textarea class="input-field" placeholder="Message Claude..." rows="1" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+    <div class="staged-deposits" id="stagedDeposits"></div>
+    <div class="btn-bar">
+      <button class="btn-circle btn-file" aria-label="Attach">+</button>
+      <button class="btn-circle btn-slash" aria-label="Commands">/</button>
+      <button class="btn-lozenge folder"><span class="label"></span></button>
+      <button class="btn-lozenge context"><span class="pct"></span></button>
+      <button class="btn-circle btn-send" aria-label="Send">&#x2191;</button>
+    </div>
+  </div>
+
+  <script>
+  // Diagnostics overlay
+  const diag = document.createElement('pre');
+  Object.assign(diag.style, {
+    position: 'fixed', top: '48px', left: '8px', right: '8px',
+    fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--text-dim)',
+    lineHeight: '1.8', padding: '12px', background: 'rgba(36,36,36,0.9)',
+    borderRadius: '8px', zIndex: '1000', whiteSpace: 'pre-wrap',
+    pointerEvents: 'none',
+  });
+  document.body.appendChild(diag);
+
+  let keyboardOpen = false;
+  function measure() {
+    const vv = window.visualViewport;
+    const msgs = document.querySelector('.messages');
+    const input = document.querySelector('.input-area');
+    const msgsCS = getComputedStyle(msgs);
+    const inputCS = getComputedStyle(input);
+    diag.textContent = [
+      `innerHeight:   ${window.innerHeight}px`,
+      `vv.height:     ${vv ? vv.height + 'px' : 'n/a'}`,
+      `keyboard:      ${keyboardOpen ? 'OPEN' : 'closed'}`,
+      ``,
+      `messages.h:    ${msgsCS.height}`,
+      `  pad-bottom:  ${msgsCS.paddingBottom}`,
+      `input-area.h:  ${inputCS.height}`,
+      `  position:    ${inputCS.position}`,
+      `  bottom:      ${inputCS.bottom}`,
+      ``,
+      `body.h:        ${getComputedStyle(document.body).height}`,
+      `doc.scrollH:   ${document.documentElement.scrollHeight}px`,
+      ``,
+      `connection:    ${document.body.dataset.connection || 'connected'}`,
+      ``,
+      `Tap folder button → toggle disconnected`,
+      `Tap send → add message`,
+    ].join('\n');
+  }
+  measure();
+  window.addEventListener('resize', measure);
+  if (window.visualViewport) {
+    const refH = window.visualViewport.height;
+    window.visualViewport.addEventListener('resize', () => {
+      keyboardOpen = window.visualViewport.height < refH - 100;
+      document.querySelector('.input-area').classList.toggle('keyboard-open', keyboardOpen);
+      measure();
+    });
+  }
+
+  // Tap folder button to toggle disconnected state
+  document.querySelector('.btn-lozenge.folder').addEventListener('click', () => {
+    const conn = document.body.dataset.connection;
+    document.body.dataset.connection = conn === 'disconnected' ? '' : 'disconnected';
+    measure();
+  });
+
+  // Tap send to add messages one at a time
+  let count = 0;
+  document.querySelector('.btn-send').addEventListener('click', () => {
+    count++;
+    const div = document.createElement('div');
+    div.className = count % 2 ? 'msg-user' : 'msg-assistant';
+    div.innerHTML = count % 2
+      ? `Test message #${count}`
+      : `<p>Response #${count} — watch the gap between this and the input area.</p>`;
+    const anchor = document.querySelector('.snap-anchor');
+    document.getElementById('messages').insertBefore(div, anchor);
+    measure();
+  });
+  </script>
+
+</body>
+</html>

@@ -31,6 +31,7 @@ export type BridgeEvent =
   | { type: "grace:start"; folder: string; sessionId: string; graceMs: number }
   | { type: "grace:expire"; folder: string; sessionId: string }
   | { type: "grace:skip"; folder: string; reason: string; ageMs: number }
+  | { type: "grace:cancel"; folder: string; sessionId: string; reason: "client-reconnect" | "prompt-arrived" }
 
   // Prompt delivery
   | { type: "prompt:deliver"; folder: string; sessionId: string }
@@ -107,6 +108,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "grace:start": "info",
   "grace:expire": "info",
   "grace:skip": "debug",
+  "grace:cancel": "info",
   "prompt:deliver": "info",
   "init:timeout": "error",
   "process:kill": "warn",

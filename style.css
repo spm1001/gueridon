@@ -48,8 +48,8 @@ body {
    (flex: 1 means 1 1 0 — messages can collapse to zero height.) */
 .messages {
   flex: 1 0 auto;
-  /* Bottom padding clears the sticky input area (~100px + safe-area). */
-  padding: calc(var(--safe-top) + 12px) 14px calc(110px + var(--safe-bottom));
+  /* Bottom padding clears the sticky input area (89px measured + safe-area). */
+  padding: calc(var(--safe-top) + 12px) 14px calc(90px + var(--safe-bottom));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -661,10 +661,16 @@ body {
   white-space: nowrap;
 }
 
-/* Disconnected state: desaturated + dimmed — clearly "wrong" like Mac deep-sleep resume */
-body[data-connection="disconnected"] .messages {
-  opacity: 0.5;
-  filter: grayscale(0.8);
+/* Disconnected state: heavy bleach — unmistakable even on an empty screen.
+   Body-level filter desaturates everything (background, input area, chrome).
+   Slow pulse makes it clear something is happening vs a static broken state. */
+body[data-connection="disconnected"] {
+  filter: grayscale(0.8) brightness(0.6);
+  animation: disconnected-pulse 3s ease-in-out infinite;
+}
+@keyframes disconnected-pulse {
+  0%, 100% { filter: grayscale(0.8) brightness(0.6); }
+  50% { filter: grayscale(0.6) brightness(0.7); }
 }
 
 body[data-connection="disconnected"] .input-field {
@@ -672,11 +678,7 @@ body[data-connection="disconnected"] .input-field {
   pointer-events: none;
 }
 
-body[data-connection="disconnected"] .btn-send {
-  opacity: 0.3;
-  pointer-events: none;
-}
-
+body[data-connection="disconnected"] .btn-send,
 body[data-connection="disconnected"] .btn-slash,
 body[data-connection="disconnected"] .btn-file {
   opacity: 0.3;
