@@ -1187,6 +1187,124 @@ document.addEventListener('drop', (e) => {
     uploadFiles(e.dataTransfer.files);
   }
 });
+
+// === Voice input — hold send button to dictate ===
+// Hold = dictate (text streams into textarea), release = stop + send.
+// Tap (< 300ms) = normal send. Overloads the send button.
+{
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (SpeechRecognition) {
+    let recognition = null;
+    let isListening = false;
+    let finalTranscript = '';
+    let holdTimer = null;
+    let didDictate = false;
+    const HOLD_THRESHOLD = 300; // ms — shorter = tap (send), longer = hold (dictate)
+
+    function startListening() {
+      if (isListening) return;
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-GB';
+
+      finalTranscript = '';
+      let interimSnapshot = '';
+
+      recognition.onresult = (event) => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript;
+          } else {
+            interim += transcript;
+          }
+        }
+        const before = ta.value.slice(0, ta.value.length - interimSnapshot.length);
+        interimSnapshot = finalTranscript + interim;
+        ta.value = before + interimSnapshot;
+        refreshSendButton();
+      };
+
+      recognition.onerror = (event) => {
+        console.error('[mic] error:', event.error);
+        stopListening(false);
+      };
+
+      recognition.onend = () => {
+        if (isListening) stopListening(true);
+      };
+
+      recognition.start();
+      isListening = true;
+      sendBtn.dataset.listening = 'true';
+      console.log('[mic] listening...');
+    }
+
+    function stopListening(autoSend) {
+      if (recognition) {
+        try { recognition.stop(); } catch(e) {}
+        recognition = null;
+      }
+      isListening = false;
+      sendBtn.dataset.listening = 'false';
+      console.log('[mic] stopped, transcript:', finalTranscript);
+      if (autoSend && finalTranscript.trim()) {
+        // Prefix with [dictated] so Claude is forgiving of transcription artifacts
+        const dictatedText = '[dictated] ' + finalTranscript.trim();
+        // Replace the transcript in the textarea with the prefixed version
+        const before = ta.value.slice(0, ta.value.length - finalTranscript.length);
+        ta.value = before + dictatedText;
+        setTimeout(() => sendBtn.click(), 0);
+      }
+    }
+
+    // Intercept pointerdown on send button: start a timer.
+    // If held past threshold, start dictating (and suppress the click).
+    // If released before threshold, let the normal click handler fire.
+    sendBtn.addEventListener('pointerdown', (e) => {
+      didDictate = false;
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        didDictate = true;
+        startListening();
+      }, HOLD_THRESHOLD);
+    });
+
+    sendBtn.addEventListener('pointerup', () => {
+      if (holdTimer) {
+        // Released before threshold — normal tap. Let click fire.
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      } else if (didDictate) {
+        // Was dictating — stop and send.
+        stopListening(true);
+        didDictate = false;
+      }
+    });
+
+    sendBtn.addEventListener('pointercancel', () => {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      if (didDictate) {
+        stopListening(false);
+        didDictate = false;
+      }
+    });
+
+    // Suppress the click that fires after a hold-release
+    sendBtn.addEventListener('click', (e) => {
+      if (didDictate) {
+        e.stopImmediatePropagation();
+        didDictate = false;
+      }
+    }, { capture: true });
+  }
+}
 </script>
 </body>
 </html>

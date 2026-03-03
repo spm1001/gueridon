@@ -419,6 +419,14 @@ body {
 }
 .btn-send[data-active="true"] { background: var(--accent); }
 .btn-send[data-stop="true"] { background: var(--red); }
+.btn-send[data-listening="true"] {
+  background: var(--red);
+  animation: mic-pulse 1s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
 
 .btn-lozenge {
   height: 34px;
