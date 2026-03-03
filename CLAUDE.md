@@ -236,12 +236,14 @@ The document body scrolls (not a container element). This enables Safari Full Pa
 
 **Remaining JS for scroll:** only `window.scrollTo()` on send and textarea focus (force-scroll after deliberate user action).
 
-**CSS shell:** `css-shell.html` is the test page for validating CSS layout changes before production. See `docs/css-shell.md`.
+**CSS shell:** `css-shell.html` is the test page for validating CSS layout changes before production. See `docs/css-shell.md`. `css-empty.html` tests empty-screen layout (input docking, disconnected state). Both served by STATIC_FILES.
+
+**Disconnected state:** `body[data-connection="disconnected"]::after` renders an amber tint overlay (pulsing between 15% and 6% opacity). Input field and buttons dimmed with `pointer-events: none`. Toggle on `/css-empty` via the folder button.
 
 ### UI features
 
 - Dark theme only
-- Markdown rendering via `marked.parse()` / `marked.parseInline()`
+- Markdown rendering via `marked.parse()` / `marked.parseInline()`, custom table renderer wraps `<table>` in `<div class="table-wrap">` for horizontal scroll on mobile
 - Collapsible tool calls (consecutive successful calls coalesce)
 - Enter never submits (mobile newlines), submit is the button
 - Chunk-level updates (not token-level)
