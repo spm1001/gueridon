@@ -894,6 +894,7 @@ ta.addEventListener('focus', () => {
 
 // Enter = newline. Shift+Enter or Cmd/Ctrl+Enter = submit.
 // DEBUG: visible toast for Enter events to diagnose iOS double-tap submit bug
+// Anchored to input-area (not fixed to viewport) so it stays visible with keyboard open.
 let _enterDbgEl = null;
 let _enterDbgTimer = null;
 ta.addEventListener('keydown', (e) => {
@@ -904,16 +905,16 @@ ta.addEventListener('keydown', (e) => {
     if (!_enterDbgEl) {
       _enterDbgEl = document.createElement('div');
       Object.assign(_enterDbgEl.style, {
-        position: 'fixed', top: '40px', left: '10px', right: '10px',
-        background: 'rgba(0,0,0,0.85)', color: '#0f0', fontFamily: 'monospace',
-        fontSize: '11px', padding: '6px 10px', borderRadius: '8px', zIndex: '99999',
-        pointerEvents: 'none', whiteSpace: 'pre-wrap'
+        background: 'rgba(0,0,0,0.9)', color: '#0f0', fontFamily: 'monospace',
+        fontSize: '11px', padding: '6px 10px', borderRadius: '8px',
+        pointerEvents: 'none', whiteSpace: 'pre-wrap', marginBottom: '4px'
       });
-      document.body.appendChild(_enterDbgEl);
+      // Insert above textarea inside the sticky input-area
+      ta.parentElement.insertBefore(_enterDbgEl, ta);
     }
     _enterDbgEl.textContent = (_enterDbgEl.textContent ? _enterDbgEl.textContent + '\n' : '') + text;
     clearTimeout(_enterDbgTimer);
-    _enterDbgTimer = setTimeout(() => { _enterDbgEl.textContent = ''; }, 5000);
+    _enterDbgTimer = setTimeout(() => { _enterDbgEl.textContent = ''; }, 8000);
 
     if (e.shiftKey || e.metaKey || e.ctrlKey) {
       e.preventDefault();
