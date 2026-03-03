@@ -666,16 +666,22 @@ body {
   white-space: nowrap;
 }
 
-/* Disconnected state: heavy bleach — unmistakable even on an empty screen.
-   Body-level filter desaturates everything (background, input area, chrome).
-   Slow pulse makes it clear something is happening vs a static broken state. */
-body[data-connection="disconnected"] {
-  filter: grayscale(0.8) brightness(0.6);
+/* Disconnected state: amber tint overlay.
+   Dark themes can't get meaningfully darker, so we ADD colour instead.
+   Fixed pseudo-element with pointer-events:none keeps UI interactive underneath.
+   Slow pulse breathes the tint so it reads as "working on it" not "broken". */
+body[data-connection="disconnected"]::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: rgba(180, 120, 40, 0.15);
+  pointer-events: none;
+  z-index: 9999;
   animation: disconnected-pulse 3s ease-in-out infinite;
 }
 @keyframes disconnected-pulse {
-  0%, 100% { filter: grayscale(0.8) brightness(0.6); }
-  50% { filter: grayscale(0.6) brightness(0.7); }
+  0%, 100% { background: rgba(180, 120, 40, 0.15); }
+  50% { background: rgba(180, 120, 40, 0.06); }
 }
 
 body[data-connection="disconnected"] .input-field {
