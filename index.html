@@ -1188,19 +1188,35 @@ document.addEventListener('drop', (e) => {
   }
 });
 
+// === Audio context (shared by voice input + chime) ===
+// Must be created on a user gesture for Safari. We create it on first
+// pointerdown on the send button and share it across features.
+let sharedAudioCtx = null;
+let isListening = false; // hoisted so chime block can check it
+function ensureAudioCtx() {
+  if (!sharedAudioCtx) {
+    try { sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+  }
+  return sharedAudioCtx;
+}
+
 // === Voice input — hold send button to dictate ===
-// Hold = dictate (text streams into textarea), release = stop + send.
+// Hold = dictate (text streams into textarea), release = stop + auto-send.
 // Tap (< 300ms) = normal send. Overloads the send button.
+//
+// Key insight: recognition.stop() is async. After calling it, onresult
+// keeps firing with final results. We must wait for onend before sending,
+// otherwise late results overwrite the textarea after it's been cleared.
 {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   if (SpeechRecognition) {
     let recognition = null;
-    let isListening = false;
-    let finalTranscript = '';
+    // isListening is hoisted to module scope (shared with chime block)
+    let pendingSend = false; // true = send when recognition finishes
     let holdTimer = null;
-    let didDictate = false;
-    const HOLD_THRESHOLD = 300; // ms — shorter = tap (send), longer = hold (dictate)
+    let suppressClick = false;
+    const HOLD_THRESHOLD = 300;
 
     function startListening() {
       if (isListening) return;
@@ -1209,112 +1225,138 @@ document.addEventListener('drop', (e) => {
       recognition.interimResults = true;
       recognition.lang = 'en-GB';
 
-      finalTranscript = '';
-      let interimSnapshot = '';
+      let finalTranscript = '';
+      let lastPreview = ''; // last-known text (final + interim) as fallback
+      const textBefore = ta.value; // preserve any typed text
 
       recognition.onresult = (event) => {
         let interim = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript;
+        finalTranscript = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const t = event.results[i][0].transcript;
+          const isFinal = event.results[i].isFinal;
+          if (isFinal) {
+            if (finalTranscript && !finalTranscript.endsWith(' ') && !t.startsWith(' '))
+              finalTranscript += ' ';
+            finalTranscript += t;
           } else {
-            interim += transcript;
+            if (interim && !interim.endsWith(' ') && !t.startsWith(' '))
+              interim += ' ';
+            interim += t;
           }
         }
-        const before = ta.value.slice(0, ta.value.length - interimSnapshot.length);
-        interimSnapshot = finalTranscript + interim;
-        ta.value = before + interimSnapshot;
+        let preview = finalTranscript;
+        if (interim) {
+          if (preview && !preview.endsWith(' ') && !interim.startsWith(' '))
+            preview += ' ';
+          preview += interim;
+        }
+        lastPreview = preview;
+        ta.value = textBefore + preview;
         refreshSendButton();
       };
 
       recognition.onerror = (event) => {
         console.error('[mic] error:', event.error);
-        stopListening(false);
+        pendingSend = false;
+        cleanup();
       };
 
       recognition.onend = () => {
-        if (isListening) stopListening(true);
+        // All results flushed. Use finalTranscript if available,
+        // fall back to lastPreview (covers case where stop() didn't
+        // promote interim results to final).
+        // Prefer lastPreview — it includes final + interim, so nothing
+        // the user saw on screen gets silently dropped.
+        const transcript = (lastPreview || finalTranscript).trim();
+        cleanup();
+        if (pendingSend && transcript) {
+          ta.value = textBefore + '[dictated] ' + transcript;
+          refreshSendButton();
+          // Clear suppressClick before our programmatic click —
+          // otherwise the capture-phase handler eats it.
+          suppressClick = false;
+          sendBtn.click();
+        }
+        pendingSend = false;
       };
+
+      function cleanup() {
+        isListening = false;
+        sendBtn.dataset.listening = 'false';
+        recognition = null;
+      }
 
       recognition.start();
       isListening = true;
+      pendingSend = false;
       sendBtn.dataset.listening = 'true';
-      console.log('[mic] listening...');
     }
 
-    function stopListening(autoSend) {
-      if (recognition) {
-        try { recognition.stop(); } catch(e) {}
-        recognition = null;
-      }
-      isListening = false;
-      sendBtn.dataset.listening = 'false';
-      console.log('[mic] stopped, transcript:', finalTranscript);
-      if (autoSend && finalTranscript.trim()) {
-        // Prefix with [dictated] so Claude is forgiving of transcription artifacts
-        const dictatedText = '[dictated] ' + finalTranscript.trim();
-        // Replace the transcript in the textarea with the prefixed version
-        const before = ta.value.slice(0, ta.value.length - finalTranscript.length);
-        ta.value = before + dictatedText;
-        setTimeout(() => sendBtn.click(), 0);
-      }
+    function requestStop(shouldSend) {
+      if (!recognition) return;
+      pendingSend = shouldSend;
+      try { recognition.stop(); } catch(e) {}
+      // onend will fire async — that's where we send
     }
 
-    // Intercept pointerdown on send button: start a timer.
-    // If held past threshold, start dictating (and suppress the click).
-    // If released before threshold, let the normal click handler fire.
-    sendBtn.addEventListener('pointerdown', (e) => {
-      didDictate = false;
+    // Hold detection on send button
+    sendBtn.addEventListener('pointerdown', () => {
+      ensureAudioCtx();
+      // If already listening (e.g. pointerup was lost to permission dialog),
+      // treat this press as stop + send.
+      if (isListening) {
+        suppressClick = true;
+        requestStop(true);
+        return;
+      }
+      suppressClick = false;
       holdTimer = setTimeout(() => {
         holdTimer = null;
-        didDictate = true;
+        suppressClick = true;
         startListening();
       }, HOLD_THRESHOLD);
     });
 
     sendBtn.addEventListener('pointerup', () => {
       if (holdTimer) {
-        // Released before threshold — normal tap. Let click fire.
         clearTimeout(holdTimer);
         holdTimer = null;
-      } else if (didDictate) {
-        // Was dictating — stop and send.
-        stopListening(true);
-        didDictate = false;
+        // Short tap — let natural click fire for normal send
+      } else if (isListening) {
+        requestStop(true);
       }
     });
 
     sendBtn.addEventListener('pointercancel', () => {
-      if (holdTimer) {
-        clearTimeout(holdTimer);
-        holdTimer = null;
-      }
-      if (didDictate) {
-        stopListening(false);
-        didDictate = false;
-      }
+      if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+      if (isListening) requestStop(false);
     });
 
-    // Suppress the click that fires after a hold-release
+    // Suppress the natural click that fires after hold-release.
+    // Our send happens programmatically from onend.
     sendBtn.addEventListener('click', (e) => {
-      if (didDictate) {
+      if (suppressClick) {
         e.stopImmediatePropagation();
-        didDictate = false;
+        suppressClick = false;
       }
     }, { capture: true });
   }
 }
 
 // === Turn-complete chime ===
-// Plays a short tone when Claude finishes responding (busy → idle).
-// Lightweight alternative to push notifications for voice-driven flow.
+// Short tone when Claude finishes responding (busy → idle).
+// Uses sharedAudioCtx — created on user gesture (send button pointerdown).
+// Won't chime until user has interacted at least once (Safari requirement).
 {
   let wasBusy = false;
 
   function playChime() {
+    if (isListening) return; // don't interrupt active dictation
+    const ctx = sharedAudioCtx;
+    if (!ctx) return; // no gesture yet — skip silently
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') ctx.resume();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
