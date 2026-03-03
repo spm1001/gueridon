@@ -892,38 +892,13 @@ ta.addEventListener('focus', () => {
   window.scrollTo({ top: document.body.scrollHeight });
 });
 
-// Enter = newline. Shift+Enter or Cmd/Ctrl+Enter = submit.
-// DEBUG v3: catch ALL keydown + beforeinput to diagnose iOS phantom submit.
-// iOS may send key !== 'Enter' or skip keydown entirely.
-let _enterDbgEl = null;
-let _enterDbgTimer = null;
-function _dbgLog(text) {
-  if (!_enterDbgEl) {
-    _enterDbgEl = document.createElement('div');
-    Object.assign(_enterDbgEl.style, {
-      background: 'rgba(0,0,0,0.9)', color: '#0f0', fontFamily: 'monospace',
-      fontSize: '11px', padding: '6px 10px', borderRadius: '8px',
-      pointerEvents: 'none', whiteSpace: 'pre-wrap', marginBottom: '4px'
-    });
-    ta.parentElement.insertBefore(_enterDbgEl, ta);
-  }
-  _enterDbgEl.textContent = (_enterDbgEl.textContent ? _enterDbgEl.textContent + '\n' : '') + text;
-  clearTimeout(_enterDbgTimer);
-  _enterDbgTimer = setTimeout(() => { _enterDbgEl.textContent = ''; }, 10000);
-}
+// Enter = newline always. Cmd/Ctrl+Enter = submit (hardware keyboard only).
+// Shift+Enter deliberately NOT a submit shortcut — iOS auto-capitalisation
+// leaves a phantom shiftKey=true on the next keydown, causing accidental submits.
 ta.addEventListener('keydown', (e) => {
-  // Log ALL keydowns where key looks Enter-ish or Unidentified
-  if (e.key === 'Enter' || e.keyCode === 13 || e.key === 'Unidentified') {
-    _dbgLog('kd:' + JSON.stringify({ key: e.key, code: e.code, kC: e.keyCode, S: e.shiftKey, M: e.metaKey, C: e.ctrlKey }));
-  }
-  if (e.key === 'Enter' && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
     sendBtn.click();
-  }
-});
-ta.addEventListener('beforeinput', (e) => {
-  if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') {
-    _dbgLog('bi:' + e.inputType);
   }
 });
 
