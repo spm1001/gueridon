@@ -180,7 +180,8 @@ body {
 .msg-assistant table {
   border-collapse: collapse;
   font-size: 0.82rem;
-  width: 100%;
+  min-width: 100%;
+  white-space: nowrap;
   color: var(--text-mid);
 }
 
