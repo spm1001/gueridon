@@ -57,6 +57,23 @@ body {
 
 .messages > * { flex-shrink: 0; }
 
+/* Update-available banner — hidden by default, revealed by JS */
+.update-banner {
+  position: fixed;
+  top: var(--safe-top, 0);
+  left: 0; right: 0;
+  z-index: 200;
+  background: var(--accent);
+  color: var(--bg);
+  text-align: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  display: none;
+}
+.update-banner.visible { display: block; }
+
 /* Synthetic system chip — centred, dim, informational */
 .msg-system {
   align-self: center;

@@ -34,6 +34,8 @@
     <div id="askContent"></div>
   </div>
 
+  <div class="update-banner" id="updateBanner">Update available — tap to reload</div>
+
   <div class="drop-overlay" id="dropOverlay">
     <div class="drop-overlay-label">Drop files here</div>
   </div>
@@ -244,6 +246,7 @@ let sseClientId = 'bb-' + Date.now().toString(36) + Math.random().toString(36).s
 let sseCurrentFolder = null; // folder name we're connected to
 let ssePushToken = null;     // bridge-issued token for push subscribe/unsubscribe auth (gdn-ricocu)
 let sseWatchdog = null;
+let sseContentHash = null; // content hash from first hello — null until set
 const SSE_WATCHDOG_MS = 65_000; // 60s silence = dead (pings every 30s + margin)
 
 // Live state — shared between SSE and WS modes
@@ -269,6 +272,14 @@ function sseConnect() {
       console.error('[bb] protocol version mismatch, reloading');
       location.reload();
       return;
+    }
+    // Track content hash — first hello sets baseline, subsequent detect staleness
+    if (data.contentHash) {
+      if (!sseContentHash) {
+        sseContentHash = data.contentHash;
+      } else if (data.contentHash !== sseContentHash) {
+        showUpdateBanner();
+      }
     }
     // SSE connected, but if we need to reload session state, stay in 'loading'
     // until the state snapshot arrives. Only set 'connected' if no session to restore.
@@ -579,6 +590,11 @@ async function ssePostExit(folderName) {
   }
 }
 
+function showUpdateBanner() {
+  const banner = document.getElementById('updateBanner');
+  if (banner) banner.classList.add('visible');
+}
+
 async function exitSession() {
   if (!bridgeUrl || !sseCurrentFolder) return;
   await ssePostExit(sseCurrentFolder);
@@ -847,6 +863,9 @@ document.getElementById('switcherBackdrop').addEventListener('click', closeSwitc
 document.getElementById('switcherSearch').addEventListener('input', () => {
   if (cachedState) refreshSwitcher();
 });
+
+// Update banner: tap to reload
+document.getElementById('updateBanner').addEventListener('click', () => location.reload());
 
 // Folder lozenge: tap opens session switcher
 document.getElementById('folderBtn').addEventListener('click', () => {
@@ -1225,6 +1244,7 @@ function ensureAudioCtx() {
 
     function startListening() {
       if (isListening) return;
+      window.scrollTo({ top: document.body.scrollHeight });
       recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
