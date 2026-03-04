@@ -30,6 +30,7 @@ import {
   type SessionProcessInfo,
   type PendingDelta,
   type ShutdownContext,
+  isSubagentEvent,
 } from "./bridge-logic.js";
 
 // --- resolveSessionForFolder ---
@@ -1871,5 +1872,170 @@ describe("shouldSendEvent", () => {
     // Next turn's deltas flow normally
     const d3 = shouldSendEvent("delta", suppressed);
     expect(d3.send).toBe(true);
+  });
+});
+
+// -- isSubagentEvent (gdn-pimime) --
+
+describe("isSubagentEvent", () => {
+  it("returns false for parent events (parent_tool_use_id: null)", () => {
+    expect(isSubagentEvent({
+      type: "assistant",
+      parent_tool_use_id: null,
+      message: { id: "msg_01ABC", role: "assistant", usage: { input_tokens: 100 } },
+    })).toBe(false);
+  });
+
+  it("returns false for events without parent_tool_use_id field", () => {
+    expect(isSubagentEvent({
+      type: "system",
+      subtype: "init",
+    })).toBe(false);
+  });
+
+  it("returns true for subagent assistant events", () => {
+    expect(isSubagentEvent({
+      type: "assistant",
+      parent_tool_use_id: "toolu_01XYZ789",
+      message: { id: "msg_sub_01", role: "assistant", usage: { input_tokens: 50000 } },
+    })).toBe(true);
+  });
+
+  it("returns true for subagent stream_event wrappers", () => {
+    expect(isSubagentEvent({
+      type: "stream_event",
+      parent_tool_use_id: "toolu_01XYZ789",
+      event: { type: "message_start" },
+    })).toBe(true);
+  });
+
+  it("returns true for subagent user (tool_result) events", () => {
+    expect(isSubagentEvent({
+      type: "user",
+      parent_tool_use_id: "toolu_01XYZ789",
+      message: { role: "user", content: [{ type: "tool_result" }] },
+    })).toBe(true);
+  });
+});
+
+describe("isSubagentEvent + StateBuilder integration", () => {
+  it("context_pct stays stable when subagent events are filtered", () => {
+    const sb = new StateBuilder("test-session", "test-folder");
+
+    // Parent assistant at 80% context
+    const parentAssistant = {
+      type: "assistant",
+      parent_tool_use_id: null,
+      message: {
+        id: "msg_parent_01",
+        model: "claude-opus-4-6",
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_agent_01", name: "Agent", input: {} }],
+        stop_reason: "tool_use",
+        usage: {
+          input_tokens: 1,
+          cache_creation_input_tokens: 60000,
+          cache_read_input_tokens: 100000,
+          output_tokens: 100,
+        },
+      },
+    };
+    sb.handleEvent(parentAssistant);
+    expect(sb.getState().session.context_pct).toBe(80); // (1+60000+100000)/200000
+
+    // Subagent assistant at ~27% — should NOT reach state builder
+    const subagentAssistant = {
+      type: "assistant",
+      parent_tool_use_id: "toolu_agent_01",
+      message: {
+        id: "msg_sub_01",
+        model: "claude-haiku-4-5-20251001",
+        role: "assistant",
+        content: [{ type: "text", text: "Subagent response" }],
+        stop_reason: "end_turn",
+        usage: {
+          input_tokens: 2,
+          cache_creation_input_tokens: 30000,
+          cache_read_input_tokens: 24000,
+          output_tokens: 200,
+        },
+      },
+    };
+
+    // Simulate what bridge.ts does: filter, then only pass to state builder if not subagent
+    if (!isSubagentEvent(subagentAssistant)) {
+      sb.handleEvent(subagentAssistant);
+    }
+
+    // context_pct should still be 80%, not 27%
+    expect(sb.getState().session.context_pct).toBe(80);
+
+    // Verify: WITHOUT the filter, it would have been contaminated
+    sb.handleEvent(subagentAssistant); // deliberately skip filter
+    expect(sb.getState().session.context_pct).toBe(27); // contaminated!
+  });
+
+  it("subagent message_start does not wipe parent streaming state", () => {
+    const sb = new StateBuilder("test-session", "test-folder");
+
+    // Parent message_start
+    sb.handleEvent({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_start" } });
+    // Parent text block — start, delta, stop (full lifecycle so currentText is built)
+    sb.handleEvent({ type: "stream_event", parent_tool_use_id: null, event: {
+      type: "content_block_start", index: 0, content_block: { type: "text", text: "" },
+    }});
+    sb.handleEvent({ type: "stream_event", parent_tool_use_id: null, event: {
+      type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Parent text" },
+    }});
+    sb.handleEvent({ type: "stream_event", parent_tool_use_id: null, event: {
+      type: "content_block_stop", index: 0,
+    }});
+
+    // Subagent message_start — should be filtered by bridge
+    const subMsgStart = { type: "stream_event", parent_tool_use_id: "toolu_01", event: { type: "message_start" } };
+    if (!isSubagentEvent(subMsgStart)) {
+      sb.handleEvent(subMsgStart); // would wipe currentText, textBlocks, etc.
+    }
+
+    // Parent assistant message should use the accumulated text
+    sb.handleEvent({
+      type: "assistant", parent_tool_use_id: null,
+      message: {
+        id: "msg_01", role: "assistant",
+        content: [{ type: "text", text: "fallback" }],
+        usage: { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 },
+      },
+    });
+
+    const msgs = sb.getState().messages;
+    const assistantMsg = msgs.find(m => m.role === "assistant");
+    expect(assistantMsg?.content).toBe("Parent text");
+
+    // Verify: WITHOUT the filter, message_start would have wiped the text
+    const sb2 = new StateBuilder("test-session-2", "test-folder");
+    sb2.handleEvent({ type: "stream_event", event: { type: "message_start" } });
+    sb2.handleEvent({ type: "stream_event", event: {
+      type: "content_block_start", index: 0, content_block: { type: "text", text: "" },
+    }});
+    sb2.handleEvent({ type: "stream_event", event: {
+      type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Parent text" },
+    }});
+    sb2.handleEvent({ type: "stream_event", event: {
+      type: "content_block_stop", index: 0,
+    }});
+    // Unfiltered subagent message_start — wipes everything
+    sb2.handleEvent({ type: "stream_event", event: { type: "message_start" } });
+    sb2.handleEvent({
+      type: "assistant",
+      message: {
+        id: "msg_02", role: "assistant",
+        content: [{ type: "text", text: "fallback" }],
+        usage: { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 1 },
+      },
+    });
+    const msgs2 = sb2.getState().messages;
+    const assistantMsg2 = msgs2.find(m => m.role === "assistant");
+    // Without filter, streaming text was wiped — falls back to content array
+    expect(assistantMsg2?.content).toBe("fallback");
   });
 });

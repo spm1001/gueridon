@@ -45,6 +45,7 @@ import {
   type RestartReason,
   type LastToolCall,
   STALE_SESSION_MS,
+  isSubagentEvent,
 } from "./bridge-logic.js";
 
 import {
@@ -427,6 +428,8 @@ function wireProcess(session: Session): void {
 // -- Event handling + delta conflation --
 
 function handleCCEvent(session: Session, event: Record<string, unknown>): void {
+  if (isSubagentEvent(event)) return;
+
   // Clear init timeout on first system init event
   if (event.type === "system" && event.subtype === "init" && session.initTimer) {
     clearTimeout(session.initTimer);

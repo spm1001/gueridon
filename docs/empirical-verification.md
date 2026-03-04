@@ -278,6 +278,36 @@ Tested on tube (empty `settings.json: {}`, no blanket Bash allow) with three sce
 
 CC version 2.1.50. Known upstream issue: [#27099](https://github.com/anthropics/claude-code/issues/27099), [#20264](https://github.com/anthropics/claude-code/issues/20264).
 
+### Verified: Subagent Events Contaminate Parent Stdout (2026-03-04)
+
+**Subagent `assistant` messages (with their own `usage` data) flow through the parent's stdout during Agent/Task execution.** These events have `parent_tool_use_id` set (non-null) but are otherwise structurally identical to parent `assistant` events.
+
+**Diagnosed from session 85c5d728 (itv-slides-formatter, CC v2.1.68):**
+
+| Time | Event | context_pct shown |
+|------|-------|------------------|
+| 17:16:51 | Turn complete | 77% (154K parent tokens) |
+| 17:21:43 | New turn streaming | ~80% |
+| 17:22:00 | Agent "Audit docs" dispatched | 80% |
+| 17:22:?? | Subagent `assistant` events on stdout | **~53%** (subagent's own ~106K tokens) |
+| 17:23:17 | Agent result returns | **back to ~82%** (parent context) |
+| 17:26:43 | Turn complete | 87% |
+
+**Evidence chain:**
+1. SDK docs confirm `parent_tool_use_id` field on `PartialAssistantMessage` — subagent events flow through parent output
+2. JSONL shows NO subagent events (`isSidechain: false` on all 516 lines, zero sidechain events) — contamination is stdout-only, not persisted
+3. Bridge state builder (`handleAssistant`) has zero references to `parentToolUseID` — processes all `assistant` events identically
+4. Bridge logs show 77% → 87% with a 10-minute gap and 3 SSE reconnects — the drop was invisible to turn-complete logging (only visible to clients receiving mid-turn state snapshots)
+5. Screenshot captured at ~17:22 shows 53% with Agent chip in progress — exactly during the subagent execution window
+
+**Key facts:**
+- The subagent has its own context window with its own token count. The parent state builder overwrites `context_pct` with the subagent's smaller `usage.input_tokens / 200000`.
+- The drop is transient: parent's next `assistant` event (after Agent result) restores the correct percentage.
+- The JSONL is clean — only stdout is contaminated. Post-hoc analysis via JSONL cannot reproduce the bug.
+- Multiple parallel Agent dispatches compound the effect (each subagent emits its own `assistant` events).
+
+**Fix:** Filter on `parentToolUseID` in the state builder's usage extraction. See CC-EVENTS.md for event shape.
+
 ### Verified: Persistent Stdin Hangs on Unlisted Tools (2026-02-16)
 
 **In persistent `-p` mode with stdin pipe, an unlisted tool causes a hang, not a denial.** CC blocks waiting for interactive TTY approval that can never come. No output, no `permission_denials` event. The process must be killed externally.
