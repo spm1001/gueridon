@@ -15,7 +15,7 @@ One HTML file (`index.html`) served by the bridge. SSE for live events, POST for
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~423 tests, ~7s)
+npm test                     # Run all tests (~576 tests, ~8s)
 npm run test:watch           # Watch mode
 ```
 
@@ -113,6 +113,7 @@ The bridge is split across several modules in `server/`:
 - **Upload staging:** `POST /upload/:folder?stage=true` deposits files on disk and returns the manifest without injecting a prompt. The client stages deposits as pills below the textarea; on send, `buildDepositNoteClient()` composes deposit notes + user text as one prompt. Without `?stage=true` (share-sheet flow), upload auto-injects as before.
 - **`[guéridon:*]` prefix convention:** Bridge-injected messages use `[guéridon:system]`, `[guéridon:upload]` etc. StateBuilder detects these and marks as `synthetic: true` (rendered as system chips, prefix stripped). **Exception:** staged uploads contain a deposit note followed by user text — StateBuilder checks for text after the deposit suffix and keeps these as real user messages. The client's `renderUserBubble()` parses deposit notes into `📎 filename` references.
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
+- **`processAlive` field:** All `state` broadcasts include `processAlive: boolean`. The client uses `processAlive: false` to detect CC process exit (as opposed to idle between turns) — clears messages, opens switcher, same as the deliberate `/exit` path. Without this, stale messages lingered behind the switcher after natural CC exit.
 
 ## CC Process Flags (verified CC v2.1.63, 2026-03-02)
 
@@ -249,8 +250,11 @@ The document body scrolls (not a container element). This enables Safari Full Pa
 - Chunk-level updates (not token-level)
 - Session switcher: Now (active+paused) / Previous (closed with history) groups, fresh folders hidden unless searching. Per-folder session list with "+ New Session" at top. Swipe-down or tap handle to dismiss.
 - Push notifications via service worker
+- Push-to-talk: long-press anywhere on the `.btn-bar` (folder + context lozenges) activates `SpeechRecognition`. Release stops and auto-sends with `[dictated]` prefix. Send button is tap-only. Folder lozenge pulses orange (accent) during dictation. iOS system mic sounds are not suppressible.
+- Turn-complete chime: 350Hz sine wave, gain 0.06, 300ms decay. Plays when `data-busy` transitions false. Uses shared `AudioContext` (created on first user gesture for Safari).
+- Stale client detection: bridge sends `contentHash` (SHA-256 of client files) in SSE `hello` event. Client compares on reconnect; if different, textarea turns solid orange with "Update available — tap to reload" placeholder. Tapping reloads the page.
 - Upload staging: files deposit as pills below textarea, sent with prompt on send
-- `renderUserBubble()` detects `[guéridon:upload]` blocks in user messages and renders as `📎 filename` references (both optimistic bubbles and server-state re-renders)
+- `renderUserBubble()` detects `[guéridon:upload]` blocks in user messages and renders as `📎 filename` references (both optimistic bubbles and server-state re-renders). Bare URLs are truncated to `host/…` via `truncateAutolinks()` post-processing.
 - Drag-and-drop: document-level handlers with visual overlay (desktop only, mobile Safari doesn't fire drag events)
 
 ## Key Docs
