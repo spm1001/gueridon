@@ -4,10 +4,11 @@ After=network.target tailscaled.service
 
 [Service]
 Type=simple
-User=modha
+# Replace YOUR_USER with the unix user who runs the bridge
+User=YOUR_USER
 WorkingDirectory=/opt/gueridon
-Environment=HOME=/home/modha
-Environment=PATH=/home/modha/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/YOUR_USER
+Environment=PATH=/home/YOUR_USER/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=ENABLE_CLAUDEAI_MCP_SERVERS=false
 ExecStart=/opt/gueridon/node_modules/.bin/tsx server/bridge.ts
 KillMode=control-group

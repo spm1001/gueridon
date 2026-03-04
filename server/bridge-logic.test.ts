@@ -420,13 +420,13 @@ describe("buildCCArgs", () => {
   });
 
   it("includes the mobile system prompt with machine context", () => {
-    const args = buildCCArgs("x", false, "/home/modha/Repos/gueridon");
+    const args = buildCCArgs("x", false, "/home/user/Repos/gueridon");
     const promptIndex = args.indexOf("--append-system-prompt");
     const prompt = args[promptIndex + 1];
     expect(prompt).toContain("mobile device");
     expect(prompt).toContain("AskUserQuestion");
     expect(prompt).toContain("Do not SSH");
-    expect(prompt).toContain("/home/modha/Repos/gueridon");
+    expect(prompt).toContain("/home/user/Repos/gueridon");
   });
 
   it("system prompt works without folder", () => {
@@ -437,8 +437,8 @@ describe("buildCCArgs", () => {
   });
 
   it("system prompt includes folder when provided", () => {
-    const prompt = buildSystemPrompt("/home/modha/Repos/gueridon");
-    expect(prompt).toContain("Working directory: /home/modha/Repos/gueridon");
+    const prompt = buildSystemPrompt("/home/user/Repos/gueridon");
+    expect(prompt).toContain("Working directory: /home/user/Repos/gueridon");
   });
 
   it("ends with session arg", () => {
@@ -1419,7 +1419,7 @@ describe("classifyRestart", () => {
   const recentShutdown: ShutdownContext = {
     signal: "SIGTERM",
     timestamp: new Date(now.getTime() - 5_000).toISOString(), // 5 seconds ago
-    activeTurnFolders: ["/home/modha/Repos/gueridon"],
+    activeTurnFolders: ["/home/user/Repos/gueridon"],
   };
 
   it("returns 'crash' when no shutdown context exists", () => {
@@ -1427,20 +1427,20 @@ describe("classifyRestart", () => {
   });
 
   it("returns 'self-caused' when folder had active turn at shutdown", () => {
-    expect(classifyRestart(recentShutdown, "/home/modha/Repos/gueridon", now)).toBe("self-caused");
+    expect(classifyRestart(recentShutdown, "/home/user/Repos/gueridon", now)).toBe("self-caused");
   });
 
   it("returns 'external' when folder was idle at shutdown", () => {
-    expect(classifyRestart(recentShutdown, "/home/modha/Repos/other", now)).toBe("external");
+    expect(classifyRestart(recentShutdown, "/home/user/Repos/other", now)).toBe("external");
   });
 
   it("returns 'crash' when shutdown context is stale (> 24 hours)", () => {
     const staleCtx: ShutdownContext = {
       signal: "SIGTERM",
       timestamp: new Date(now.getTime() - SHUTDOWN_STALE_MS - 1000).toISOString(),
-      activeTurnFolders: ["/home/modha/Repos/gueridon"],
+      activeTurnFolders: ["/home/user/Repos/gueridon"],
     };
-    expect(classifyRestart(staleCtx, "/home/modha/Repos/gueridon", now)).toBe("crash");
+    expect(classifyRestart(staleCtx, "/home/user/Repos/gueridon", now)).toBe("crash");
   });
 
   it("returns 'external' when shutdown context is exactly at threshold", () => {
@@ -1591,8 +1591,8 @@ describe("formatToolCallSummary", () => {
   });
 
   it("formats Read with file_path", () => {
-    expect(formatToolCallSummary("Read", { file_path: "/home/modha/foo.ts" }))
-      .toBe("Read: /home/modha/foo.ts");
+    expect(formatToolCallSummary("Read", { file_path: "/home/user/foo.ts" }))
+      .toBe("Read: /home/user/foo.ts");
   });
 
   it("formats Write/Edit with file_path", () => {
@@ -1755,9 +1755,9 @@ describe("pendingSessions concurrency guard pattern", () => {
 
     // Launch 3 concurrent calls — the scenario from the bridge logs
     const [s1, s2, s3] = await Promise.all([
-      guardedFactory("/home/modha/Repos/gueridon"),
-      guardedFactory("/home/modha/Repos/gueridon"),
-      guardedFactory("/home/modha/Repos/gueridon"),
+      guardedFactory("/home/user/Repos/gueridon"),
+      guardedFactory("/home/user/Repos/gueridon"),
+      guardedFactory("/home/user/Repos/gueridon"),
     ]);
 
     // All three get the same session

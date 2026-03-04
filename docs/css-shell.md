@@ -5,7 +5,7 @@
 ## URL
 
 ```
-https://tube.atlas-cloud.ts.net/css-shell
+https://<your-tailscale-hostname>/css-shell
 ```
 
 Served by the bridge's STATIC_FILES (`/css-shell` → `css-shell.html`).

@@ -1198,7 +1198,7 @@ function serveStatic(pathname: string, res: ServerResponse): boolean {
 // CORS: only accept requests from known origins (gdn-kukohe).
 // Same-origin requests omit the Origin header — allow those unconditionally.
 const ALLOWED_ORIGINS = new Set([
-  `https://${process.env.TAILSCALE_HOSTNAME || "tube.atlas-cloud.ts.net"}`,
+  `https://${process.env.TAILSCALE_HOSTNAME || "localhost"}`,
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
 ]);
