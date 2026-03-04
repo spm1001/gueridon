@@ -156,7 +156,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now gueridon
 ```
 
-The unit file runs `tsx server/bridge.ts` as user `modha` with
+The unit file runs `tsx server/bridge.ts` as the configured user with
 `KillMode=process` — bridge restart does NOT kill CC child processes. They
 become orphans; the new bridge reaps them on startup (SIGTERM) and the next
 client connection resumes via `--resume`.

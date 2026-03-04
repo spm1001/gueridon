@@ -19,11 +19,11 @@ npm test                     # Run all tests (~576 tests, ~8s)
 npm run test:watch           # Watch mode
 ```
 
-Phone URL: `https://tube.atlas-cloud.ts.net/` (Tailscale HTTPS termination).
+Phone URL: `https://<your-tailscale-hostname>/` (Tailscale HTTPS termination). Set `TAILSCALE_HOSTNAME` env var.
 
 ## Deployment
 
-Runs on **tube** (Debian Linux, Tailscale). Single systemd service.
+Runs on a Debian Linux server via Tailscale. Single systemd service.
 
 **Two directories:**
 - **`/opt/gueridon`** — production checkout. The systemd service runs from here.

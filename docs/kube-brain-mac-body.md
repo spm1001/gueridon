@@ -31,7 +31,7 @@ The problem isn't file sync. It's session mobility. And the answer isn't making 
 │                                                    │
 │  Gueridon bridge :3001 ──► CC process ──► ~/Repos/ │
 │                                                    │
-│  webctl ──► sameers-m4:9222 (Mac's Chrome via TS)  │
+│  webctl ──► mac-host:9222 (Mac's Chrome via TS)    │
 │                                                    │
 │  tailscale drive share repos ~/Repos               │
 │                                                    │
@@ -132,15 +132,15 @@ Because CC runs on Kube, the CLI client automatically gets:
 
 On Kube:
 ```bash
-tailscale drive share repos /home/modha/Repos
+tailscale drive share repos $HOME/Repos
 ```
 
-On Mac, mount via Finder: Connect to Server → `http://100.100.100.100:8080/ts-domain/kube/repos`
+On Mac, mount via Finder: Connect to Server → `http://100.100.100.100:8080/<tailnet-domain>/<server-hostname>/repos`
 
 Or via CLI:
 ```bash
 # macOS mounts WebDAV natively
-mount_webdav http://100.100.100.100:8080/ts-domain/kube/repos /Volumes/kube-repos
+mount_webdav http://100.100.100.100:8080/<tailnet-domain>/<server-hostname>/repos /Volumes/server-repos
 ```
 
 ### Chrome CDP (Browser Control)
@@ -152,10 +152,10 @@ tailscale serve --bg 9222
 
 On Kube, update webctl config to point at Mac's Tailscale hostname:
 ```json
-{"cdp_endpoint": "http://sameers-macbook-air.tail-xyz.ts.net:9222"}
+{"cdp_endpoint": "http://<mac-hostname>.<your-tailnet>.ts.net:9222"}
 ```
 
-Note: `sameers-m4` has been offline for 140 days. The active Mac is `sameers-macbook-air`. Verify which is current and update accordingly.
+Note: verify which Mac is current on your tailnet and update the hostname accordingly.
 
 ### Dev Servers
 

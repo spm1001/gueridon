@@ -39,7 +39,7 @@ export type FolderActivity = "working" | "waiting" | null;
 
 export interface FolderInfo {
   name: string; // "gueridon"
-  path: string; // "/Users/modha/Repos/gueridon"
+  path: string; // "/home/user/Repos/gueridon"
   state: FolderState;
   activity: FolderActivity; // "working" = streaming, "waiting" = idle, null = no process
   sessionId: string | null; // most recent CC session UUID (for --resume)

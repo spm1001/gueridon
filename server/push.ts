@@ -39,7 +39,7 @@ function init(): void {
     const keys = JSON.parse(readFileSync(VAPID_PATH, "utf-8"));
     publicKey = keys.publicKey;
     webpush.setVapidDetails(
-      process.env.VAPID_SUBJECT || "mailto:gueridon@planetmodha.com",
+      process.env.VAPID_SUBJECT || "mailto:admin@example.com",
       keys.publicKey, keys.privateKey,
     );
     vapidReady = true;

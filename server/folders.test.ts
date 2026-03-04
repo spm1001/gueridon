@@ -95,8 +95,8 @@ beforeEach(() => {
 
 describe("encodePath", () => {
   it("replaces slashes with dashes", () => {
-    expect(encodePath("/Users/modha/Repos/gueridon")).toBe(
-      "-Users-modha-Repos-gueridon",
+    expect(encodePath("/Users/user/Repos/gueridon")).toBe(
+      "-Users-user-Repos-gueridon",
     );
   });
 
