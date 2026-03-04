@@ -417,6 +417,7 @@ function wireProcess(session: Session): void {
     }
     broadcastToSession(session, "state", {
       ...session.stateBuilder.getState(),
+      processAlive: false,
     });
     persistSessions(sessions.values());
   });
@@ -540,6 +541,7 @@ async function onTurnComplete(session: Session): Promise<void> {
   // Broadcast full state snapshot
   broadcastToSession(session, "state", {
     ...session.stateBuilder.getState(),
+    processAlive: true,
   });
 
   // Emit turn metrics from state builder's internal counters
@@ -1037,6 +1039,7 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
   broadcastToSession(session, "state", {
     ...session.stateBuilder.getState(),
     status: "idle",
+    processAlive: false,
   });
 
   // Clean up
@@ -1105,6 +1108,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
       // Broadcast state so the deposit message renders immediately
       broadcastToSession(session, "state", {
         ...session.stateBuilder.getState(),
+        processAlive: true,
       });
     }
 

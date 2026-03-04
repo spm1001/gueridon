@@ -427,6 +427,22 @@ function handleSSEState(data) {
     });
   }
 
+  // CC process exited — clean up like exitSession() so no stale messages linger
+  if (data.processAlive === false && sseCurrentFolder) {
+    sseCurrentFolder = null;
+    liveState.session = {};
+    liveState.messages = [];
+    liveState.status = 'idle';
+    liveState._activity = null;
+    liveState.slashCommands = null;
+    location.hash = '';
+    switcherOpen = true;
+    fetch(bridgeUrl + '/folders')
+      .then(r => r.json())
+      .then(d => { if (d.folders) handleSSEFolders(d.folders); })
+      .catch(() => {});
+  }
+
   sseRender();
 }
 

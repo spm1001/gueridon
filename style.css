@@ -197,6 +197,13 @@ body {
   background: var(--surface-raised);
   font-weight: 600;
 }
+.msg-assistant td code, .msg-assistant th code {
+  font-family: inherit;
+  font-size: inherit;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
 
 .msg-assistant blockquote {
   border-left: 3px solid var(--accent);
