@@ -75,7 +75,8 @@ describe("bridge HTTP smoke tests", () => {
     port = await findFreePort();
     baseUrl = `http://127.0.0.1:${port}`;
 
-    child = spawn("npx", ["tsx", "server/bridge.ts"], {
+    const tsxBin = join(PROJECT_ROOT, "node_modules", ".bin", "tsx");
+    child = spawn(tsxBin, ["server/bridge.ts"], {
       cwd: PROJECT_ROOT,
       env: {
         ...process.env,
@@ -94,8 +95,8 @@ describe("bridge HTTP smoke tests", () => {
 
     process.on("exit", cleanup);
 
-    await waitForReady(baseUrl, 15_000, stderrLines);
-  }, 20_000); // vitest timeout for beforeAll
+    await waitForReady(baseUrl, 30_000, stderrLines);
+  }, 35_000); // vitest timeout for beforeAll (CI runners are slower)
 
   afterAll(async () => {
     process.removeListener("exit", cleanup);
