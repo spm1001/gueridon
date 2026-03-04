@@ -427,6 +427,11 @@ body {
   background: var(--red);
   animation: mic-pulse 1s ease-in-out infinite;
 }
+.btn-bar[data-listening="true"] .btn-lozenge {
+  border-color: var(--red);
+  color: var(--red);
+  animation: mic-pulse 1s ease-in-out infinite;
+}
 @keyframes mic-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }

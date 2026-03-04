@@ -862,6 +862,7 @@ document.getElementById('folderBtn').addEventListener('click', () => {
 });
 
 // Context lozenge: tap when amber/red offers exit, long-press always offers exit
+// PTT fires at 300ms on the bar — if isListening is true, skip the exit confirm.
 {
   const contextBtn = document.getElementById('contextBtn');
   let longPressTimer = null;
@@ -870,6 +871,7 @@ document.getElementById('folderBtn').addEventListener('click', () => {
     didLongPress = false;
     longPressTimer = setTimeout(() => {
       didLongPress = true;
+      if (isListening) return; // PTT took over — don't show exit confirm
       if (sseCurrentFolder && confirm('End this session and return to the lobby?')) {
         exitSession();
       }
@@ -878,6 +880,7 @@ document.getElementById('folderBtn').addEventListener('click', () => {
   contextBtn.addEventListener('pointerup', () => {
     clearTimeout(longPressTimer);
     if (didLongPress) return;
+    if (isListening) return; // PTT active — suppress tap action
     const level = contextBtn.dataset.level;
     if ((level === 'low' || level === 'critical') && sseCurrentFolder) {
       if (confirm('Context is running high. End this session and start fresh?')) {
@@ -1200,17 +1203,19 @@ function ensureAudioCtx() {
   return sharedAudioCtx;
 }
 
-// === Voice input — hold send button to dictate ===
-// Hold = dictate (text streams into textarea), release = stop + auto-send.
-// Tap (< 300ms) = normal send. Overloads the send button.
+// === Voice input — hold btn-bar to dictate ===
+// Hold anywhere on the bar (folder/context lozenges) = dictate, release = stop + auto-send.
+// Send button is tap-only (no hold overload). Individual button taps still work
+// (folder opens switcher, context shows exit) because PTT only activates after 300ms.
 //
 // Key insight: recognition.stop() is async. After calling it, onresult
 // keeps firing with final results. We must wait for onend before sending,
 // otherwise late results overwrite the textarea after it's been cleared.
 {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const btnBar = document.querySelector('.btn-bar');
 
-  if (SpeechRecognition) {
+  if (SpeechRecognition && btnBar) {
     let recognition = null;
     // isListening is hoisted to module scope (shared with chime block)
     let pendingSend = false; // true = send when recognition finishes
@@ -1263,19 +1268,11 @@ function ensureAudioCtx() {
       };
 
       recognition.onend = () => {
-        // All results flushed. Use finalTranscript if available,
-        // fall back to lastPreview (covers case where stop() didn't
-        // promote interim results to final).
-        // Prefer lastPreview — it includes final + interim, so nothing
-        // the user saw on screen gets silently dropped.
         const transcript = (lastPreview || finalTranscript).trim();
         cleanup();
         if (pendingSend && transcript) {
           ta.value = textBefore + '[dictated] ' + transcript;
           refreshSendButton();
-          // Clear suppressClick before our programmatic click —
-          // otherwise the capture-phase handler eats it.
-          suppressClick = false;
           sendBtn.click();
         }
         pendingSend = false;
@@ -1283,28 +1280,28 @@ function ensureAudioCtx() {
 
       function cleanup() {
         isListening = false;
-        sendBtn.dataset.listening = 'false';
+        btnBar.dataset.listening = 'false';
         recognition = null;
       }
 
       recognition.start();
       isListening = true;
       pendingSend = false;
-      sendBtn.dataset.listening = 'true';
+      btnBar.dataset.listening = 'true';
     }
 
     function requestStop(shouldSend) {
       if (!recognition) return;
       pendingSend = shouldSend;
       try { recognition.stop(); } catch(e) {}
-      // onend will fire async — that's where we send
     }
 
-    // Hold detection on send button
-    sendBtn.addEventListener('pointerdown', () => {
+    // Hold detection on the entire btn-bar (excluding send button)
+    btnBar.addEventListener('pointerdown', (e) => {
+      // Don't hijack the send button — it stays tap-only
+      if (e.target.closest('.btn-send')) return;
       ensureAudioCtx();
-      // If already listening (e.g. pointerup was lost to permission dialog),
-      // treat this press as stop + send.
+      // If already listening, treat as stop + send
       if (isListening) {
         suppressClick = true;
         requestStop(true);
@@ -1318,26 +1315,28 @@ function ensureAudioCtx() {
       }, HOLD_THRESHOLD);
     });
 
-    sendBtn.addEventListener('pointerup', () => {
+    btnBar.addEventListener('pointerup', (e) => {
+      if (e.target.closest('.btn-send')) return;
       if (holdTimer) {
         clearTimeout(holdTimer);
         holdTimer = null;
-        // Short tap — let natural click fire for normal send
+        // Short tap — let natural click fire for the individual button
       } else if (isListening) {
         requestStop(true);
       }
     });
 
-    sendBtn.addEventListener('pointercancel', () => {
+    btnBar.addEventListener('pointercancel', () => {
       if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
       if (isListening) requestStop(false);
     });
 
-    // Suppress the natural click that fires after hold-release.
-    // Our send happens programmatically from onend.
-    sendBtn.addEventListener('click', (e) => {
+    // Suppress click on folder/context buttons after hold-release.
+    // PTT sends programmatically from onend.
+    btnBar.addEventListener('click', (e) => {
       if (suppressClick) {
         e.stopImmediatePropagation();
+        e.preventDefault();
         suppressClick = false;
       }
     }, { capture: true });
