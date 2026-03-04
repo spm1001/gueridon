@@ -86,6 +86,9 @@ export type BridgeEvent =
   | { type: "request:rejected"; reason: string; method: string; url: string }
   | { type: "request:error"; action: string; error: string }
 
+  // Content hash
+  | { type: "content:changed"; contentHash: string }
+
   // Server lifecycle
   | { type: "server:start"; port: number; scanRoot: string }
   | { type: "server:shutdown"; signal: string }
@@ -140,6 +143,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "request:http": "debug",
   "request:rejected": "warn",
   "request:error": "error",
+  "content:changed": "info",
   "server:start": "info",
   "server:shutdown": "info",
   "server:shutdown-complete": "info",

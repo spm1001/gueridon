@@ -312,6 +312,15 @@ function sseConnect() {
     sseRender();
   });
 
+  // Live stale detection — bridge pushes when client files change on disk
+  sseSource.addEventListener('content-updated', (ev) => {
+    const data = JSON.parse(ev.data);
+    if (data.contentHash && data.contentHash !== sseContentHash) {
+      sseStale = true;
+      refreshPlaceholder();
+    }
+  });
+
   sseSource.addEventListener('folders', (ev) => {
     const data = JSON.parse(ev.data);
     sseResetWatchdog();

@@ -80,6 +80,7 @@ The bridge is split across several modules in `server/`:
 | `events.ts` | `BridgeEvent` type definitions, severity level mapping |
 | `logger.ts` | JSON-lines structured logger subscribed to event bus |
 | `status-buffer.ts` | Circular buffer of recent events for the `/status` debug endpoint |
+| `content-hash.ts` | Client file hash computation + fs.watch for live stale detection |
 | `fun-names.ts` | Alliterative folder name generator for share-sheet uploads |
 
 **Endpoints:**
@@ -252,7 +253,7 @@ The document body scrolls (not a container element). This enables Safari Full Pa
 - Push notifications via service worker
 - Push-to-talk: long-press anywhere on the `.btn-bar` (folder + context lozenges) activates `SpeechRecognition`. Release stops and auto-sends with `[dictated]` prefix. Send button is tap-only. Folder lozenge pulses orange (accent) during dictation. iOS system mic sounds are not suppressible.
 - Turn-complete chime: 350Hz sine wave, gain 0.06, 300ms decay. Plays when `data-busy` transitions false. Uses shared `AudioContext` (created on first user gesture for Safari).
-- Stale client detection: bridge sends `contentHash` (SHA-256 of client files) in SSE `hello` event. Client compares on reconnect; if different, textarea turns solid orange with "Update available — tap to reload" placeholder. Tapping reloads the page.
+- Stale client detection: `content-hash.ts` watches client files via `fs.watch` (inotify on Linux). When files change on disk, it recomputes the SHA-256 hash and the bridge pushes a `content-updated` SSE event to all connected clients. Client also compares `contentHash` in `hello` events on reconnect. Either path sets the textarea to solid orange with "Update available — tap to reload". Frontend changes take effect without bridge restart — files are served fresh from disk, and the watcher notifies clients to reload.
 - Upload staging: files deposit as pills below textarea, sent with prompt on send
 - `renderUserBubble()` detects `[guéridon:upload]` blocks in user messages and renders as `📎 filename` references (both optimistic bubbles and server-state re-renders). Bare URLs are truncated to `host/…` via `truncateAutolinks()` post-processing.
 - Drag-and-drop: document-level handlers with visual overlay (desktop only, mobile Safari doesn't fire drag events)

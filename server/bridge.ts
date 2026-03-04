@@ -17,7 +17,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import {
   buildCCArgs,
@@ -67,6 +67,7 @@ import { buildDepositNote, buildShareDepositNote } from "./upload.js";
 import { depositFiles } from "./deposit.js";
 import { persistSessions, reapOrphans } from "./orphan.js";
 import { generateFolderName } from "./fun-names.js";
+import { getContentHash, startWatcher, stopWatcher } from "./content-hash.js";
 import { requestContext, generateRequestId } from "./request-context.js";
 
 // -- Types --
@@ -226,7 +227,7 @@ function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): 
   emit({ type: "sse:connect", clientId });
 
   const vapidPublicKey = getVapidPublicKey();
-  sendSSE(client, "hello", { version: 1, contentHash, clientId, reconnect, pushToken, ...(vapidPublicKey ? { vapidPublicKey } : {}) });
+  sendSSE(client, "hello", { version: 1, contentHash: getContentHash(), clientId, reconnect, pushToken, ...(vapidPublicKey ? { vapidPublicKey } : {}) });
 
   // Send folders asynchronously
   scanFolders(buildActiveSessionsMap()).then((folders) =>
@@ -1163,17 +1164,8 @@ async function handleShareUpload(req: IncomingMessage, res: ServerResponse): Pro
 
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Content hash of client-facing files — computed once at startup.
-// Sent in SSE hello so the client can detect when it's stale after a deploy.
-const CLIENT_FILES = ["index.html", "style.css", "client/render-utils.cjs", "client/render-chips.cjs",
-  "client/render-messages.cjs", "client/render-chrome.cjs", "client/render-overlays.cjs"];
-const contentHash = (() => {
-  const h = createHash("sha256");
-  for (const f of CLIENT_FILES) {
-    try { h.update(readFileSync(join(PROJECT_ROOT, f))); } catch {}
-  }
-  return h.digest("hex").slice(0, 12);
-})();
+// Content hash — computed and watched by content-hash.ts.
+// Watcher started at bottom of file; notifies connected clients on file change.
 
 // STATIC_FILES and CSP imported from bridge-logic.ts
 
@@ -1520,8 +1512,9 @@ function shutdown(signal: string): void {
   // Stop accepting new connections
   server.close();
 
-  // Stop pinging
+  // Stop pinging and file watching
   clearInterval(pingTimer);
+  stopWatcher();
 
   // Kill all child CC processes
   for (const session of sessions.values()) {
@@ -1569,6 +1562,14 @@ process.on("unhandledRejection", (reason) => {
 initLogger();
 initStatusBuffer();
 reapOrphans();
+
+// Watch client files for changes — push stale notification to connected clients
+startWatcher(PROJECT_ROOT, (newHash) => {
+  emit({ type: "content:changed", contentHash: newHash });
+  for (const client of allClients) {
+    sendSSE(client, "content-updated", { contentHash: newHash });
+  }
+});
 
 server.listen(PORT, () => {
   emit({ type: "server:start", port: PORT, scanRoot: SCAN_ROOT });

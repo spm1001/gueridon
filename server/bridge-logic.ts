@@ -35,6 +35,14 @@ export const STATIC_FILES: Record<string, { file: string; mime: string }> = {
   "/fixtures.js": { file: "client/fixtures.cjs", mime: "application/javascript" },
 };
 
+// Client-facing files whose content determines the contentHash sent in SSE hello.
+// Co-located with STATIC_FILES; used by content-hash.ts for hash computation.
+export const CLIENT_FILES = [
+  "index.html", "style.css",
+  "client/render-utils.cjs", "client/render-chips.cjs",
+  "client/render-messages.cjs", "client/render-chrome.cjs", "client/render-overlays.cjs",
+];
+
 // CSP: restrict what index.html can load (gdn-tilozu).
 // 'unsafe-inline' required for inline <script> and <style> in index.html.
 // connect-src 'self' allows SSE + POST to same origin only.
