@@ -277,8 +277,11 @@ function renderSwitcher(state, opts) {
  * @param {string|null} opts.model
  */
 function updatePlaceholder(textarea, opts) {
-  const { currentFolder, connection, status, activity, model } = opts;
-  if (!currentFolder) {
+  const { currentFolder, connection, status, activity, model, stale } = opts;
+  textarea.dataset.stale = stale ? 'true' : '';
+  if (stale) {
+    textarea.placeholder = 'Update available \u2014 tap to reload';
+  } else if (!currentFolder) {
     textarea.placeholder = 'Choose a folder\u2026';
   } else if (connection === 'loading') {
     textarea.placeholder = 'Resuming\u2026';

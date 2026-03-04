@@ -34,8 +34,6 @@
     <div id="askContent"></div>
   </div>
 
-  <div class="update-banner" id="updateBanner">Update available — tap to reload</div>
-
   <div class="drop-overlay" id="dropOverlay">
     <div class="drop-overlay-label">Drop files here</div>
   </div>
@@ -247,6 +245,7 @@ let sseCurrentFolder = null; // folder name we're connected to
 let ssePushToken = null;     // bridge-issued token for push subscribe/unsubscribe auth (gdn-ricocu)
 let sseWatchdog = null;
 let sseContentHash = null; // content hash from first hello — null until set
+let sseStale = false;      // true when bridge has newer client files
 const SSE_WATCHDOG_MS = 65_000; // 60s silence = dead (pings every 30s + margin)
 
 // Live state — shared between SSE and WS modes
@@ -278,7 +277,8 @@ function sseConnect() {
       if (!sseContentHash) {
         sseContentHash = data.contentHash;
       } else if (data.contentHash !== sseContentHash) {
-        showUpdateBanner();
+        sseStale = true;
+        refreshPlaceholder();
       }
     }
     // SSE connected, but if we need to reload session state, stay in 'loading'
@@ -590,11 +590,6 @@ async function ssePostExit(folderName) {
   }
 }
 
-function showUpdateBanner() {
-  const banner = document.getElementById('updateBanner');
-  if (banner) banner.classList.add('visible');
-}
-
 async function exitSession() {
   if (!bridgeUrl || !sseCurrentFolder) return;
   await ssePostExit(sseCurrentFolder);
@@ -640,6 +635,7 @@ function refreshPlaceholder() {
     status: liveState.status,
     activity: liveState._activity,
     model: liveState.session?.model,
+    stale: sseStale,
   });
 }
 
@@ -864,9 +860,6 @@ document.getElementById('switcherSearch').addEventListener('input', () => {
   if (cachedState) refreshSwitcher();
 });
 
-// Update banner: tap to reload
-document.getElementById('updateBanner').addEventListener('click', () => location.reload());
-
 // Folder lozenge: tap opens session switcher
 document.getElementById('folderBtn').addEventListener('click', () => {
   switcherOpen = true;
@@ -919,6 +912,7 @@ ta.addEventListener('input', () => refreshSendButton());
 
 // Tapping input scrolls to latest — user wants to see recent messages to compose a reply
 ta.addEventListener('focus', () => {
+  if (sseStale) { location.reload(); return; }
   window.scrollTo({ top: document.body.scrollHeight });
 });
 
