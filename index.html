@@ -367,6 +367,18 @@ function sseConnect() {
     if (!data) return;
     sseResetWatchdog();
     if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
+    // If we had a previous overlay with content, commit it before replacing.
+    // This handles message boundaries (inner API calls) where CC starts a new
+    // assistant message — without this, the previous text/tools vanish.
+    // The turn-end state snapshot replaces liveState.messages authoritatively.
+    if (currentMessage && (streamingText || currentMessage.tool_calls?.length)) {
+      liveState.messages.push({
+        role: 'assistant',
+        content: streamingText || currentMessage.text || null,
+        tool_calls: currentMessage.tool_calls || undefined,
+        thinking: currentMessage.thinking || undefined,
+      });
+    }
     currentMessage = data;
     streamingText = data.text || '';
     liveState.status = 'working';
