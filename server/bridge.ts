@@ -335,6 +335,12 @@ function spawnCC(session: Session): void {
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     // No terminal to update
     CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
+    // No interactive survey through bridge
+    CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1",
+    // No telemetry/analytics from bridge-spawned processes
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    // Account info is noise in headless mode
+    CLAUDE_CODE_HIDE_ACCOUNT_INFO: "1",
   };
   session.process = spawn("claude", args, {
     stdio: ["pipe", "pipe", "pipe"],

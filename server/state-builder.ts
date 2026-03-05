@@ -31,6 +31,14 @@ export interface BBToolCall {
   collapsed: boolean;
 }
 
+/** The in-flight assistant message being streamed (not yet committed to messages[]). */
+export interface CurrentMessage {
+  text: string | null;
+  tool_calls: BBToolCall[];
+  thinking: string | null;
+  activity: "thinking" | "writing" | "tool" | null;
+}
+
 export interface BBSlashCommand {
   name: string;
   description: string;
@@ -61,6 +69,15 @@ export type SSEDelta =
   | { type: "ask_user"; questions: AskUserQuestion[]; toolCallId: string }
   | { type: "message_start" }
   | { type: "api_error"; error: string }
+  | null;
+
+// -- Signal types (new protocol — what changed, not what to broadcast) --
+
+export type StateSignal =
+  | { signal: "text" }
+  | { signal: "structure" }
+  | { signal: "status" }
+  | { signal: "ask_user"; questions: AskUserQuestion[]; toolCallId: string }
   | null;
 
 // -- Constants --
@@ -145,6 +162,9 @@ export class StateBuilder {
   // the reset; during replay, message_start never fires so handleAssistant must.
   private replaying = false;
 
+  // Current activity — tracks the latest content block type being streamed
+  private currentActivity: "thinking" | "writing" | "tool" | null = null;
+
   // True after handleAssistant pushes a new message. content_block_stop only
   // patches state.messages when this is true, preventing blocks from a new
   // inner API call from overwriting the previous message. Reset by
@@ -186,6 +206,29 @@ export class StateBuilder {
     return JSON.parse(JSON.stringify(this.state));
   }
 
+  /** The in-flight streaming message, or null when idle. */
+  getCurrentMessage(): CurrentMessage | null {
+    if (this.state.status !== "working") return null;
+
+    // Build thinking from accumulated blocks
+    let thinking: string | null = null;
+    if (this.thinkingBlocks.size > 0) {
+      const parts: string[] = [];
+      for (const idx of [...this.thinkingBlocks.keys()].sort((a, b) => a - b)) {
+        const t = this.thinkingBlocks.get(idx);
+        if (t) parts.push(t);
+      }
+      if (parts.length > 0) thinking = parts.join("\n\n");
+    }
+
+    return {
+      text: this.currentText || null,
+      tool_calls: [...this.currentToolCalls],
+      thinking,
+      activity: this.currentActivity,
+    };
+  }
+
   /** Turn-level metrics for logging. */
   getTurnMetrics(): { inputTokens: number; outputTokens: number; toolCalls: number } {
     // Sum output tokens across all messages in the turn (partial emissions for the
@@ -223,6 +266,45 @@ export class StateBuilder {
     }
     if (Array.isArray(raw)) return raw.filter((d): d is NonNullable<SSEDelta> => d !== null);
     return raw ? [raw as NonNullable<SSEDelta>] : [];
+  }
+
+  /**
+   * Process a CC event, return a signal indicating what changed.
+   * The bridge uses this + getCurrentMessage() to decide what to send.
+   * Calls handleEvent() internally — both APIs update the same state.
+   */
+  handleEventSignal(event: Record<string, unknown>): StateSignal {
+    const deltas = this.handleEvent(event);
+    if (deltas.length === 0) return null;
+
+    // Derive signal from the deltas produced.
+    // Priority: ask_user > status > structure > text
+    let hasText = false;
+    let hasStructure = false;
+
+    for (const d of deltas) {
+      switch (d.type) {
+        case "ask_user":
+          return { signal: "ask_user", questions: d.questions, toolCallId: d.toolCallId };
+        case "status":
+          return { signal: "status" };
+        case "tool_start":
+        case "tool_complete":
+        case "message_start":
+        case "api_error":
+          hasStructure = true;
+          break;
+        case "content":
+        case "thinking_content":
+          hasText = true;
+          break;
+        // activity deltas are informational — folded into getCurrentMessage()
+      }
+    }
+
+    if (hasStructure) return { signal: "structure" };
+    if (hasText) return { signal: "text" };
+    return null;
   }
 
   /** Replay JSONL events (from parseSessionJSONL). Builds state silently — no deltas. */
@@ -307,6 +389,7 @@ export class StateBuilder {
     this.askUserBlockToolId.clear();
     this.currentMessagePushed = false;
     this.turnHasAssistant = false;
+    this.currentActivity = null;
     return { type: "message_start" };
   }
 
@@ -337,6 +420,7 @@ export class StateBuilder {
       this.askUserBlockIndices.clear();
       this.askUserBlockToolId.clear();
       this.currentMessagePushed = false;
+      this.currentActivity = null;
       isNewApiCall = true;
     }
 
@@ -345,6 +429,7 @@ export class StateBuilder {
     let activity: SSEDelta = null;
 
     if (blockType === "text") {
+      this.currentActivity = "writing";
       activity = { type: "activity", activity: "writing" };
     } else if (blockType === "tool_use") {
       const name = (block.name as string) || "Unknown";
@@ -371,8 +456,10 @@ export class StateBuilder {
       this.currentToolCalls.push(call);
       if (toolId) this.toolIdToIndex.set(toolId, callIndex);
       this.toolBlockToCallIndex.set(index, callIndex);
+      this.currentActivity = "tool";
       activity = { type: "activity", activity: "tool" };
     } else if (blockType === "thinking") {
+      this.currentActivity = "thinking";
       activity = { type: "activity", activity: "thinking" };
     }
 
@@ -735,6 +822,7 @@ export class StateBuilder {
 
   private handleResult(event: Record<string, unknown>): SSEDelta {
     this.state.status = "idle";
+    this.currentActivity = null;
 
     // Process exit error — surface as inline error message (like api_error)
     if (event.is_error && typeof event.result === "string" && event.result) {

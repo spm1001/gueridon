@@ -174,6 +174,9 @@ The bridge sets these on spawned CC processes (in `spawnCC()` in `bridge.ts`):
 | `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR` | `1` | Reset CWD after each Bash command — sessions must stay in their project folder |
 | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` | `1` | No TTY for background task management |
 | `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` | `1` | No terminal to update |
+| `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY` | `1` | Survey is interactive TUI, can't work through bridge |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | No telemetry/analytics from bridge-spawned processes |
+| `CLAUDE_CODE_HIDE_ACCOUNT_INFO` | `1` | Account info is noise in headless mode |
 
 Other CC environment variables worth knowing about (not currently set):
 

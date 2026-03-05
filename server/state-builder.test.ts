@@ -2190,4 +2190,288 @@ describe("StateBuilder", () => {
       compareMessages(clientMsgs, serverState.messages);
     });
   });
+
+  // -- getCurrentMessage() --
+
+  describe("getCurrentMessage", () => {
+    it("returns null when idle", () => {
+      const sb = new StateBuilder("s1", "/test");
+      expect(sb.getCurrentMessage()).toBeNull();
+    });
+
+    it("returns null after turn completes", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "hello"));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg-1", [{ type: "text", text: "hello" }]));
+      sb.handleEvent(resultEvent());
+      expect(sb.getCurrentMessage()).toBeNull();
+    });
+
+    it("returns streaming text during content emission", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "hello "));
+      sb.handleEvent(textDelta(0, "world"));
+
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      // Text is accumulated per-block but currentText only updates at blockStop.
+      // During streaming, getCurrentMessage reads the raw accumulator.
+      expect(msg!.activity).toBe("writing");
+    });
+
+    it("returns text after content_block_stop", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "hello world"));
+      sb.handleEvent(blockStop(0));
+
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      expect(msg!.text).toBe("hello world");
+      expect(msg!.activity).toBe("writing");
+    });
+
+    it("returns thinking during thinking block", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "let me think..."));
+
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      expect(msg!.activity).toBe("thinking");
+      // thinking is accumulated per-block
+      expect(msg!.thinking).toBe("let me think...");
+    });
+
+    it("returns tool calls during tool execution", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "Bash", "tool-1"));
+      sb.handleEvent(inputJsonDelta(0, '{"command":"ls"}'));
+      sb.handleEvent(blockStop(0));
+
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      expect(msg!.tool_calls).toHaveLength(1);
+      expect(msg!.tool_calls[0].name).toBe("Bash");
+      expect(msg!.tool_calls[0].input).toBe("ls");
+      expect(msg!.activity).toBe("tool");
+    });
+
+    it("returns combined text + tools + thinking", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      // Thinking block
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "hmm"));
+      sb.handleEvent(blockStop(0));
+
+      // Text block
+      sb.handleEvent(textBlockStart(1));
+      sb.handleEvent(textDelta(1, "I'll check"));
+      sb.handleEvent(blockStop(1));
+
+      // Tool block
+      sb.handleEvent(toolBlockStart(2, "Read", "tool-1"));
+      sb.handleEvent(inputJsonDelta(2, '{"file_path":"/etc/hosts"}'));
+      sb.handleEvent(blockStop(2));
+
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      expect(msg!.thinking).toBe("hmm");
+      expect(msg!.text).toBe("I'll check");
+      expect(msg!.tool_calls).toHaveLength(1);
+      expect(msg!.tool_calls[0].name).toBe("Read");
+      expect(msg!.activity).toBe("tool"); // last block type
+    });
+
+    it("resets on message_start (new turn)", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "first"));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg-1", [{ type: "text", text: "first" }]));
+
+      // New turn
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      expect(msg!.text).toBeNull();
+      expect(msg!.tool_calls).toHaveLength(0);
+      expect(msg!.thinking).toBeNull();
+      expect(msg!.activity).toBeNull();
+    });
+
+    it("activity tracks through thinking → writing → tool", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+
+      sb.handleEvent(thinkingBlockStart(0));
+      expect(sb.getCurrentMessage()!.activity).toBe("thinking");
+      sb.handleEvent(thinkingDelta(0, "hmm"));
+      sb.handleEvent(blockStop(0));
+
+      sb.handleEvent(textBlockStart(1));
+      expect(sb.getCurrentMessage()!.activity).toBe("writing");
+      sb.handleEvent(textDelta(1, "ok"));
+      sb.handleEvent(blockStop(1));
+
+      sb.handleEvent(toolBlockStart(2, "Bash", "t1"));
+      expect(sb.getCurrentMessage()!.activity).toBe("tool");
+    });
+
+    it("returns a defensive copy (mutations don't affect state)", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "Bash", "tool-1"));
+      sb.handleEvent(inputJsonDelta(0, '{"command":"echo hi"}'));
+      sb.handleEvent(blockStop(0));
+
+      const msg = sb.getCurrentMessage()!;
+      msg.tool_calls.push({ name: "Fake", status: "running", input: "", output: null, collapsed: false });
+
+      const msg2 = sb.getCurrentMessage()!;
+      expect(msg2.tool_calls).toHaveLength(1); // original unchanged
+    });
+  });
+
+  // -- handleEventSignal() --
+
+  describe("handleEventSignal", () => {
+    it("returns status signal on system:init", () => {
+      const sb = new StateBuilder("s1", "/test");
+      const sig = sb.handleEventSignal(systemInit());
+      expect(sig).toEqual({ signal: "status" });
+    });
+
+    it("returns null on message_start (activity-only delta)", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      // message_start emits { type: "message_start" } which is structure
+      const sig = sb.handleEventSignal(messageStart());
+      expect(sig).toEqual({ signal: "structure" });
+    });
+
+    it("returns null on tool block start (activity-only, no structure yet)", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      const sig = sb.handleEventSignal(toolBlockStart(0, "Bash", "t1"));
+      // tool_use block start emits only an activity delta — structure comes at blockStop
+      expect(sig).toBeNull();
+    });
+
+    it("returns text on content_block_stop for text", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "hello"));
+      const sig = sb.handleEventSignal(blockStop(0));
+      expect(sig).toEqual({ signal: "text" });
+    });
+
+    it("returns text on thinking_content", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(thinkingBlockStart(0));
+      sb.handleEvent(thinkingDelta(0, "hmm"));
+      const sig = sb.handleEventSignal(blockStop(0));
+      expect(sig).toEqual({ signal: "text" });
+    });
+
+    it("returns structure on tool_start (blockStop for tool_use)", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "Bash", "t1"));
+      sb.handleEvent(inputJsonDelta(0, '{"command":"ls"}'));
+      const sig = sb.handleEventSignal(blockStop(0));
+      expect(sig).toEqual({ signal: "structure" });
+    });
+
+    it("returns structure on tool_complete", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "Bash", "t1"));
+      sb.handleEvent(inputJsonDelta(0, '{"command":"ls"}'));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg-1", [
+        { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } },
+      ]));
+
+      const sig = sb.handleEventSignal(toolResult("t1", "file.txt"));
+      expect(sig).toEqual({ signal: "structure" });
+    });
+
+    it("returns status on result event", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "done"));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg-1", [{ type: "text", text: "done" }]));
+      const sig = sb.handleEventSignal(resultEvent());
+      expect(sig).toEqual({ signal: "status" });
+    });
+
+    it("returns ask_user signal on AskUserQuestion", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(toolBlockStart(0, "AskUserQuestion", "ask-1"));
+      sb.handleEvent(inputJsonDelta(0, JSON.stringify({
+        questions: [{
+          question: "Choose one",
+          header: "Options",
+          options: [{ label: "A" }, { label: "B" }],
+          multiSelect: false,
+        }],
+      })));
+      const sig = sb.handleEventSignal(blockStop(0));
+      expect(sig!.signal).toBe("ask_user");
+      if (sig!.signal === "ask_user") {
+        expect(sig!.questions).toHaveLength(1);
+        expect(sig!.toolCallId).toBe("ask-1");
+      }
+    });
+
+    it("returns null on unknown event type", () => {
+      const sb = new StateBuilder("s1", "/test");
+      const sig = sb.handleEventSignal({ type: "unknown_thing" });
+      expect(sig).toBeNull();
+    });
+
+    it("returns null on content_block_delta (accumulated, no delta emitted)", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      const sig = sb.handleEventSignal(textDelta(0, "hello"));
+      expect(sig).toBeNull();
+    });
+  });
 });
