@@ -306,7 +306,26 @@ CC version 2.1.50. Known upstream issue: [#27099](https://github.com/anthropics/
 - The JSONL is clean — only stdout is contaminated. Post-hoc analysis via JSONL cannot reproduce the bug.
 - Multiple parallel Agent dispatches compound the effect (each subagent emits its own `assistant` events).
 
-**Fix:** Filter on `parentToolUseID` in the state builder's usage extraction. See CC-EVENTS.md for event shape.
+**Fix:** Filter on `parent_tool_use_id` at the `handleCCEvent` choke point — before the state builder ever sees the event. See implementation in gdn-tukeco.
+
+### Verified: parent_tool_use_id Filter Works on Live Stdout (2026-03-05)
+
+**The `isSubagentEvent()` filter (gdn-tukeco) is confirmed working on production CC stdout.** Added `subagentFiltered` counter to `turn:complete` events (gdn-wukuru) — increments each time `isSubagentEvent()` catches an event with `parent_tool_use_id != null`.
+
+**Live observation from session 37fe668d (gueridon, CC v2.1.63):**
+
+```json
+{"type":"turn:complete","folder":"gueridon","sessionId":"37fe668d-...","durationMs":50771,
+ "inputTokens":58951,"outputTokens":32,"contextPct":29,"toolCalls":6,"subagentFiltered":7}
+```
+
+A single Explore-type Agent dispatch produced **7 filtered subagent events** in one turn. These events would previously have contaminated the parent state builder (context % drop, phantom messages).
+
+**Key findings:**
+- `parent_tool_use_id` is present and non-null on real CC stdout events during Agent execution — confirmed empirically, not just from SDK docs
+- 7 events per single Agent is typical (message_start, content blocks, assistant partial, etc.)
+- The counter only appears in logs when > 0 (no noise on normal turns)
+- Filter operates at `handleCCEvent` before any state builder processing — zero contamination path
 
 ### Verified: Persistent Stdin Hangs on Unlisted Tools (2026-02-16)
 
