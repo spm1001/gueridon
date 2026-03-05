@@ -258,6 +258,10 @@ let liveState = {
   _activity: null,
 };
 
+// New protocol state (gdn-kemezo) — server-authoritative streaming
+let streamingText = '';       // accumulated from 'text' append events
+let currentMessage = null;    // from 'current' events (full CurrentMessage)
+
 /** Parse SSE event data, returning null on malformed JSON (e.g. truncated reconnect). */
 function sseParseData(ev) {
   try { return JSON.parse(ev.data); }
@@ -309,6 +313,8 @@ function sseConnect() {
       // Without this, 'connected' flashes before messages load.
       liveState.connection = 'loading';
       liveState.messages = [];
+      currentMessage = null;
+      streamingText = '';
       ssePostSession(sseCurrentFolder);
     } else if (location.hash.length > 1) {
       liveState.connection = 'loading';
@@ -345,12 +351,43 @@ function sseConnect() {
     handleSSEState(data);
   });
 
-  sseSource.addEventListener('delta', (ev) => {
+  // New protocol (gdn-kemezo): text appends, current message, ask_user
+  sseSource.addEventListener('text', (ev) => {
     const data = sseParseData(ev);
     if (!data) return;
     sseResetWatchdog();
     if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
-    handleSSEDelta(data);
+    streamingText += data.append || '';
+    liveState.status = 'working';
+    sseRender();
+  });
+
+  sseSource.addEventListener('current', (ev) => {
+    const data = sseParseData(ev);
+    if (!data) return;
+    sseResetWatchdog();
+    if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
+    currentMessage = data;
+    streamingText = data.text || '';
+    liveState.status = 'working';
+    liveState._activity = data.activity || null;
+    sseRender();
+  });
+
+  sseSource.addEventListener('ask_user', (ev) => {
+    const data = sseParseData(ev);
+    if (!data) return;
+    sseResetWatchdog();
+    if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
+    showAskUserOverlay(data.questions, data.toolCallId, {
+      els: askEls,
+      onAnswer(answer) {
+        ssePostPrompt(sseCurrentFolder, answer);
+        liveState.messages.push({ role: 'user', content: answer });
+        sseRender();
+      },
+      onDismiss() { ta.focus(); },
+    });
   });
 
   sseSource.addEventListener('ping', () => {
@@ -427,6 +464,10 @@ function handleSSEState(data) {
   // State snapshot arrived — clear loading/disconnected amber tint
   liveState.connection = 'connected';
 
+  // State snapshot is authoritative — clear streaming overlay (gdn-kemezo)
+  currentMessage = null;
+  streamingText = '';
+
   if (data.messages) {
     console.log('[bb] state snapshot:', data.messages.length, 'msgs');
     liveState.messages = data.messages;
@@ -455,6 +496,8 @@ function handleSSEState(data) {
     liveState.status = 'idle';
     liveState._activity = null;
     liveState.slashCommands = null;
+    currentMessage = null;
+    streamingText = '';
     location.hash = '';
     switcherOpen = true;
     fetch(bridgeUrl + '/folders')
@@ -466,105 +509,8 @@ function handleSSEState(data) {
   sseRender();
 }
 
-function handleSSEDelta(data) {
-  switch (data.type) {
-    case 'status':
-      liveState.status = data.status;
-      if (data.status === 'idle') liveState._activity = null;
-      if (data.status === 'working') {
-        lastPushTag = null; // new turn — allow next idle notification
-      }
-      break;
-
-    case 'message_start':
-      // New message boundary — either outer turn start or inner API call
-      // (mini-reset). Always push a fresh assistant message.
-      liveState.messages.push({ role: 'assistant', content: null });
-      console.log('[bb] message_start, now', liveState.messages.length, 'msgs');
-      break;
-
-    case 'activity':
-      liveState._activity = data.activity;
-      liveState.status = 'working';
-      // Ensure an assistant message exists for incoming content/tool deltas
-      ensureAssistantMessage();
-      break;
-
-    case 'content': {
-      const msg = ensureAssistantMessage();
-      msg.content = data.text;
-      break;
-    }
-
-    case 'tool_start': {
-      const msg = ensureAssistantMessage();
-      if (!msg.tool_calls) msg.tool_calls = [];
-      // Ensure we have an entry at this index
-      while (msg.tool_calls.length <= data.index) {
-        msg.tool_calls.push({ name: '', status: 'running', input: '', output: null, collapsed: true });
-      }
-      msg.tool_calls[data.index] = {
-        name: data.name,
-        status: 'running',
-        input: data.input || '',
-        output: null,
-        collapsed: true,
-      };
-      break;
-    }
-
-    case 'tool_complete': {
-      // Search backwards — tool_complete may arrive after message_start pushed
-      // a new assistant message, so the tool lives in a previous message.
-      // Match on index AND status=running to avoid updating the wrong tool.
-      for (let i = liveState.messages.length - 1; i >= 0; i--) {
-        const tc = liveState.messages[i]?.tool_calls?.[data.index];
-        if (tc && tc.status === 'running') {
-          tc.status = data.status;
-          if (data.output) tc.output = data.output;
-          break;
-        }
-      }
-      break;
-    }
-
-    case 'ask_user':
-      showAskUserOverlay(data.questions, data.toolCallId, {
-        els: askEls,
-        onAnswer(answer) {
-          ssePostPrompt(sseCurrentFolder, answer);
-          liveState.messages.push({ role: 'user', content: answer });
-          sseRender();
-        },
-        onDismiss() { ta.focus(); },
-      });
-      break;
-
-    case 'thinking_content': {
-      const msg = ensureAssistantMessage();
-      msg.thinking = data.text;
-      break;
-    }
-
-    case 'api_error':
-      liveState.status = 'idle';
-      liveState._activity = null;
-      liveState.messages.push({ role: 'assistant', content: data.error });
-      break;
-  }
-  sseRender();
-}
-
-/** Ensure the last message is an assistant message — create one if not.
- * Message splitting is driven by message_start deltas from the server
- * (emitted at turn start and on inner API call index collisions). */
-function ensureAssistantMessage() {
-  const last = liveState.messages[liveState.messages.length - 1];
-  if (last && last.role === 'assistant') return last;
-  const msg = { role: 'assistant', content: null };
-  liveState.messages.push(msg);
-  return msg;
-}
+// handleSSEDelta and ensureAssistantMessage removed (gdn-kemezo).
+// Client now uses text/current/state events — server is authoritative.
 
 async function ssePostSession(folderName, sessionId) {
   try {
@@ -635,6 +581,8 @@ async function exitSession() {
   liveState.status = 'idle';
   liveState._activity = null;
   liveState.slashCommands = null;
+  currentMessage = null;
+  streamingText = '';
   location.hash = '';
   switcherOpen = true;
   fetch(bridgeUrl + '/folders')
@@ -655,6 +603,8 @@ function sseConnectFolder(folder, sessionId) {
   liveState.messages = [];
   liveState.status = 'idle';
   liveState._activity = null;
+  currentMessage = null;
+  streamingText = '';
   liveState.connection = 'loading'; // amber tint until state snapshot arrives
   location.hash = name;
   stagedDeposits = [];
@@ -687,7 +637,18 @@ function sseRender() {
     const scrollGap = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
     const wasNearBottom = scrollGap < 150;
 
-    renderMessages(document.getElementById('messages'), liveState.messages, {
+    // Compose committed messages + streaming overlay (gdn-kemezo)
+    const displayMessages = [...liveState.messages];
+    if (currentMessage || streamingText) {
+      displayMessages.push({
+        role: 'assistant',
+        content: streamingText || currentMessage?.text || null,
+        tool_calls: currentMessage?.tool_calls || undefined,
+        thinking: currentMessage?.thinking || undefined,
+      });
+    }
+
+    renderMessages(document.getElementById('messages'), displayMessages, {
       status: liveState.status,
       connection: liveState.connection,
       activity: liveState._activity,

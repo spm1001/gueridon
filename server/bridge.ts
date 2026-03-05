@@ -573,7 +573,11 @@ function emitNewProtocol(session: Session, deltas: NonNullable<SSEDelta>[]): voi
       session.lastSentTextLength = 0;
       break;
     case "ask_user":
-      // ask_user is already handled by old delta path — no new event needed
+      // Emit as dedicated SSE event type (gdn-kemezo — client killed delta path)
+      broadcastToSession(session, "ask_user", {
+        questions: signal.questions,
+        toolCallId: signal.toolCallId,
+      });
       break;
   }
 }
