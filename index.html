@@ -258,6 +258,12 @@ let liveState = {
   _activity: null,
 };
 
+/** Parse SSE event data, returning null on malformed JSON (e.g. truncated reconnect). */
+function sseParseData(ev) {
+  try { return JSON.parse(ev.data); }
+  catch { return null; }
+}
+
 function sseConnect() {
   if (!bridgeUrl) return;
   if (sseSource) { sseSource.close(); sseSource = null; }
@@ -266,7 +272,8 @@ function sseConnect() {
   sseSource = new EventSource(url);
 
   sseSource.addEventListener('hello', (ev) => {
-    const data = JSON.parse(ev.data);
+    const data = sseParseData(ev);
+    if (!data) return;
     if (data.version !== 1) {
       console.error('[bb] protocol version mismatch, reloading');
       location.reload();
@@ -314,7 +321,8 @@ function sseConnect() {
 
   // Live stale detection — bridge pushes when client files change on disk
   sseSource.addEventListener('content-updated', (ev) => {
-    const data = JSON.parse(ev.data);
+    const data = sseParseData(ev);
+    if (!data) return;
     if (data.contentHash && data.contentHash !== sseContentHash) {
       sseStale = true;
       refreshPlaceholder();
@@ -322,13 +330,15 @@ function sseConnect() {
   });
 
   sseSource.addEventListener('folders', (ev) => {
-    const data = JSON.parse(ev.data);
+    const data = sseParseData(ev);
+    if (!data) return;
     sseResetWatchdog();
     handleSSEFolders(data.folders || []);
   });
 
   sseSource.addEventListener('state', (ev) => {
-    const data = JSON.parse(ev.data);
+    const data = sseParseData(ev);
+    if (!data) return;
     sseResetWatchdog();
     // Discard events for wrong folder (data.folder is the routing key; data.session is the session object)
     if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
@@ -336,7 +346,8 @@ function sseConnect() {
   });
 
   sseSource.addEventListener('delta', (ev) => {
-    const data = JSON.parse(ev.data);
+    const data = sseParseData(ev);
+    if (!data) return;
     sseResetWatchdog();
     if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
     handleSSEDelta(data);
