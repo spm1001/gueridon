@@ -137,6 +137,8 @@ interface Session {
   shareContext?: { filename: string };
   /** Why the process was killed — set before SIGTERM, read in exit handler for user-facing message. */
   killReason?: string;
+  /** Subagent events filtered this turn (gdn-wukuru). */
+  subagentFilteredCount: number;
 }
 
 // -- State --
@@ -428,7 +430,10 @@ function wireProcess(session: Session): void {
 // -- Event handling + delta conflation --
 
 function handleCCEvent(session: Session, event: Record<string, unknown>): void {
-  if (isSubagentEvent(event)) return;
+  if (isSubagentEvent(event)) {
+    session.subagentFilteredCount++;
+    return;
+  }
 
   // Clear init timeout on first system init event
   if (event.type === "system" && event.subtype === "init" && session.initTimer) {
@@ -559,6 +564,7 @@ async function onTurnComplete(session: Session): Promise<void> {
     outputTokens: metrics.outputTokens > 0 ? metrics.outputTokens : null,
     contextPct: session.contextPct,
     toolCalls: metrics.toolCalls,
+    ...(session.subagentFilteredCount > 0 && { subagentFiltered: session.subagentFilteredCount }),
   });
 
   // Push notification when no SSE clients are watching (phone-in-pocket).
@@ -612,6 +618,7 @@ function deliverPrompt(
     session.turnInProgress = true;
     session.turnStartedAt = Date.now();
     session.hadContentThisTurn = false;
+    session.subagentFilteredCount = 0;
 
     emit({ type: "turn:start", folder: session.folderName, sessionId: session.id });
     emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id });
@@ -718,6 +725,7 @@ async function createSession(folderPath: string): Promise<Session> {
     contextPct: null,
     turnStartedAt: null,
     pushedAskThisTurn: false,
+    subagentFilteredCount: 0,
   };
 
   // Replay JSONL if resuming (async to avoid blocking on large files)
@@ -853,6 +861,7 @@ async function createSessionWithId(
     contextPct: null,
     turnStartedAt: null,
     pushedAskThisTurn: false,
+    subagentFilteredCount: 0,
   };
 
   if (resumable) {
