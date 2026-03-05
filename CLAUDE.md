@@ -38,6 +38,8 @@ git add <files> && git commit -m "..." && git push
 cd /opt/gueridon && git pull && npm install && sudo systemctl restart gueridon
 ```
 
+**GitHub merge strategy:** Rebase merge only (squash and merge commit disabled). After PR merge, `git pull` syncs local — no `git reset --hard` needed.
+
 Production serves from `/opt/gueridon`, not `~/Repos/gueridon`. Changes that aren't committed and pushed won't appear in production — `git pull` in `/opt` has nothing to pull.
 
 **Service management:**
@@ -69,7 +71,7 @@ The bridge is split across several modules in `server/`:
 |------|---------------|
 | `bridge.ts` | HTTP server, SSE transport, process lifecycle |
 | `bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
-| `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape |
+| `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape. Dual API: `handleEvent()` → SSEDelta[] (old), `handleEventSignal()`/`deriveSignal()` → StateSignal (new). `getCurrentMessage()` exposes in-flight streaming message. |
 | `folders.ts` | Folder scanning, session discovery, handoff reading |
 | `deposit.ts` | Multipart/binary upload parsing, file validation, mise-style deposit to disk |
 | `orphan.ts` | Orphan CC process reaping, debounced session persistence |
@@ -87,7 +89,7 @@ The bridge is split across several modules in `server/`:
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/` | Serve index.html |
-| GET | `/events` | SSE stream (hello, folders, state, delta, ping) |
+| GET | `/events` | SSE stream (hello, folders, state, delta, text, current, ping) |
 | GET | `/folders` | List available project folders |
 | POST | `/folders` | Create new project folder (git-initialised, fun-name if unnamed) |
 | POST | `/session/:folder` | Connect to a folder's CC session |
@@ -103,8 +105,9 @@ The bridge is split across several modules in `server/`:
 
 **Key design:**
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
-- **StateBuilder** (`server/state-builder.ts`): See module table above. Emits SSE deltas during streaming, full state snapshots at turn end.
+- **StateBuilder** (`server/state-builder.ts`): See module table above. Emits SSE deltas during streaming, full state snapshots at turn end. Also exposes `getCurrentMessage()` (in-flight streaming message) and `deriveSignal()` (classify deltas as text/structure/status/ask_user) for the new protocol.
 - **Delta conflation:** Text deltas accumulated and flushed on timer (not per-token). Reduces SSE traffic without visible latency.
+- **New protocol (transition):** Bridge dual-emits old delta events AND new `text`/`current` events via `emitNewProtocol()`. `text` sends append strings (gated by conflation timer). `current` sends full `CurrentMessage` on structural changes (tool starts, tool completes, inner API calls). Old client ignores unknown SSE types per spec. New client (gdn-kemezo) will consume these; old delta path stays until gdn-padure removes it. `shouldSendEvent()` suppresses `text` during mid-turn reconnect (like content deltas), allows `current` through (like tool deltas).
 - **Static serving:** index.html, style.css, sw.js, manifest.json, marked.js, icons, mockup.html, client modules (render-utils.js, render-chips.js, render-messages.js, render-chrome.js) — no-cache headers, same port as API.
 - **Lazy spawn:** CC process starts on first prompt, not on connect.
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
