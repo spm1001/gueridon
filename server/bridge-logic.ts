@@ -757,5 +757,14 @@ export function shouldSendEvent(
     }
     return { send: false, clearSuppression: false };
   }
+  // New protocol (gdn-kitere): text events are append-only, suppress during
+  // reconnect (client has authoritative snapshot). current events are full
+  // replacement — safe to send (like tool deltas).
+  if (event === "text" && suppressDeltas) {
+    return { send: false, clearSuppression: false };
+  }
+  if (event === "current") {
+    return { send: true, clearSuppression: false };
+  }
   return { send: true, clearSuppression: false };
 }

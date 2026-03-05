@@ -274,10 +274,17 @@ export class StateBuilder {
    * Calls handleEvent() internally — both APIs update the same state.
    */
   handleEventSignal(event: Record<string, unknown>): StateSignal {
-    const deltas = this.handleEvent(event);
+    return StateBuilder.deriveSignal(this.handleEvent(event));
+  }
+
+  /**
+   * Derive a signal from deltas already produced by handleEvent().
+   * Use this when the bridge needs both the deltas (old path) and the signal (new path)
+   * from a single handleEvent() call — avoids double-processing.
+   */
+  static deriveSignal(deltas: NonNullable<SSEDelta>[]): StateSignal {
     if (deltas.length === 0) return null;
 
-    // Derive signal from the deltas produced.
     // Priority: ask_user > status > structure > text
     let hasText = false;
     let hasStructure = false;

@@ -2474,4 +2474,70 @@ describe("StateBuilder", () => {
       expect(sig).toBeNull();
     });
   });
+
+  // -- deriveSignal (static) --
+
+  describe("StateBuilder.deriveSignal", () => {
+    it("returns null for empty deltas", () => {
+      expect(StateBuilder.deriveSignal([])).toBeNull();
+    });
+
+    it("returns text for content delta", () => {
+      expect(StateBuilder.deriveSignal([
+        { type: "content", index: 0, text: "hello" },
+      ])).toEqual({ signal: "text" });
+    });
+
+    it("returns structure for tool_start", () => {
+      expect(StateBuilder.deriveSignal([
+        { type: "tool_start", index: 0, name: "Bash", input: "ls" },
+      ])).toEqual({ signal: "structure" });
+    });
+
+    it("returns status for status delta", () => {
+      expect(StateBuilder.deriveSignal([
+        { type: "status", status: "working" },
+      ])).toEqual({ signal: "status" });
+    });
+
+    it("prefers structure over text when both present", () => {
+      expect(StateBuilder.deriveSignal([
+        { type: "content", index: 0, text: "hi" },
+        { type: "tool_start", index: 0, name: "Bash", input: "ls" },
+      ])).toEqual({ signal: "structure" });
+    });
+
+    it("returns ask_user with payload", () => {
+      const sig = StateBuilder.deriveSignal([
+        { type: "ask_user", questions: [{ question: "?", header: "H", options: [], multiSelect: false }], toolCallId: "t1" },
+      ]);
+      expect(sig).toEqual({
+        signal: "ask_user",
+        questions: [{ question: "?", header: "H", options: [], multiSelect: false }],
+        toolCallId: "t1",
+      });
+    });
+
+    it("matches handleEventSignal output", () => {
+      const sb = new StateBuilder("s1", "/test");
+      sb.handleEvent(systemInit());
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "hello"));
+
+      // Get deltas from handleEvent, then derive signal
+      const deltas = sb.handleEvent(streamEvent({ type: "content_block_stop", index: 0 }));
+      const staticSig = StateBuilder.deriveSignal(deltas);
+
+      // Compare with a fresh builder going through handleEventSignal
+      const sb2 = new StateBuilder("s2", "/test");
+      sb2.handleEvent(systemInit());
+      sb2.handleEvent(messageStart());
+      sb2.handleEvent(textBlockStart(0));
+      sb2.handleEvent(textDelta(0, "hello"));
+      const instanceSig = sb2.handleEventSignal(streamEvent({ type: "content_block_stop", index: 0 }));
+
+      expect(staticSig).toEqual(instanceSig);
+    });
+  });
 });

@@ -1873,6 +1873,25 @@ describe("shouldSendEvent", () => {
     const d3 = shouldSendEvent("delta", suppressed);
     expect(d3.send).toBe(true);
   });
+
+  // New protocol event types (gdn-kitere)
+  it("suppresses text events when flag is set", () => {
+    expect(shouldSendEvent("text", true).send).toBe(false);
+  });
+
+  it("sends text events when not suppressed", () => {
+    expect(shouldSendEvent("text", false).send).toBe(true);
+  });
+
+  it("sends current events even when suppressed (full replacement, like tool deltas)", () => {
+    const result = shouldSendEvent("current", true);
+    expect(result.send).toBe(true);
+    expect(result.clearSuppression).toBe(false);
+  });
+
+  it("sends current events when not suppressed", () => {
+    expect(shouldSendEvent("current", false).send).toBe(true);
+  });
 });
 
 // -- isSubagentEvent (gdn-pimime) --

@@ -59,7 +59,7 @@ import {
   SCAN_ROOT,
 } from "./folders.js";
 
-import { StateBuilder } from "./state-builder.js";
+import { StateBuilder, type SSEDelta } from "./state-builder.js";
 import { getVapidPublicKey, pushTurnComplete, pushAskUser, addSubscription, removeSubscription } from "./push.js";
 import { emit, errorDetail } from "./event-bus.js";
 import { initLogger } from "./logger.js";
@@ -139,6 +139,8 @@ interface Session {
   killReason?: string;
   /** Subagent events filtered this turn (gdn-wukuru). */
   subagentFilteredCount: number;
+  /** Length of text last sent via new-protocol 'current' event — for computing text appends (gdn-kitere). */
+  lastSentTextLength: number;
 }
 
 // -- State --
@@ -498,6 +500,10 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
     }
   }
 
+  // New protocol: derive signal and broadcast alongside old deltas (gdn-kitere).
+  // Old client ignores unknown SSE event types (per spec). New client will consume these.
+  emitNewProtocol(session, deltas);
+
   // API error — no result event follows, so trigger turn completion here.
   // The state builder returns an api_error delta which the client uses to
   // show the error inline. Without this, the turn silently stalls.
@@ -522,11 +528,54 @@ function flushPendingDeltas(session: Session): void {
   }
   for (const pending of session.pendingDeltas.values()) {
     const merged = buildMergedDelta(pending);
-    for (const delta of session.stateBuilder.handleEvent(merged)) {
+    const deltas = session.stateBuilder.handleEvent(merged);
+    for (const delta of deltas) {
       broadcastToSession(session, "delta", delta);
     }
+    // New protocol: emit alongside old deltas (gdn-kitere)
+    emitNewProtocol(session, deltas);
   }
   session.pendingDeltas.clear();
+}
+
+// -- New protocol emission (gdn-kitere) --
+// Emits text/current events alongside old delta events during transition.
+// Old clients ignore unknown SSE event types (per spec).
+
+function emitNewProtocol(session: Session, deltas: NonNullable<SSEDelta>[]): void {
+  const signal = StateBuilder.deriveSignal(deltas as NonNullable<SSEDelta>[]);
+  if (!signal) return;
+
+  switch (signal.signal) {
+    case "text": {
+      // Text changed — compute append from what client already has
+      const current = session.stateBuilder.getCurrentMessage();
+      const fullText = current?.text || "";
+      if (fullText.length > session.lastSentTextLength) {
+        const append = fullText.slice(session.lastSentTextLength);
+        session.lastSentTextLength = fullText.length;
+        broadcastToSession(session, "text", { append });
+      }
+      break;
+    }
+    case "structure": {
+      // Structural change — send full current message
+      const current = session.stateBuilder.getCurrentMessage();
+      if (current) {
+        session.lastSentTextLength = current.text?.length || 0;
+        broadcastToSession(session, "current", current);
+      }
+      break;
+    }
+    case "status":
+      // Status changes ride on the turn-end state broadcast (unchanged).
+      // Reset text tracking for the next turn.
+      session.lastSentTextLength = 0;
+      break;
+    case "ask_user":
+      // ask_user is already handled by old delta path — no new event needed
+      break;
+  }
 }
 
 // -- Turn completion --
@@ -732,6 +781,7 @@ async function createSession(folderPath: string): Promise<Session> {
     turnStartedAt: null,
     pushedAskThisTurn: false,
     subagentFilteredCount: 0,
+    lastSentTextLength: 0,
   };
 
   // Replay JSONL if resuming (async to avoid blocking on large files)
@@ -868,6 +918,7 @@ async function createSessionWithId(
     turnStartedAt: null,
     pushedAskThisTurn: false,
     subagentFilteredCount: 0,
+    lastSentTextLength: 0,
   };
 
   if (resumable) {
