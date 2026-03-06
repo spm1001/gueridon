@@ -500,8 +500,8 @@ function handleSSEState(data) {
     });
   }
 
-  // CC process exited — clean up like exitSession() so no stale messages linger
-  if (data.processAlive === false && sseCurrentFolder) {
+  // Session deliberately closed (/exit) — full nuke
+  if (data.sessionEnded && sseCurrentFolder) {
     sseCurrentFolder = null;
     liveState.session = {};
     liveState.messages = [];
@@ -516,6 +516,16 @@ function handleSSEState(data) {
       .then(r => r.json())
       .then(d => { if (d.folders) handleSSEFolders(d.folders); })
       .catch(() => {});
+  }
+
+  // CC process exited (crash/kill/restart) but session persists — keep folder
+  // and messages so SSE reconnect can restore via hello handler. Don't clear
+  // location.hash (belt-and-braces for reconnect).
+  if (data.processAlive === false && !data.sessionEnded && sseCurrentFolder) {
+    liveState.status = 'idle';
+    liveState._activity = null;
+    currentMessage = null;
+    streamingText = '';
   }
 
   sseRender();

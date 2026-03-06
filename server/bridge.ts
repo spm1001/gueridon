@@ -1109,11 +1109,12 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
     killWithEscalation(session.process, { folder: session.folderName, reason: "exit" });
   }
 
-  // Notify clients
+  // Notify clients — sessionEnded distinguishes deliberate exit from crash/kill
   broadcastToSession(session, "state", {
     ...session.stateBuilder.getState(),
     status: "idle",
     processAlive: false,
+    sessionEnded: true,
   });
 
   // Clean up
