@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
 import { StateBuilder } from "./state-builder.js";
+import { buildMergedDelta, type PendingDelta } from "./bridge-logic.js";
 import { buildDepositNote, type UploadManifest } from "./upload.js";
 const require = createRequire(import.meta.url);
 const { buildDepositNoteClient } = require("../client/render-utils.cjs" as string);
@@ -2586,6 +2587,77 @@ describe("StateBuilder", () => {
         questions: [{ question: "?", header: "H", options: [], multiSelect: false }],
         toolCallId: "t1",
       });
+    });
+
+    // -- Conflation invariant (gdn-padure safety net) --
+    // The bridge accumulates content_block_delta events on a timer, then
+    // feeds one merged delta to the state builder. This must produce the
+    // same getCurrentMessage() text and signal as feeding deltas individually.
+    // If padure breaks conflation, this test catches it.
+
+    it("conflated merged delta produces same text and signal as individual deltas", () => {
+      // Path A: individual deltas (what CC emits)
+      const sbA = new StateBuilder("s-individual", "/test");
+      sbA.handleEvent(systemInit());
+      sbA.handleEvent(messageStart());
+      sbA.handleEvent(textBlockStart(0));
+      sbA.handleEvent(textDelta(0, "Hello"));
+      sbA.handleEvent(textDelta(0, " world"));
+      sbA.handleEvent(textDelta(0, "!"));
+      const sigA = sbA.handleEventSignal(blockStop(0));
+      const msgA = sbA.getCurrentMessage();
+
+      // Path B: conflated (what the bridge does — accumulate then merge)
+      const sbB = new StateBuilder("s-conflated", "/test");
+      sbB.handleEvent(systemInit());
+      sbB.handleEvent(messageStart());
+      sbB.handleEvent(textBlockStart(0));
+      // Simulate bridge conflation: accumulate payload, build one merged delta
+      const pending: PendingDelta = {
+        index: 0,
+        deltaType: "text_delta",
+        field: "text",
+        accumulated: "Hello world!",
+      };
+      sbB.handleEvent(buildMergedDelta(pending));
+      const sigB = sbB.handleEventSignal(blockStop(0));
+      const msgB = sbB.getCurrentMessage();
+
+      // Same text in getCurrentMessage
+      expect(msgB!.text).toBe(msgA!.text);
+      expect(msgB!.text).toBe("Hello world!");
+
+      // Same signal classification
+      expect(sigB).toEqual(sigA);
+      expect(sigB).toEqual({ signal: "text" });
+    });
+
+    it("conflated thinking delta produces same result as individual deltas", () => {
+      const sbA = new StateBuilder("s-think-ind", "/test");
+      sbA.handleEvent(systemInit());
+      sbA.handleEvent(messageStart());
+      sbA.handleEvent(thinkingBlockStart(0));
+      sbA.handleEvent(thinkingDelta(0, "Let me "));
+      sbA.handleEvent(thinkingDelta(0, "think..."));
+      const sigA = sbA.handleEventSignal(blockStop(0));
+      const msgA = sbA.getCurrentMessage();
+
+      const sbB = new StateBuilder("s-think-merged", "/test");
+      sbB.handleEvent(systemInit());
+      sbB.handleEvent(messageStart());
+      sbB.handleEvent(thinkingBlockStart(0));
+      const pending: PendingDelta = {
+        index: 0,
+        deltaType: "thinking",
+        field: "thinking",
+        accumulated: "Let me think...",
+      };
+      sbB.handleEvent(buildMergedDelta(pending));
+      const sigB = sbB.handleEventSignal(blockStop(0));
+      const msgB = sbB.getCurrentMessage();
+
+      expect(msgB!.thinking).toBe(msgA!.thinking);
+      expect(sigB).toEqual(sigA);
     });
 
     it("matches handleEventSignal output", () => {
