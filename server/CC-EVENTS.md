@@ -294,6 +294,85 @@ to ~53% during a docs-audit Agent dispatch, recovered to ~82% when Agent complet
 Bridge logs show 10+ minute gap between turn completions with SSE client reconnects
 during the drop.
 
+## User Message XML Tags
+
+CC injects XML tags into user message content. These appear in both live stdout
+and persisted JSONL. The bridge doesn't need to strip them (they're consumed by
+the model, not displayed), but they're important for JSONL replay and debugging.
+
+Catalogued from claude-replay's `cleanSystemTags()` parser and verified against
+real session JSONL (2026-03-06).
+
+| Tag | When it appears | Content |
+|-----|----------------|---------|
+| `<system-reminder>` | Every turn — hook output, skill context, tool reminders | System instructions injected into user messages |
+| `<task-notification>` | Background task (Agent/Task) completes | `<task-id>`, `<output-file>`, `<status>`, `<summary>` |
+| `<local-command-caveat>` | After `/context`, `/cost`, `/compact` | Boilerplate warning about local commands |
+| `<local-command-stdout>` | After local commands | The command's stdout capture |
+| `<command-name>` | Slash command execution | The command name (e.g. `context`, `cost`) |
+| `<command-args>` | Slash command with arguments | The arguments (empty tags if no args) |
+
+**`<task-notification>` structure:**
+```xml
+<task-notification>
+  <task-id>task_abc123</task-id>
+  <output-file>/path/to/output</output-file>
+  <status>completed</status>
+  <summary>Found 3 matching files</summary>
+</task-notification>
+```
+
+Followed by a line: `Read the output file to retrieve the result: /path/to/output`
+
+**Local command sequence** (e.g. `/cost`):
+```xml
+<local-command-caveat>This is a local CLI command...</local-command-caveat>
+<command-name>cost</command-name>
+<command-args></command-args>
+<local-command-stdout>Session cost: $0.42...</local-command-stdout>
+```
+
+**Guéridon handling:** These tags pass through to CC as user message content —
+the model processes them, we don't need to strip them. But `parseSessionJSONL`
+should be aware they exist in user messages during replay reconstruction.
+Local commands (`/context`, `/cost`, `/compact`) produce **no stdout events** —
+the bridge reads JSONL tail on empty-result turns to recover their output.
+
+## Synthetic Assistant Messages
+
+CC emits synthetic assistant messages with `model: "<synthetic>"` and zero usage.
+These are CC-generated placeholders, not real API responses.
+
+```json
+{
+  "type": "assistant",
+  "message": {
+    "id": "21ae6e06-...",
+    "model": "<synthetic>",
+    "role": "assistant",
+    "stop_reason": "stop_sequence",
+    "content": [{ "type": "text", "text": "No response requested." }],
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+    }
+  }
+}
+```
+
+**When they appear:**
+- After tool results that don't require a response
+- After system events (e.g. bridge restart resume)
+- After slash commands that CC handles internally
+
+**Key signature:** `model: "<synthetic>"` (not a real model ID), all usage fields zero,
+`stop_reason: "stop_sequence"`, text is always `"No response requested."`
+
+**Guéridon handling:** Filtered in both `handleAssistant()` (live) and
+`parseSessionJSONL()` (replay) since gdn-bopaza. Check for `message.model === "<synthetic>"`.
+
 ## Stdin Envelope Format
 
 ```json
