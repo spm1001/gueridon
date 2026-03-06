@@ -423,6 +423,8 @@ export function parseSessionJSONL(content: string): { events: string[]; skippedL
     } else if (parsed.type === "assistant") {
       const msg = parsed.message;
       if (!msg) continue;
+      // Skip synthetic messages (model:"<synthetic>", "No response requested.")
+      if (msg.model === "<synthetic>") continue;
       if (msg.usage) lastUsage = msg.usage;
 
       const msgId: string | undefined = msg.id;

@@ -612,6 +612,11 @@ export class StateBuilder {
     const message = event.message as Record<string, unknown> | undefined;
     if (!message) return null;
 
+    // Synthetic messages — CC emits these with model:"<synthetic>" and zero usage
+    // after tool results that need no response. Text is "No response requested."
+    // Drop silently — no usage worth extracting, no content worth displaying.
+    if (message.model === "<synthetic>") return null;
+
     // API error messages — CC emits isApiErrorMessage: true when the Anthropic
     // API returns an error (e.g. 400 "Could not process image"). No result event
     // follows, no streaming events fire. The error text is in the content blocks.

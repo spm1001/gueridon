@@ -867,6 +867,31 @@ describe("parseSessionJSONL", () => {
   it("returns zero skippedLines for empty input", () => {
     expect(parseSessionJSONL("").skippedLines).toBe(0);
   });
+
+  it("skips synthetic assistant messages (model:<synthetic>)", () => {
+    const input = [
+      userLine("hello"),
+      assistantLine([{ type: "text", text: "Hi there" }], { id: "msg_real" }),
+      assistantLine(
+        [{ type: "text", text: "No response requested." }],
+        { id: "synth_1", model: "<synthetic>", usage: { input_tokens: 0, output_tokens: 0 } },
+      ),
+    ].join("\n");
+
+    const { events: result } = parseSessionJSONL(input);
+    // user + real assistant + synthetic result = 3 (no synthetic assistant)
+    const types = result.map((r) => parse(r).event.type);
+    expect(types).not.toContain("assistant_synthetic");
+    // Verify no message has the synthetic text
+    const assistants = result
+      .map((r) => parse(r))
+      .filter((e) => e.event.type === "assistant");
+    expect(assistants).toHaveLength(1);
+    const content = assistants[0].event.message.content;
+    expect(content).not.toContainEqual(
+      expect.objectContaining({ text: "No response requested." }),
+    );
+  });
 });
 
 // --- parseSessionJSONL: real fixture ---

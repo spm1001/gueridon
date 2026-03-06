@@ -1651,6 +1651,76 @@ describe("StateBuilder", () => {
   });
 
   // ==========================================================================
+  // Synthetic "No response requested." messages (gdn-bopaza)
+  // ==========================================================================
+  describe("synthetic message filtering (gdn-bopaza)", () => {
+    function syntheticMessage(id = "synth-001"): Record<string, unknown> {
+      return {
+        type: "assistant",
+        message: {
+          id,
+          model: "<synthetic>",
+          role: "assistant",
+          stop_reason: "stop_sequence",
+          content: [{ type: "text", text: "No response requested." }],
+          usage: {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      };
+    }
+
+    it("drops synthetic assistant messages during live streaming", () => {
+      const sb = makeBuilder();
+      sb.handleEvent(systemInit());
+      // Normal turn
+      sb.handleEvent(messageStart());
+      sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textDelta(0, "Hello"));
+      sb.handleEvent(blockStop(0));
+      sb.handleEvent(assistantMessage("msg-1", [{ type: "text", text: "Hello" }]));
+      sb.handleEvent(resultEvent());
+      // Synthetic message arrives
+      const delta = sb.handleEvent(syntheticMessage());
+      expect(delta).toEqual([]);
+      // Only the real message in state
+      const msgs = sb.getState().messages;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].content).toBe("Hello");
+    });
+
+    it("drops synthetic messages during JSONL replay", () => {
+      const sb = makeBuilder();
+      sb.replayFromJSONL([
+        JSON.stringify({
+          source: "cc",
+          event: { type: "user", message: { role: "user", content: "hi" } },
+        }),
+        JSON.stringify({
+          source: "cc",
+          event: {
+            type: "assistant",
+            message: {
+              id: "synth-replay",
+              model: "<synthetic>",
+              role: "assistant",
+              content: [{ type: "text", text: "No response requested." }],
+              usage: { input_tokens: 0, output_tokens: 0 },
+            },
+          },
+        }),
+      ]);
+      const msgs = sb.getState().messages;
+      // User message present, synthetic message dropped
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].role).toBe("user");
+    });
+  });
+
+  // ==========================================================================
   // Inner API call duplication (gdn-jogote)
   // ==========================================================================
   describe("inner API call duplication (gdn-jogote)", () => {
