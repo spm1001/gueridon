@@ -1824,36 +1824,13 @@ describe("pendingSessions concurrency guard pattern", () => {
   });
 });
 
-// --- shouldSendEvent (mid-turn reconnect suppression, gdn-sahuvu) ---
+// --- shouldSendEvent (mid-turn reconnect suppression) ---
 
 describe("shouldSendEvent", () => {
-  it("sends state events even when suppressed", () => {
+  it("sends state events even when suppressed, and clears suppression", () => {
     const result = shouldSendEvent("state", true);
     expect(result.send).toBe(true);
     expect(result.clearSuppression).toBe(true);
-  });
-
-  it("suppresses content/thinking delta events when flag is set", () => {
-    expect(shouldSendEvent("delta", true, "content").send).toBe(false);
-    expect(shouldSendEvent("delta", true, "thinking_content").send).toBe(false);
-    // Untyped deltas also suppressed (defensive)
-    expect(shouldSendEvent("delta", true).send).toBe(false);
-  });
-
-  it("passes tool_start/tool_complete through suppression (gdn-wemazo)", () => {
-    const ts = shouldSendEvent("delta", true, "tool_start");
-    expect(ts.send).toBe(true);
-    expect(ts.clearSuppression).toBe(false);
-
-    const tc = shouldSendEvent("delta", true, "tool_complete");
-    expect(tc.send).toBe(true);
-    expect(tc.clearSuppression).toBe(false);
-  });
-
-  it("sends delta events when not suppressed", () => {
-    const result = shouldSendEvent("delta", false);
-    expect(result.send).toBe(true);
-    expect(result.clearSuppression).toBe(false);
   });
 
   it("sends state events when not suppressed (and clears anyway)", () => {
@@ -1862,44 +1839,6 @@ describe("shouldSendEvent", () => {
     expect(result.clearSuppression).toBe(true);
   });
 
-  it("sends non-delta/state events regardless of suppression", () => {
-    expect(shouldSendEvent("folders", true).send).toBe(true);
-    expect(shouldSendEvent("hello", true).send).toBe(true);
-    expect(shouldSendEvent("ping", false).send).toBe(true);
-  });
-
-  it("simulates full reconnect lifecycle", () => {
-    // Client reconnects mid-turn → suppressDeltas = true
-    let suppressed = true;
-
-    // Content deltas are suppressed
-    const d1 = shouldSendEvent("delta", suppressed, "content");
-    expect(d1.send).toBe(false);
-
-    // Tool deltas pass through (gdn-wemazo — agents dispatched after reconnect)
-    const ts = shouldSendEvent("delta", suppressed, "tool_start");
-    expect(ts.send).toBe(true);
-
-    // More content deltas still suppressed
-    const d2 = shouldSendEvent("delta", suppressed, "thinking_content");
-    expect(d2.send).toBe(false);
-
-    // Tool complete also passes through
-    const tc = shouldSendEvent("delta", suppressed, "tool_complete");
-    expect(tc.send).toBe(true);
-
-    // Turn ends → state broadcast clears flag
-    const s1 = shouldSendEvent("state", suppressed);
-    expect(s1.send).toBe(true);
-    expect(s1.clearSuppression).toBe(true);
-    suppressed = false; // caller clears
-
-    // Next turn's deltas flow normally
-    const d3 = shouldSendEvent("delta", suppressed);
-    expect(d3.send).toBe(true);
-  });
-
-  // New protocol event types (gdn-kitere)
   it("suppresses text events when flag is set", () => {
     expect(shouldSendEvent("text", true).send).toBe(false);
   });
@@ -1908,7 +1847,7 @@ describe("shouldSendEvent", () => {
     expect(shouldSendEvent("text", false).send).toBe(true);
   });
 
-  it("sends current events even when suppressed (full replacement, like tool deltas)", () => {
+  it("sends current events even when suppressed (full replacement)", () => {
     const result = shouldSendEvent("current", true);
     expect(result.send).toBe(true);
     expect(result.clearSuppression).toBe(false);
@@ -1916,6 +1855,35 @@ describe("shouldSendEvent", () => {
 
   it("sends current events when not suppressed", () => {
     expect(shouldSendEvent("current", false).send).toBe(true);
+  });
+
+  it("sends other event types regardless of suppression", () => {
+    expect(shouldSendEvent("folders", true).send).toBe(true);
+    expect(shouldSendEvent("hello", true).send).toBe(true);
+    expect(shouldSendEvent("ask_user", true).send).toBe(true);
+    expect(shouldSendEvent("ping", false).send).toBe(true);
+  });
+
+  it("simulates full reconnect lifecycle", () => {
+    let suppressed = true;
+
+    // Text suppressed during reconnect
+    expect(shouldSendEvent("text", suppressed).send).toBe(false);
+
+    // Current events pass through (structural updates visible)
+    expect(shouldSendEvent("current", suppressed).send).toBe(true);
+
+    // More text still suppressed
+    expect(shouldSendEvent("text", suppressed).send).toBe(false);
+
+    // Turn ends → state broadcast clears flag
+    const s1 = shouldSendEvent("state", suppressed);
+    expect(s1.send).toBe(true);
+    expect(s1.clearSuppression).toBe(true);
+    suppressed = false;
+
+    // Next turn's text flows normally
+    expect(shouldSendEvent("text", suppressed).send).toBe(true);
   });
 });
 

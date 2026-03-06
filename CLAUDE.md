@@ -71,7 +71,7 @@ The bridge is split across several modules in `server/`:
 |------|---------------|
 | `bridge.ts` | HTTP server, SSE transport, process lifecycle |
 | `bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
-| `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape. Dual API: `handleEvent()` → SSEDelta[] (old), `handleEventSignal()`/`deriveSignal()` → StateSignal (new). `getCurrentMessage()` exposes in-flight streaming message. |
+| `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape. `handleEventSignal()` → StateSignal (text/structure/status/ask_user). `getCurrentMessage()` exposes in-flight streaming message. |
 | `folders.ts` | Folder scanning, session discovery, handoff reading |
 | `deposit.ts` | Multipart/binary upload parsing, file validation, mise-style deposit to disk |
 | `orphan.ts` | Orphan CC process reaping, debounced session persistence |
@@ -89,7 +89,7 @@ The bridge is split across several modules in `server/`:
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/` | Serve index.html |
-| GET | `/events` | SSE stream (hello, folders, state, delta, text, current, ping) |
+| GET | `/events` | SSE stream (hello, folders, state, text, current, ask_user, ping) |
 | GET | `/folders` | List available project folders |
 | POST | `/folders` | Create new project folder (git-initialised, fun-name if unnamed) |
 | POST | `/session/:folder` | Connect to a folder's CC session |
@@ -105,15 +105,15 @@ The bridge is split across several modules in `server/`:
 
 **Key design:**
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
-- **StateBuilder** (`server/state-builder.ts`): See module table above. Emits SSE deltas during streaming, full state snapshots at turn end. Also exposes `getCurrentMessage()` (in-flight streaming message) and `deriveSignal()` (classify deltas as text/structure/status/ask_user) for the new protocol.
-- **Delta conflation:** Text deltas accumulated and flushed on timer (not per-token). Reduces SSE traffic without visible latency.
-- **New protocol (transition):** Bridge dual-emits old delta events AND new `text`/`current` events via `emitNewProtocol()`. `text` sends append strings (gated by conflation timer). `current` sends full `CurrentMessage` on structural changes (tool starts, tool completes, inner API calls). Old client ignores unknown SSE types per spec. New client (gdn-kemezo) will consume these; old delta path stays until gdn-padure removes it. `shouldSendEvent()` suppresses `text` during mid-turn reconnect (like content deltas), allows `current` through (like tool deltas).
+- **StateBuilder** (`server/state-builder.ts`): See module table above. `handleEventSignal()` returns a `StateSignal` classifying what changed (text/structure/status/ask_user). `getCurrentMessage()` exposes the in-flight streaming message. `handleEvent()` mutates state without returning a value.
+- **Delta conflation:** CC's per-token `content_block_delta` events are accumulated on a 250ms timer and flushed as merged deltas to the state builder. This reduces SSE traffic without visible latency. The conflation infrastructure (`isStreamDelta`, `extractDeltaInfo`, `buildMergedDelta`, `PendingDelta`) lives in `bridge-logic.ts`; the timer and flush logic in `bridge.ts`.
+- **SSE protocol:** Bridge emits `text` (append strings, gated by conflation timer), `current` (full `CurrentMessage` on structural changes like tool starts/completes), `state` (full snapshot at turn end), and `ask_user` (AskUserQuestion overlay). `shouldSendEvent()` suppresses `text` during mid-turn reconnect (client has authoritative snapshot from state event); `current` passes through (full replacement, safe to send).
 - **Static serving:** index.html, style.css, sw.js, manifest.json, marked.js, icons, mockup.html, client modules (render-utils.js, render-chips.js, render-messages.js, render-chrome.js) — no-cache headers, same port as API.
 - **Lazy spawn:** CC process starts on first prompt, not on connect.
 - **SIGTERM → SIGKILL:** 3s escalation on all process kills.
 - **Orphan reaping:** On startup, reads sse-sessions.json, SIGTERMs any live CC processes from the previous bridge instance.
 - **Mid-turn message delivery:** When a prompt or upload arrives during an active turn, the bridge writes it directly to CC's stdin (CC buffers and processes it as the next turn). State builder tracks it immediately so the frontend shows the message. No queue, no coalescing — each message becomes a separate CC turn. Both `handlePrompt()` and `handleUpload()` use this path.
-- **Mid-turn reconnect suppression:** When an SSE client reconnects during an active turn, `attachToSession` sets `client.suppressDeltas = true`. The state snapshot the client receives is authoritative. Content/thinking deltas are suppressed until the next state broadcast (turn end), preventing partial chunks from overwriting the snapshot's complete text. **Tool deltas (`tool_start`, `tool_complete`) pass through** — they're index-addressed and additive, can't corrupt text. Without this, tools dispatched after a mid-turn reconnect are invisible until turn end (gdn-wemazo root cause). Logic extracted as `shouldSendEvent()` in `bridge-logic.ts`.
+- **Mid-turn reconnect suppression:** When an SSE client reconnects during an active turn, `attachToSession` sets `client.suppressText = true`. The state snapshot the client receives is authoritative. `text` events (append-only) are suppressed until the next `state` broadcast (turn end), preventing partial chunks from corrupting the snapshot's complete text. `current` events pass through (full replacement, safe to send). Logic in `shouldSendEvent()` in `bridge-logic.ts`.
 - **Upload staging:** `POST /upload/:folder?stage=true` deposits files on disk and returns the manifest without injecting a prompt. The client stages deposits as pills below the textarea; on send, `buildDepositNoteClient()` composes deposit notes + user text as one prompt. Without `?stage=true` (share-sheet flow), upload auto-injects as before.
 - **`[guéridon:*]` prefix convention:** Bridge-injected messages use `[guéridon:system]`, `[guéridon:upload]` etc. StateBuilder detects these and marks as `synthetic: true` (rendered as system chips, prefix stripped). **Exception:** staged uploads contain a deposit note followed by user text — StateBuilder checks for text after the deposit suffix and keeps these as real user messages. The client's `renderUserBubble()` parses deposit notes into `📎 filename` references.
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.

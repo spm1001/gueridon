@@ -168,24 +168,21 @@ describe("StateBuilder", () => {
       const sb = makeBuilder();
 
       // init → working
-      const d1 = sb.handleEvent(systemInit());
-      expect(d1).toEqual([{ type: "status", status: "working" }]);
+      sb.handleEvent(systemInit());
       expect(sb.getState().status).toBe("working");
 
       // message_start
       sb.handleEvent(messageStart());
 
       // text block start
-      const d2 = sb.handleEvent(textBlockStart(0));
-      expect(d2).toEqual([{ type: "activity", activity: "writing" }]);
+      sb.handleEvent(textBlockStart(0));
 
-      // text deltas — accumulated, no delta emitted
-      expect(sb.handleEvent(textDelta(0, "Hello "))).toEqual([]);
-      expect(sb.handleEvent(textDelta(0, "world"))).toEqual([]);
+      // text deltas — accumulated
+      sb.handleEvent(textDelta(0, "Hello "));
+      sb.handleEvent(textDelta(0, "world"));
 
-      // block stop — emits content delta with full text
-      const d3 = sb.handleEvent(blockStop(0));
-      expect(d3).toEqual([{ type: "content", index: 0, text: "Hello world" }]);
+      // block stop — text committed
+      sb.handleEvent(blockStop(0));
 
       // assistant complete message
       sb.handleEvent(
@@ -193,8 +190,7 @@ describe("StateBuilder", () => {
       );
 
       // result → idle
-      const d4 = sb.handleEvent(resultEvent());
-      expect(d4).toEqual([{ type: "status", status: "idle" }]);
+      sb.handleEvent(resultEvent());
       expect(sb.getState().status).toBe("idle");
 
       // State has one assistant message
@@ -220,21 +216,14 @@ describe("StateBuilder", () => {
       sb.handleEvent(messageStart());
 
       // tool block start
-      const d1 = sb.handleEvent(toolBlockStart(0, "Bash", "toolu_001"));
-      expect(d1).toEqual([{ type: "activity", activity: "tool" }]);
+      sb.handleEvent(toolBlockStart(0, "Bash", "toolu_001"));
 
       // input JSON arrives in fragments
       sb.handleEvent(inputJsonDelta(0, '{"comma'));
       sb.handleEvent(inputJsonDelta(0, 'nd": "ls -la"}'));
 
       // block stop — parses JSON, extracts tool input
-      const d2 = sb.handleEvent(blockStop(0));
-      expect(d2).toEqual([{
-        type: "tool_start",
-        index: 0,
-        name: "Bash",
-        input: "ls -la",
-      }]);
+      sb.handleEvent(blockStop(0));
 
       // assistant complete message (with tool_use in content)
       sb.handleEvent(
@@ -244,13 +233,7 @@ describe("StateBuilder", () => {
       );
 
       // tool result
-      const d3 = sb.handleEvent(toolResult("toolu_001", "file1.txt\nfile2.txt"));
-      expect(d3).toEqual([{
-        type: "tool_complete",
-        index: 0,
-        status: "completed",
-        output: "file1.txt\nfile2.txt",
-      }]);
+      sb.handleEvent(toolResult("toolu_001", "file1.txt\nfile2.txt"));
 
       // result
       sb.handleEvent(resultEvent());
@@ -281,8 +264,7 @@ describe("StateBuilder", () => {
         ]),
       );
 
-      const d = sb.handleEvent(toolResult("toolu_err", "exit code 1", true));
-      expect(d).toEqual([expect.objectContaining({ type: "tool_complete", status: "error" })]);
+      sb.handleEvent(toolResult("toolu_err", "exit code 1", true));
 
       sb.handleEvent(resultEvent());
       const call = sb.getState().messages[0].tool_calls![0];
@@ -1012,7 +994,7 @@ describe("StateBuilder", () => {
   });
 
   describe("live event ordering: assistant before content_block_stop (bb-lonego)", () => {
-    it("content delta has real text when assistant fires before content_block_stop", () => {
+    it("state has real text when assistant fires before content_block_stop", () => {
       const sb = makeBuilder();
 
       // --- Turn 1: normal ordering (works fine) ---
@@ -1049,9 +1031,8 @@ describe("StateBuilder", () => {
         assistantMessage("msg_t2", [{ type: "text", text: "Second response" }]),
       );
 
-      // content_block_stop fires AFTER assistant — must still emit real text
-      const delta = sb.handleEvent(blockStop(0));
-      expect(delta).toEqual([{ type: "content", index: 0, text: "Second response" }]);
+      // content_block_stop fires AFTER assistant — patches committed message
+      sb.handleEvent(blockStop(0));
 
       // State must have the message with real content
       const state = sb.getState();
@@ -1089,9 +1070,8 @@ describe("StateBuilder", () => {
         ]),
       );
 
-      // Text block stop — must patch the committed message
-      const delta = sb.handleEvent(blockStop(1));
-      expect(delta).toEqual([{ type: "content", index: 1, text: "Hello!" }]);
+      // Text block stop — patches the committed message
+      sb.handleEvent(blockStop(1));
 
       // The critical check: state.messages must have content, not null
       sb.handleEvent(resultEvent());
@@ -1177,23 +1157,21 @@ describe("StateBuilder", () => {
       expect(state.messages[0].thinking).toBe("Let me reason about this.");
     });
 
-    it("accumulates thinking deltas and emits thinking_content on block stop", () => {
+    it("accumulates thinking deltas and exposes via getCurrentMessage on block stop", () => {
       const sb = makeBuilder();
       sb.handleEvent(systemInit());
       sb.handleEvent(messageStart());
 
       // Thinking block
       sb.handleEvent(thinkingBlockStart(0));
-      const d1 = sb.handleEvent(thinkingDelta(0, "Let me think"));
-      expect(d1).toEqual([]); // accumulated, not emitted yet
-
+      sb.handleEvent(thinkingDelta(0, "Let me think"));
       sb.handleEvent(thinkingDelta(0, " about this carefully."));
+      sb.handleEvent(blockStop(0));
 
-      const d2 = sb.handleEvent(blockStop(0));
-      expect(d2).toEqual([{
-        type: "thinking_content",
-        text: "Let me think about this carefully.",
-      }]);
+      // Thinking text is available via getCurrentMessage
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      expect(msg!.thinking).toBe("Let me think about this carefully.");
     });
 
     it("includes thinking text on the committed assistant message", () => {
@@ -1270,22 +1248,26 @@ describe("StateBuilder", () => {
       // Second thinking block
       sb.handleEvent(blockStart(1, { type: "thinking", thinking: "" }));
       sb.handleEvent(thinkingDelta(1, "Second thought"));
-      const d = sb.handleEvent(blockStop(1));
-      expect(d).toEqual([{
-        type: "thinking_content",
-        text: "First thought\n\nSecond thought",
-      }]);
+      sb.handleEvent(blockStop(1));
+
+      // Both thinking blocks are concatenated
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      expect(msg!.thinking).toBe("First thought\n\nSecond thought");
     });
 
-    it("does not emit thinking_content when thinking is empty", () => {
+    it("does not populate thinking when thinking is empty", () => {
       const sb = makeBuilder();
       sb.handleEvent(systemInit());
       sb.handleEvent(messageStart());
 
       sb.handleEvent(thinkingBlockStart(0));
       // No thinking deltas
-      const d = sb.handleEvent(blockStop(0));
-      expect(d).toEqual([]);
+      sb.handleEvent(blockStop(0));
+
+      const msg = sb.getCurrentMessage();
+      expect(msg).not.toBeNull();
+      expect(msg!.thinking).toBeNull();
     });
 
     it("clears thinking between messages", () => {
@@ -1512,12 +1494,14 @@ describe("StateBuilder", () => {
   });
 
   describe("API error handling", () => {
-    it("returns api_error delta with human-readable message", () => {
+    it("pushes api error as assistant message with human-readable text", () => {
       const sb = makeBuilder();
-      const delta = sb.handleEvent(
+      sb.handleEvent(
         apiErrorMessage("err-1", 400, "invalid_request_error", "Could not process image"),
       );
-      expect(delta).toEqual([{ type: "api_error", error: "API error 400: Could not process image" }]);
+      const state = sb.getState();
+      expect(state.messages).toHaveLength(1);
+      expect(state.messages[0].content).toBe("API error 400: Could not process image");
     });
 
     it("pushes error as assistant message and sets status to idle", () => {
@@ -1562,8 +1546,10 @@ describe("StateBuilder", () => {
           usage: {},
         },
       };
-      const delta = sb.handleEvent(event);
-      expect(delta).toEqual([{ type: "api_error", error: "API Error: 500 not-json" }]);
+      sb.handleEvent(event);
+      const state = sb.getState();
+      expect(state.messages).toHaveLength(1);
+      expect(state.messages[0].content).toBe("API Error: 500 not-json");
     });
 
     it("replays API error from JSONL as inline message", () => {
@@ -1588,8 +1574,7 @@ describe("StateBuilder", () => {
   describe("process exit error classification (gdn-hocava)", () => {
     it("non-signal non-zero exit surfaces error message", () => {
       // When CC exits with code 1 (no signal), the bridge synthesises a result
-      // event with is_error: true. handleResult should push an error message
-      // and return an api_error delta so the UI shows it.
+      // event with is_error: true. handleResult should push an error message.
       const sb = new StateBuilder("sess-exit", "test-project");
       sb.handleEvent(systemInit());
       sb.handleEvent(messageStart());
@@ -1598,14 +1583,13 @@ describe("StateBuilder", () => {
       sb.handleEvent(blockStop(0));
 
       // Simulate process exit with code 1 (no signal)
-      const delta = sb.handleEvent({
+      sb.handleEvent({
         type: "result",
         subtype: "aborted",
         is_error: true,
         result: "Process exited with code 1",
       });
 
-      expect(delta).toEqual([{ type: "api_error", error: "Process exited with code 1" }]);
       const state = sb.getState();
       expect(state.status).toBe("idle");
       // Error message appears after the assistant's text
@@ -1618,15 +1602,17 @@ describe("StateBuilder", () => {
       sb.handleEvent(systemInit());
       sb.handleEvent(messageStart());
 
-      const delta = sb.handleEvent({
+      sb.handleEvent({
         type: "result",
         subtype: "aborted",
         is_error: true,
         result: "Process killed (SIGTERM)",
       });
 
-      expect(delta).toEqual([{ type: "api_error", error: "Process killed (SIGTERM)" }]);
-      expect(sb.getState().status).toBe("idle");
+      const state = sb.getState();
+      expect(state.status).toBe("idle");
+      const lastMsg = state.messages[state.messages.length - 1];
+      expect(lastMsg.content).toBe("Process killed (SIGTERM)");
     });
 
     it("clean exit does not surface error", () => {
@@ -1637,14 +1623,14 @@ describe("StateBuilder", () => {
       sb.handleEvent(textDelta(0, "Done."));
       sb.handleEvent(blockStop(0));
 
-      const delta = sb.handleEvent({
+      sb.handleEvent({
         type: "result",
         subtype: "success",
         is_error: false,
         result: "",
       });
 
-      expect(delta).toEqual([{ type: "status", status: "idle" }]);
+      expect(sb.getState().status).toBe("idle");
       // No error message pushed
       const msgs = sb.getState().messages;
       expect(msgs.every(m => m.content !== "")).toBe(true);
@@ -1684,9 +1670,8 @@ describe("StateBuilder", () => {
       sb.handleEvent(blockStop(0));
       sb.handleEvent(assistantMessage("msg-1", [{ type: "text", text: "Hello" }]));
       sb.handleEvent(resultEvent());
-      // Synthetic message arrives
-      const delta = sb.handleEvent(syntheticMessage());
-      expect(delta).toEqual([]);
+      // Synthetic message arrives — should be dropped
+      sb.handleEvent(syntheticMessage());
       // Only the real message in state
       const msgs = sb.getState().messages;
       expect(msgs).toHaveLength(1);
@@ -1863,10 +1848,9 @@ describe("StateBuilder", () => {
       expect(liveAssistant.length).toBe(replayAssistant.length);
     });
 
-    it("inner API call mini-reset emits [message_start, activity] as array", () => {
+    it("inner API call mini-reset creates new message on index collision", () => {
       // When a new inner API call reuses block index 0, onContentBlockStart
-      // detects the collision and emits both a message_start (so the client
-      // splits the message) and an activity delta in a single array return.
+      // detects the collision and triggers a mini-reset (message split).
       const sb = new StateBuilder("sess-multi-delta", "test-project");
       sb.handleEvent(systemInit());
 
@@ -1893,13 +1877,18 @@ describe("StateBuilder", () => {
 
       // content_block_start at index 0 — triggers mini-reset because blockTypes
       // already has index 0 from the first API call
-      const deltas = sb.handleEvent(textBlockStart(0));
+      sb.handleEvent(textBlockStart(0));
 
-      // Should return both message_start AND activity in a single array
-      expect(deltas).toEqual([
-        { type: "message_start" },
-        { type: "activity", activity: "writing" },
-      ]);
+      // Signal confirms structure change (mini-reset)
+      const sig = sb.handleEventSignal(textDelta(0, "Done."));
+      // Text delta itself produces no signal (accumulated)
+      expect(sig).toBeNull();
+
+      // The first message should be committed with "Planning." text
+      const state = sb.getState();
+      const committed = state.messages.filter(m => m.role === "assistant");
+      expect(committed.length).toBeGreaterThanOrEqual(1);
+      expect(committed[0].content).toBe("Planning.");
     });
 
     it("pipeline tool execution: tool_complete mid-API-call does NOT trigger message_start (gdn-dakena)", () => {
@@ -1935,20 +1924,16 @@ describe("StateBuilder", () => {
       ]));
 
       // *** PIPELINE: first tool result arrives DURING streaming ***
-      const toolCompleteDelta = sb.handleEvent(toolResult("toolu_bash1", "3 errors found"));
-      expect(toolCompleteDelta).toEqual([expect.objectContaining({ type: "tool_complete" })]);
+      sb.handleEvent(toolResult("toolu_bash1", "3 errors found"));
 
       // Block 2: second Bash tool — SAME API call, unique index (no collision)
-      const d2 = sb.handleEvent(toolBlockStart(2, "Bash", "toolu_bash2"));
-      // Should be just activity, NOT [message_start, activity]
-      expect(d2).toEqual([{ type: "activity", activity: "tool" }]);
+      sb.handleEvent(toolBlockStart(2, "Bash", "toolu_bash2"));
 
       sb.handleEvent(inputJsonDelta(2, '{"command":"grep fail *.jsonl"}'));
       sb.handleEvent(blockStop(2)); // → tool_start(1)
 
       // Block 3: third Bash tool — still same API call
-      const d3 = sb.handleEvent(toolBlockStart(3, "Bash", "toolu_bash3"));
-      expect(d3).toEqual([{ type: "activity", activity: "tool" }]);
+      sb.handleEvent(toolBlockStart(3, "Bash", "toolu_bash3"));
 
       sb.handleEvent(inputJsonDelta(3, '{"command":"grep retry *.jsonl"}'));
       sb.handleEvent(blockStop(3)); // → tool_start(2)
@@ -1975,9 +1960,9 @@ describe("StateBuilder", () => {
       expect(assistantMsgs[0].tool_calls![2].status).toBe("completed");
     });
 
-    it("inner API call mini-reset emits [message_start] alone for suppressed blocks", () => {
+    it("inner API call mini-reset splits messages for suppressed blocks on index collision", () => {
       // When the inner API call's first block is AskUserQuestion (suppressed),
-      // only message_start is emitted — no activity delta.
+      // the mini-reset still fires on index collision, splitting the message.
       const sb = new StateBuilder("sess-ask-reset", "test-project");
       sb.handleEvent(systemInit());
 
@@ -1997,270 +1982,20 @@ describe("StateBuilder", () => {
           input: { questions: [{ question: "Continue?", header: "h", options: [], multiSelect: false }] } },
       ]));
 
-      const deltas = sb.handleEvent(toolBlockStart(0, "AskUserQuestion", "toolu_ask1"));
+      sb.handleEvent(toolBlockStart(0, "AskUserQuestion", "toolu_ask1"));
 
-      // AskUserQuestion is suppressed — only message_start from the mini-reset
-      expect(deltas).toEqual([{ type: "message_start" }]);
+      // The first message should be committed (mini-reset happened)
+      const state = sb.getState();
+      const committed = state.messages.filter(m => m.role === "assistant");
+      expect(committed.length).toBeGreaterThanOrEqual(1);
+      expect(committed[0].tool_calls).toHaveLength(1);
+      expect(committed[0].tool_calls![0].name).toBe("Bash");
     });
   });
 
-  // ==========================================================================
-  describe("live delta → client parity (gdn-digoli)", () => {
-    // Simulated client delta handler — mirrors index.html's handleSSEDelta
-    // + ensureAssistantMessage. Builds a message list from deltas alone.
-    interface ClientMsg {
-      role: string;
-      content: string | null;
-      tool_calls?: Array<{ name: string; status: string; input: string; output: string | null }>;
-      thinking?: string;
-    }
-
-    function simulateClient(allDeltas: ReturnType<StateBuilder["handleEvent"]>) {
-      const messages: ClientMsg[] = [];
-
-      function ensureAssistant(): ClientMsg {
-        const last = messages[messages.length - 1];
-        if (last && last.role === "assistant") return last;
-        const msg: ClientMsg = { role: "assistant", content: null };
-        messages.push(msg);
-        return msg;
-      }
-
-      for (const d of allDeltas) {
-        switch (d.type) {
-          case "message_start":
-            messages.push({ role: "assistant", content: null });
-            break;
-
-          case "activity":
-            ensureAssistant();
-            break;
-
-          case "content": {
-            const msg = ensureAssistant();
-            msg.content = (d as { text: string }).text;
-            break;
-          }
-
-          case "thinking_content": {
-            const msg = ensureAssistant();
-            msg.thinking = (d as { text: string }).text;
-            break;
-          }
-
-          case "tool_start": {
-            const msg = ensureAssistant();
-            if (!msg.tool_calls) msg.tool_calls = [];
-            const idx = (d as { index: number }).index;
-            while (msg.tool_calls.length <= idx) {
-              msg.tool_calls.push({ name: "", status: "running", input: "", output: null });
-            }
-            msg.tool_calls[idx] = {
-              name: (d as { name: string }).name,
-              status: "running",
-              input: (d as { input: string }).input || "",
-              output: null,
-            };
-            break;
-          }
-
-          case "tool_complete": {
-            const last = messages[messages.length - 1];
-            const idx = (d as { index: number }).index;
-            if (last?.tool_calls?.[idx]) {
-              last.tool_calls[idx].status = (d as { status: string }).status;
-              if ((d as { output?: string }).output) {
-                last.tool_calls[idx].output = (d as { output?: string }).output!;
-              }
-            }
-            break;
-          }
-
-          case "status":
-          case "ask_user":
-          case "api_error":
-            break;
-        }
-      }
-
-      return messages;
-    }
-
-    // Compare message structures, ignoring fields the client doesn't track
-    function compareMessages(
-      clientMsgs: ClientMsg[],
-      serverMsgs: Array<{ role: string; content: string | null; tool_calls?: unknown[]; thinking?: string }>,
-    ) {
-      // Same count of assistant messages
-      const clientAssistant = clientMsgs.filter(m => m.role === "assistant" && (m.content || m.tool_calls?.length));
-      const serverAssistant = serverMsgs.filter(m => m.role === "assistant");
-      expect(clientAssistant.length).toBe(serverAssistant.length);
-
-      // Each message matches on content, tool count, and tool names
-      for (let i = 0; i < serverAssistant.length; i++) {
-        const s = serverAssistant[i];
-        const c = clientAssistant[i];
-        expect(c.content).toBe(s.content);
-        expect(c.tool_calls?.length ?? 0).toBe(s.tool_calls?.length ?? 0);
-        if (s.tool_calls) {
-          for (let j = 0; j < s.tool_calls.length; j++) {
-            const st = s.tool_calls[j] as { name: string };
-            expect(c.tool_calls![j].name).toBe(st.name);
-          }
-        }
-      }
-    }
-
-    it("sequential tool calls: Read → Grep → text response", () => {
-      // 3 inner API calls: text+Read, text+Grep, text-only
-      const sb = makeBuilder();
-      sb.handleEvent(systemInit());
-      const allDeltas: ReturnType<StateBuilder["handleEvent"]> = [];
-      function collect(event: Record<string, unknown>) {
-        allDeltas.push(...sb.handleEvent(event));
-      }
-
-      // API call 1: text + Read
-      collect(messageStart());
-      collect(textBlockStart(0));
-      collect(textDelta(0, "Let me read that."));
-      collect(blockStop(0));
-      collect(toolBlockStart(1, "Read", "toolu_r1"));
-      collect(inputJsonDelta(1, '{"file_path":"/app.ts"}'));
-      collect(blockStop(1));
-      collect(assistantMessage("msg1", [
-        { type: "text", text: "Let me read that." },
-        { type: "tool_use", id: "toolu_r1", name: "Read", input: { file_path: "/app.ts" } },
-      ]));
-      collect(toolResult("toolu_r1", "file contents"));
-
-      // API call 2: text + Grep (index collision → mini-reset → message_start)
-      collect(textBlockStart(0));
-      collect(textDelta(0, "Now searching."));
-      collect(blockStop(0));
-      collect(toolBlockStart(1, "Grep", "toolu_g1"));
-      collect(inputJsonDelta(1, '{"pattern":"handleEvent"}'));
-      collect(blockStop(1));
-      collect(assistantMessage("msg2", [
-        { type: "text", text: "Now searching." },
-        { type: "tool_use", id: "toolu_g1", name: "Grep", input: { pattern: "handleEvent" } },
-      ]));
-      collect(toolResult("toolu_g1", "match"));
-
-      // API call 3: text only
-      collect(textBlockStart(0));
-      collect(textDelta(0, "Found it."));
-      collect(blockStop(0));
-      collect(assistantMessage("msg3", [{ type: "text", text: "Found it." }]));
-      collect(resultEvent());
-
-      const serverState = sb.getState();
-      const clientMsgs = simulateClient(allDeltas);
-      compareMessages(clientMsgs, serverState.messages);
-    });
-
-    it("pipeline tool execution: 3 parallel Bash in one API call", () => {
-      // Single API call with text + 3 Bash tools. Tool results arrive
-      // interleaved due to pipeline execution. No over-split.
-      const sb = makeBuilder();
-      sb.handleEvent(systemInit());
-      const allDeltas: ReturnType<StateBuilder["handleEvent"]> = [];
-      function collect(event: Record<string, unknown>) {
-        allDeltas.push(...sb.handleEvent(event));
-      }
-
-      collect(messageStart());
-      collect(textBlockStart(0));
-      collect(textDelta(0, "Running parallel searches."));
-      collect(blockStop(0));
-
-      // Tool 1
-      collect(toolBlockStart(1, "Bash", "toolu_b1"));
-      collect(inputJsonDelta(1, '{"command":"grep error"}'));
-      collect(blockStop(1));
-
-      // Partial emission + pipeline tool result for tool 1
-      collect(assistantMessage("msg-p", [
-        { type: "text", text: "Running parallel searches." },
-        { type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "grep error" } },
-      ]));
-      collect(toolResult("toolu_b1", "3 errors"));
-
-      // Tool 2 (same API call, unique index)
-      collect(toolBlockStart(2, "Bash", "toolu_b2"));
-      collect(inputJsonDelta(2, '{"command":"grep fail"}'));
-      collect(blockStop(2));
-
-      // Tool 3
-      collect(toolBlockStart(3, "Bash", "toolu_b3"));
-      collect(inputJsonDelta(3, '{"command":"grep retry"}'));
-      collect(blockStop(3));
-
-      // Remaining tool results
-      collect(toolResult("toolu_b2", "1 failure"));
-      collect(toolResult("toolu_b3", "2 retries"));
-
-      // Second API call: text response
-      collect(textBlockStart(0)); // index collision → message_start
-      collect(textDelta(0, "Found issues."));
-      collect(blockStop(0));
-      collect(assistantMessage("msg-final", [{ type: "text", text: "Found issues." }]));
-      collect(resultEvent());
-
-      const serverState = sb.getState();
-      const clientMsgs = simulateClient(allDeltas);
-      compareMessages(clientMsgs, serverState.messages);
-
-      // Verify specifics: 2 assistant messages (1 with 3 tools, 1 text-only)
-      const serverAssistant = serverState.messages.filter(m => m.role === "assistant");
-      expect(serverAssistant).toHaveLength(2);
-      expect(serverAssistant[0].tool_calls).toHaveLength(3);
-      expect(serverAssistant[1].content).toBe("Found issues.");
-    });
-
-    it("thinking + tool + text in single API call", () => {
-      const sb = makeBuilder();
-      sb.handleEvent(systemInit());
-      const allDeltas: ReturnType<StateBuilder["handleEvent"]> = [];
-      function collect(event: Record<string, unknown>) {
-        allDeltas.push(...sb.handleEvent(event));
-      }
-
-      collect(messageStart());
-      collect(thinkingBlockStart(0));
-      collect(thinkingDelta(0, "Planning approach."));
-      collect(blockStop(0));
-      collect(textBlockStart(1));
-      collect(textDelta(1, "Here's the plan."));
-      collect(blockStop(1));
-      collect(toolBlockStart(2, "Bash", "toolu_b1"));
-      collect(inputJsonDelta(2, '{"command":"npm test"}'));
-      collect(blockStop(2));
-      collect(assistantMessage("msg-1", [
-        { type: "thinking", thinking: "Planning approach." },
-        { type: "text", text: "Here's the plan." },
-        { type: "tool_use", id: "toolu_b1", name: "Bash", input: { command: "npm test" } },
-      ]));
-      collect(toolResult("toolu_b1", "pass"));
-
-      // Response after tool
-      collect(thinkingBlockStart(0));
-      collect(thinkingDelta(0, "Tests passed."));
-      collect(blockStop(0));
-      collect(textBlockStart(1));
-      collect(textDelta(1, "All good."));
-      collect(blockStop(1));
-      collect(assistantMessage("msg-2", [
-        { type: "thinking", thinking: "Tests passed." },
-        { type: "text", text: "All good." },
-      ]));
-      collect(resultEvent());
-
-      const serverState = sb.getState();
-      const clientMsgs = simulateClient(allDeltas);
-      compareMessages(clientMsgs, serverState.messages);
-    });
-  });
+  // Delta parity tests removed (gdn-padure) — old delta protocol is gone.
+  // State correctness is tested by the individual handler tests above +
+  // getCurrentMessage() + handleEventSignal() test suites below.
 
   // -- getCurrentMessage() --
 
@@ -2546,50 +2281,11 @@ describe("StateBuilder", () => {
     });
   });
 
-  // -- deriveSignal (static) --
+  // -- Conflation invariant (gdn-padure safety net) --
+  // deriveSignal tests removed (gdn-padure) — static method is gone.
+  // Signal classification is tested via handleEventSignal() above.
 
-  describe("StateBuilder.deriveSignal", () => {
-    it("returns null for empty deltas", () => {
-      expect(StateBuilder.deriveSignal([])).toBeNull();
-    });
-
-    it("returns text for content delta", () => {
-      expect(StateBuilder.deriveSignal([
-        { type: "content", index: 0, text: "hello" },
-      ])).toEqual({ signal: "text" });
-    });
-
-    it("returns structure for tool_start", () => {
-      expect(StateBuilder.deriveSignal([
-        { type: "tool_start", index: 0, name: "Bash", input: "ls" },
-      ])).toEqual({ signal: "structure" });
-    });
-
-    it("returns status for status delta", () => {
-      expect(StateBuilder.deriveSignal([
-        { type: "status", status: "working" },
-      ])).toEqual({ signal: "status" });
-    });
-
-    it("prefers structure over text when both present", () => {
-      expect(StateBuilder.deriveSignal([
-        { type: "content", index: 0, text: "hi" },
-        { type: "tool_start", index: 0, name: "Bash", input: "ls" },
-      ])).toEqual({ signal: "structure" });
-    });
-
-    it("returns ask_user with payload", () => {
-      const sig = StateBuilder.deriveSignal([
-        { type: "ask_user", questions: [{ question: "?", header: "H", options: [], multiSelect: false }], toolCallId: "t1" },
-      ]);
-      expect(sig).toEqual({
-        signal: "ask_user",
-        questions: [{ question: "?", header: "H", options: [], multiSelect: false }],
-        toolCallId: "t1",
-      });
-    });
-
-    // -- Conflation invariant (gdn-padure safety net) --
+  describe("conflation invariants", () => {
     // The bridge accumulates content_block_delta events on a timer, then
     // feeds one merged delta to the state builder. This must produce the
     // same getCurrentMessage() text and signal as feeding deltas individually.
@@ -2660,26 +2356,6 @@ describe("StateBuilder", () => {
       expect(sigB).toEqual(sigA);
     });
 
-    it("matches handleEventSignal output", () => {
-      const sb = new StateBuilder("s1", "/test");
-      sb.handleEvent(systemInit());
-      sb.handleEvent(messageStart());
-      sb.handleEvent(textBlockStart(0));
-      sb.handleEvent(textDelta(0, "hello"));
-
-      // Get deltas from handleEvent, then derive signal
-      const deltas = sb.handleEvent(streamEvent({ type: "content_block_stop", index: 0 }));
-      const staticSig = StateBuilder.deriveSignal(deltas);
-
-      // Compare with a fresh builder going through handleEventSignal
-      const sb2 = new StateBuilder("s2", "/test");
-      sb2.handleEvent(systemInit());
-      sb2.handleEvent(messageStart());
-      sb2.handleEvent(textBlockStart(0));
-      sb2.handleEvent(textDelta(0, "hello"));
-      const instanceSig = sb2.handleEventSignal(streamEvent({ type: "content_block_stop", index: 0 }));
-
-      expect(staticSig).toEqual(instanceSig);
-    });
+    // "matches handleEventSignal output" test removed — deriveSignal is gone.
   });
 });

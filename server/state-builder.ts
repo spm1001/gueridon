@@ -45,7 +45,7 @@ export interface BBSlashCommand {
   local: boolean;
 }
 
-// -- SSE delta types (what handleEvent returns for the bridge to broadcast) --
+// -- Types shared between state builder and bridge --
 
 export interface AskUserOption {
   label: string;
@@ -59,19 +59,7 @@ export interface AskUserQuestion {
   multiSelect: boolean;
 }
 
-export type SSEDelta =
-  | { type: "status"; status: "working" | "idle" }
-  | { type: "activity"; activity: "thinking" | "writing" | "tool" }
-  | { type: "content"; index: number; text: string }
-  | { type: "thinking_content"; text: string }
-  | { type: "tool_start"; index: number; name: string; input: string }
-  | { type: "tool_complete"; index: number; status: "completed" | "error"; output?: string }
-  | { type: "ask_user"; questions: AskUserQuestion[]; toolCallId: string }
-  | { type: "message_start" }
-  | { type: "api_error"; error: string }
-  | null;
-
-// -- Signal types (new protocol — what changed, not what to broadcast) --
+// -- Signal types (what changed after processing a CC event) --
 
 export type StateSignal =
   | { signal: "text" }
@@ -156,6 +144,9 @@ export class StateBuilder {
   private askUserBlockIndices = new Set<number>();
   private askUserToolIds = new Set<string>();
   private askUserBlockToolId = new Map<number, string>(); // block index → tool_use_id
+
+  // Last signal produced by a handler — read by handleEventSignal()
+  private lastSignal: StateSignal = null;
 
   // True during replayFromJSONL — controls whether handleAssistant resets
   // currentText/currentToolCalls. During live streaming, onMessageStart handles
@@ -242,76 +233,35 @@ export class StateBuilder {
     };
   }
 
-  /** Process a CC event, return SSE deltas to broadcast. */
-  handleEvent(event: Record<string, unknown>): NonNullable<SSEDelta>[] {
-    let raw: SSEDelta | SSEDelta[];
+  /** Process a CC event, mutating internal state. */
+  handleEvent(event: Record<string, unknown>): void {
+    this.lastSignal = null;
     switch (event.type) {
       case "system":
-        raw = this.handleSystem(event);
+        this.handleSystem(event);
         break;
       case "stream_event":
-        raw = this.handleStreamEvent(event);
+        this.handleStreamEvent(event);
         break;
       case "assistant":
-        raw = this.handleAssistant(event);
+        this.handleAssistant(event);
         break;
       case "user":
-        raw = this.handleUser(event);
+        this.handleUser(event);
         break;
       case "result":
-        raw = this.handleResult(event);
+        this.handleResult(event);
         break;
-      default:
-        raw = null;
     }
-    if (Array.isArray(raw)) return raw.filter((d): d is NonNullable<SSEDelta> => d !== null);
-    return raw ? [raw as NonNullable<SSEDelta>] : [];
   }
 
   /**
    * Process a CC event, return a signal indicating what changed.
    * The bridge uses this + getCurrentMessage() to decide what to send.
-   * Calls handleEvent() internally — both APIs update the same state.
    */
   handleEventSignal(event: Record<string, unknown>): StateSignal {
-    return StateBuilder.deriveSignal(this.handleEvent(event));
-  }
-
-  /**
-   * Derive a signal from deltas already produced by handleEvent().
-   * Use this when the bridge needs both the deltas (old path) and the signal (new path)
-   * from a single handleEvent() call — avoids double-processing.
-   */
-  static deriveSignal(deltas: NonNullable<SSEDelta>[]): StateSignal {
-    if (deltas.length === 0) return null;
-
-    // Priority: ask_user > status > structure > text
-    let hasText = false;
-    let hasStructure = false;
-
-    for (const d of deltas) {
-      switch (d.type) {
-        case "ask_user":
-          return { signal: "ask_user", questions: d.questions, toolCallId: d.toolCallId };
-        case "status":
-          return { signal: "status" };
-        case "tool_start":
-        case "tool_complete":
-        case "message_start":
-        case "api_error":
-          hasStructure = true;
-          break;
-        case "content":
-        case "thinking_content":
-          hasText = true;
-          break;
-        // activity deltas are informational — folded into getCurrentMessage()
-      }
-    }
-
-    if (hasStructure) return { signal: "structure" };
-    if (hasText) return { signal: "text" };
-    return null;
+    this.handleEvent(event);
+    return this.lastSignal;
   }
 
   /** Replay JSONL events (from parseSessionJSONL). Builds state silently — no deltas. */
@@ -334,8 +284,8 @@ export class StateBuilder {
 
   // -- Event handlers --
 
-  private handleSystem(event: Record<string, unknown>): SSEDelta {
-    if (event.subtype !== "init") return null;
+  private handleSystem(event: Record<string, unknown>): void {
+    if (event.subtype !== "init") return;
 
     // Reset per-turn counters — init fires once per turn
     this.turnToolCallCount = 0;
@@ -363,28 +313,30 @@ export class StateBuilder {
     }
 
     this.state.status = "working";
-    return { type: "status", status: "working" };
+    this.lastSignal = { signal: "status" };
   }
 
-  private handleStreamEvent(event: Record<string, unknown>): SSEDelta | SSEDelta[] {
+  private handleStreamEvent(event: Record<string, unknown>): void {
     const inner = event.event as Record<string, unknown> | undefined;
-    if (!inner) return null;
+    if (!inner) return;
 
     switch (inner.type) {
       case "message_start":
-        return this.onMessageStart();
+        this.onMessageStart();
+        break;
       case "content_block_start":
-        return this.onContentBlockStart(inner);
+        this.onContentBlockStart(inner);
+        break;
       case "content_block_delta":
-        return this.onContentBlockDelta(inner);
+        this.onContentBlockDelta(inner);
+        break;
       case "content_block_stop":
-        return this.onContentBlockStop(inner);
-      default:
-        return null; // message_delta, message_stop — no BB-relevant data
+        this.onContentBlockStop(inner);
+        break;
     }
   }
 
-  private onMessageStart(): SSEDelta {
+  private onMessageStart(): void {
     this.currentText = "";
     this.textBlocks.clear();
     this.thinkingBlocks.clear();
@@ -397,13 +349,13 @@ export class StateBuilder {
     this.currentMessagePushed = false;
     this.turnHasAssistant = false;
     this.currentActivity = null;
-    return { type: "message_start" };
+    this.lastSignal = { signal: "structure" };
   }
 
-  private onContentBlockStart(inner: Record<string, unknown>): SSEDelta | SSEDelta[] {
+  private onContentBlockStart(inner: Record<string, unknown>): void {
     const index = inner.index as number;
     const block = inner.content_block as Record<string, unknown> | undefined;
-    if (!block) return null;
+    if (!block) return;
 
     const blockType = block.type as string;
 
@@ -412,9 +364,6 @@ export class StateBuilder {
     // emits message_start for the FIRST call. Subsequent calls reuse block indices
     // starting from 0. If blockTypes already has this index, we're in a new API
     // call — clear streaming accumulation to prevent text/thinking/tool leakage.
-    // Emit message_start so the client creates a new assistant message (replaces
-    // the old toolCompletedSinceLastContent flag which over-split on pipeline
-    // tool execution within the same API call).
     let isNewApiCall = false;
     if (this.blockTypes.has(index)) {
       this.currentText = "";
@@ -433,23 +382,21 @@ export class StateBuilder {
 
     this.blockTypes.set(index, blockType);
 
-    let activity: SSEDelta = null;
-
     if (blockType === "text") {
       this.currentActivity = "writing";
-      activity = { type: "activity", activity: "writing" };
     } else if (blockType === "tool_use") {
       const name = (block.name as string) || "Unknown";
       const toolId = block.id as string;
 
-      // AskUserQuestion: suppress from tool calls, track for ask_user delta
+      // AskUserQuestion: suppress from tool calls, track for ask_user signal
       if (name === "AskUserQuestion" && !this.replaying) {
         this.askUserBlockIndices.add(index);
         if (toolId) {
           this.askUserToolIds.add(toolId);
           this.askUserBlockToolId.set(index, toolId);
         }
-        return isNewApiCall ? { type: "message_start" } : null;
+        if (isNewApiCall) this.lastSignal = { signal: "structure" };
+        return;
       }
 
       const call: BBToolCall = {
@@ -464,58 +411,49 @@ export class StateBuilder {
       if (toolId) this.toolIdToIndex.set(toolId, callIndex);
       this.toolBlockToCallIndex.set(index, callIndex);
       this.currentActivity = "tool";
-      activity = { type: "activity", activity: "tool" };
     } else if (blockType === "thinking") {
       this.currentActivity = "thinking";
-      activity = { type: "activity", activity: "thinking" };
     }
 
-    // On new inner API call, prepend message_start so client splits correctly
-    if (isNewApiCall && activity) {
-      return [{ type: "message_start" }, activity];
-    }
+    // New inner API call → structural change (client needs to split messages)
+    // Activity-only changes are folded into getCurrentMessage(), no signal needed.
     if (isNewApiCall) {
-      return { type: "message_start" };
+      this.lastSignal = { signal: "structure" };
     }
-    return activity;
   }
 
-  private onContentBlockDelta(inner: Record<string, unknown>): SSEDelta {
+  private onContentBlockDelta(inner: Record<string, unknown>): void {
     const index = inner.index as number;
     const delta = inner.delta as Record<string, unknown> | undefined;
-    if (!delta) return null;
+    if (!delta) return;
 
     if (delta.type === "text_delta") {
       const text = (delta.text as string) || "";
       // Accumulate per-block to avoid repeating text across blocks
       const existing = this.textBlocks.get(index) || "";
       this.textBlocks.set(index, existing + text);
-      return null; // text aggregated, emitted at content_block_stop
+      return;
     }
 
     if (delta.type === "input_json_delta") {
       const existing = this.pendingToolJson.get(index) || "";
       this.pendingToolJson.set(index, existing + ((delta.partial_json as string) || ""));
-      return null; // accumulated, emitted at content_block_stop
+      return;
     }
 
     if (delta.type === "thinking") {
       const text = (delta.thinking as string) || "";
       const existing = this.thinkingBlocks.get(index) || "";
       this.thinkingBlocks.set(index, existing + text);
-      return null; // accumulated, emitted at content_block_stop
     }
-
-    return null;
   }
 
-  private onContentBlockStop(inner: Record<string, unknown>): SSEDelta {
+  private onContentBlockStop(inner: Record<string, unknown>): void {
     const index = inner.index as number;
     const blockType = this.blockTypes.get(index);
 
     if (blockType === "text") {
       // Rebuild currentText from all text blocks (avoids repeating earlier blocks)
-      const blockText = this.textBlocks.get(index) || "";
       const allTexts: string[] = [];
       // Sort by block index to maintain order
       const sortedIndices = [...this.textBlocks.keys()].sort((a, b) => a - b);
@@ -534,28 +472,30 @@ export class StateBuilder {
           lastMsg.content = this.currentText || lastMsg.content;
         }
       }
-      return { type: "content", index, text: this.currentText };
+      this.lastSignal = { signal: "text" };
+      return;
     }
 
     if (blockType === "tool_use" && this.askUserBlockIndices.has(index)) {
-      // AskUserQuestion: parse full input and emit ask_user delta
+      // AskUserQuestion: parse full input and emit ask_user signal
       const rawJson = this.pendingToolJson.get(index);
-      if (!rawJson) return null;
+      if (!rawJson) return;
       try {
         const args = JSON.parse(rawJson);
         const questions = (args.questions || []) as AskUserQuestion[];
         const toolId = this.askUserBlockToolId.get(index) || "";
-        return { type: "ask_user" as const, questions, toolCallId: toolId };
+        this.lastSignal = { signal: "ask_user", questions, toolCallId: toolId };
       } catch {
-        return null;
+        // malformed JSON — no signal
       }
+      return;
     }
 
     if (blockType === "tool_use") {
       this.turnToolCallCount++;
 
       const callIndex = this.toolBlockToCallIndex.get(index);
-      if (callIndex === undefined) return null;
+      if (callIndex === undefined) return;
 
       const call = this.currentToolCalls[callIndex];
       const rawJson = this.pendingToolJson.get(index);
@@ -578,12 +518,13 @@ export class StateBuilder {
         }
       }
 
-      return { type: "tool_start", index: callIndex, name: call.name, input: call.input };
+      this.lastSignal = { signal: "structure" };
+      return;
     }
 
     if (blockType === "thinking") {
       const thinkingText = this.thinkingBlocks.get(index) || "";
-      if (!thinkingText) return null;
+      if (!thinkingText) return;
 
       // Build combined thinking from all blocks
       const allThinking: string[] = [];
@@ -602,20 +543,18 @@ export class StateBuilder {
         }
       }
 
-      return { type: "thinking_content", text: combined };
+      this.lastSignal = { signal: "text" };
     }
-
-    return null;
   }
 
-  private handleAssistant(event: Record<string, unknown>): SSEDelta {
+  private handleAssistant(event: Record<string, unknown>): void {
     const message = event.message as Record<string, unknown> | undefined;
-    if (!message) return null;
+    if (!message) return;
 
     // Synthetic messages — CC emits these with model:"<synthetic>" and zero usage
     // after tool results that need no response. Text is "No response requested."
     // Drop silently — no usage worth extracting, no content worth displaying.
-    if (message.model === "<synthetic>") return null;
+    if (message.model === "<synthetic>") return;
 
     // API error messages — CC emits isApiErrorMessage: true when the Anthropic
     // API returns an error (e.g. 400 "Could not process image"). No result event
@@ -625,7 +564,8 @@ export class StateBuilder {
       const errorText = extractApiErrorText(message);
       this.state.status = "idle";
       this.state.messages.push({ role: "assistant", content: errorText });
-      return { type: "api_error", error: errorText };
+      this.lastSignal = { signal: "status" };
+      return;
     }
 
     // Always extract usage — CC emits the same message ID multiple times with
@@ -651,7 +591,7 @@ export class StateBuilder {
 
     // Deduplicate by message ID — but AFTER usage extraction above
     if (msgId) {
-      if (this.seenMessageIds.has(msgId)) return null;
+      if (this.seenMessageIds.has(msgId)) return;
       this.seenMessageIds.add(msgId);
     }
 
@@ -745,19 +685,16 @@ export class StateBuilder {
       this.thinkingBlocks.clear();
       this.currentToolCalls = [];
     }
-
-    return null; // full state sent on result
   }
 
-  private handleUser(event: Record<string, unknown>): SSEDelta {
+  private handleUser(event: Record<string, unknown>): void {
     const message = event.message as Record<string, unknown> | undefined;
-    if (!message) return null;
+    if (!message) return;
 
     const content = message.content;
 
     // String content = user text
     if (typeof content === "string") {
-      // Detect bridge-injected synthetic messages by prefix convention.
       // Detect bridge-injected synthetic messages by [guéridon:*] prefix.
       // Exception: staged uploads contain deposit note(s) followed by user
       // text — these are real user messages rendered by the client.
@@ -778,16 +715,12 @@ export class StateBuilder {
       } else {
         this.state.messages.push({ role: "user", content });
       }
-      return null;
+      return;
     }
 
     // Array content = tool results
-    // Note: returns only the LAST tool_complete delta. The bridge should call
-    // handleEvent per tool_result if it needs all deltas broadcast individually.
-    // In practice, tool results arrive as a batch and the full state snapshot
-    // at turn end corrects any UI lag. Acceptable trade-off for now.
     if (Array.isArray(content)) {
-      let lastDelta: SSEDelta = null;
+      let hadToolUpdate = false;
       for (const block of content) {
         if (block.type !== "tool_result") continue;
 
@@ -818,31 +751,24 @@ export class StateBuilder {
         const status = block.is_error ? "error" : "completed";
         call.status = status;
         call.output = resultText;
-
-        lastDelta = {
-          type: "tool_complete",
-          index: idx,
-          status: status as "completed" | "error",
-          ...(resultText && { output: resultText.slice(0, 500) }),
-        };
+        hadToolUpdate = true;
       }
-      return lastDelta;
+      if (hadToolUpdate) {
+        this.lastSignal = { signal: "structure" };
+      }
     }
-
-    return null;
   }
 
-  private handleResult(event: Record<string, unknown>): SSEDelta {
+  private handleResult(event: Record<string, unknown>): void {
     this.state.status = "idle";
     this.currentActivity = null;
 
-    // Process exit error — surface as inline error message (like api_error)
+    // Process exit error — surface as inline error message
     if (event.is_error && typeof event.result === "string" && event.result) {
       this.state.messages.push({
         role: "assistant",
         content: event.result,
       });
-      return { type: "api_error", error: event.result };
     }
 
     // Extract contextWindow from modelUsage
@@ -860,6 +786,6 @@ export class StateBuilder {
       }
     }
 
-    return { type: "status", status: "idle" };
+    this.lastSignal = { signal: "status" };
   }
 }

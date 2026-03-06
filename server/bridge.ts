@@ -59,7 +59,7 @@ import {
   SCAN_ROOT,
 } from "./folders.js";
 
-import { StateBuilder, type SSEDelta } from "./state-builder.js";
+import { StateBuilder, type StateSignal } from "./state-builder.js";
 import { getVapidPublicKey, pushTurnComplete, pushAskUser, addSubscription, removeSubscription } from "./push.js";
 import { emit, errorDetail } from "./event-bus.js";
 import { initLogger } from "./logger.js";
@@ -102,7 +102,7 @@ interface SSEClient {
   folder: string | null; // null = lobby mode
   eventSeq: number;      // monotonic event counter for Last-Event-ID
   pushToken: string;     // random token for authenticating push subscribe/unsubscribe (gdn-ricocu)
-  suppressDeltas: boolean; // true after mid-turn reconnect — snapshot is authoritative until turn ends
+  suppressText: boolean; // true after mid-turn reconnect — snapshot is authoritative until turn ends
 }
 
 interface Session {
@@ -200,10 +200,9 @@ function cleanupClient(client: SSEClient): void {
 
 function broadcastToSession(session: Session, event: string, data: unknown): void {
   const payload = { folder: session.folderName, ...(data as Record<string, unknown>) };
-  const deltaType = event === "delta" ? (payload as Record<string, unknown>).type as string | undefined : undefined;
   for (const client of session.clients) {
-    const decision = shouldSendEvent(event, client.suppressDeltas, deltaType);
-    if (decision.clearSuppression) client.suppressDeltas = false;
+    const decision = shouldSendEvent(event, client.suppressText);
+    if (decision.clearSuppression) client.suppressText = false;
     if (!decision.send) continue;
     sendSSE(client, event, payload);
   }
@@ -225,7 +224,7 @@ function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): 
   const reconnect = !!lastEventId;
 
   const pushToken = randomUUID().replace(/-/g, ""); // compact hex token (gdn-ricocu)
-  const client: SSEClient = { res, folder: null, eventSeq: 0, pushToken, suppressDeltas: false };
+  const client: SSEClient = { res, folder: null, eventSeq: 0, pushToken, suppressText: false };
   allClients.add(client);
   clientsById.set(clientId, client);
   validPushTokens.add(pushToken);
@@ -260,7 +259,7 @@ function attachToSession(client: SSEClient, session: Session): void {
   }
   client.folder = session.folder;
   // Mid-turn reconnect: snapshot is authoritative, suppress deltas until turn ends
-  client.suppressDeltas = session.turnInProgress;
+  client.suppressText = session.turnInProgress;
   session.clients.add(client);
 }
 
@@ -363,11 +362,6 @@ function spawnCC(session: Session): void {
     if (session.process) {
       emit({ type: "init:timeout", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
       killWithEscalation(session.process, { folder: session.folderName, reason: "init-timeout" });
-      broadcastToSession(session, "delta", {
-        type: "status",
-        status: "error",
-        error: "CC failed to initialise within 30s",
-      });
     }
   }, INIT_TIMEOUT_MS);
 }
@@ -488,26 +482,13 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
   flushPendingDeltas(session);
 
   // Route through state builder
-  const deltas = session.stateBuilder.handleEvent(event);
-  for (const delta of deltas) {
-    broadcastToSession(session, "delta", delta);
-    // Push notification when Claude asks a question and user isn't watching
-    if (delta.type === "ask_user" && session.clients.size === 0) {
-      session.pushedAskThisTurn = true;
-      pushAskUser(session.folderName).catch((err) =>
-        emit({ type: "push:send-fail", endpoint: "ask-user", error: errorDetail(err)}),
-      );
-    }
-  }
+  const signal = session.stateBuilder.handleEventSignal(event);
+  emitSignal(session, signal);
 
-  // New protocol: derive signal and broadcast alongside old deltas (gdn-kitere).
-  // Old client ignores unknown SSE event types (per spec). New client will consume these.
-  emitNewProtocol(session, deltas);
-
-  // API error — no result event follows, so trigger turn completion here.
-  // The state builder returns an api_error delta which the client uses to
-  // show the error inline. Without this, the turn silently stalls.
-  if (deltas.some(d => d.type === "api_error")) {
+  // API error from handleAssistant — no result event follows, so trigger
+  // turn completion here. (handleResult api errors are caught by the
+  // event.type === "result" check below.)
+  if (event.isApiErrorMessage) {
     const state = session.stateBuilder.getState();
     session.contextPct = state.session.context_pct;
     onTurnComplete(session);
@@ -528,22 +509,16 @@ function flushPendingDeltas(session: Session): void {
   }
   for (const pending of session.pendingDeltas.values()) {
     const merged = buildMergedDelta(pending);
-    const deltas = session.stateBuilder.handleEvent(merged);
-    for (const delta of deltas) {
-      broadcastToSession(session, "delta", delta);
-    }
-    // New protocol: emit alongside old deltas (gdn-kitere)
-    emitNewProtocol(session, deltas);
+    const signal = session.stateBuilder.handleEventSignal(merged);
+    emitSignal(session, signal);
   }
   session.pendingDeltas.clear();
 }
 
-// -- New protocol emission (gdn-kitere) --
-// Emits text/current events alongside old delta events during transition.
-// Old clients ignore unknown SSE event types (per spec).
+// -- Signal emission --
+// Routes state builder signals to SSE event broadcasts.
 
-function emitNewProtocol(session: Session, deltas: NonNullable<SSEDelta>[]): void {
-  const signal = StateBuilder.deriveSignal(deltas as NonNullable<SSEDelta>[]);
+function emitSignal(session: Session, signal: StateSignal): void {
   if (!signal) return;
 
   switch (signal.signal) {
@@ -573,11 +548,17 @@ function emitNewProtocol(session: Session, deltas: NonNullable<SSEDelta>[]): voi
       session.lastSentTextLength = 0;
       break;
     case "ask_user":
-      // Emit as dedicated SSE event type (gdn-kemezo — client killed delta path)
       broadcastToSession(session, "ask_user", {
         questions: signal.questions,
         toolCallId: signal.toolCallId,
       });
+      // Push notification when Claude asks a question and user isn't watching
+      if (session.clients.size === 0) {
+        session.pushedAskThisTurn = true;
+        pushAskUser(session.folderName).catch((err) =>
+          emit({ type: "push:send-fail", endpoint: "ask-user", error: errorDetail(err)}),
+        );
+      }
       break;
   }
 }
@@ -683,11 +664,7 @@ function deliverPrompt(
     emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id });
   } catch (err) {
     emit({ type: "process:stdin-error", folder: session.folderName, sessionId: session.id, error: errorDetail(err)});
-    broadcastToSession(session, "delta", {
-      type: "status",
-      status: "error",
-      error: "Failed to write to CC stdin",
-    });
+    // Process will exit shortly — the exit handler broadcasts state with processAlive: false
   }
 }
 
