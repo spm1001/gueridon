@@ -4,15 +4,21 @@
  * Mock SSE server that serves the real gueridon frontend and replays
  * controlled event sequences to reproduce suspected dupe scenarios.
  *
+ * Uses the current SSE protocol: text (append), current (streaming message),
+ * state (authoritative snapshot). No delta events.
+ *
  * Usage:
  *   npx tsx scripts/dupe-sim.ts [--port 3333] [--scenario <name>]
  *
  * Scenarios:
- *   baseline     — normal turn: state → deltas → turn-end state (no dupe expected)
- *   mid-turn     — mid-turn state snapshot while deltas are streaming (hovolu pattern)
- *   reconnect    — SSE drops and reconnects during a turn
- *   upload-race  — user sends prompt, upload arrives mid-turn
- *   double-state — two rapid state snapshots
+ *   baseline        — normal turn: state → text/current → turn-end state (no dupe expected)
+ *   mid-turn        — mid-turn state snapshot while streaming (hovolu pattern)
+ *   reconnect       — SSE drops and reconnects during a turn
+ *   upload-race     — user sends prompt, upload arrives mid-turn
+ *   double-state    — two rapid state snapshots
+ *   current-no-text — current event with no prior text (commit with empty streamingText)
+ *   rapid-current   — multiple tool start/complete in quick succession
+ *   text-after-reset — text events after state snapshot resets streaming
  *
  * After the scenario plays, the server stays up so passe can screenshot.
  */
@@ -21,6 +27,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFileSync } from "node:fs";
 import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { STATIC_FILES } from "../server/bridge-logic.js";
 
 const PROJECT_ROOT = join(fileURLToPath(import.meta.url), "../..");
 
@@ -38,6 +45,29 @@ type SSEClient = {
   id: string;
 };
 
+interface MockToolCall {
+  name: string;
+  status: string;
+  input: string;
+  output: string | null;
+  collapsed: boolean;
+}
+
+interface MockMessage {
+  role: "user" | "assistant";
+  content: string | null;
+  tool_calls?: MockToolCall[];
+  synthetic?: boolean;
+  thinking?: string;
+}
+
+interface CurrentMessage {
+  text: string | null;
+  tool_calls: MockToolCall[];
+  thinking: string | null;
+  activity: string | null;
+}
+
 const clients: SSEClient[] = [];
 let scenarioRunning = false;
 let sessionBound: () => void;  // resolved when POST /session arrives
@@ -51,15 +81,17 @@ function broadcast(event: string, data: unknown): void {
   for (const c of clients) sendSSE(c, event, data);
 }
 
-// -- State factory --
-
-interface MockMessage {
-  role: "user" | "assistant";
-  content: string | null;
-  tool_calls?: { name: string; status: string; input: string; output: string | null; collapsed: boolean }[];
-  synthetic?: boolean;
-  thinking?: string;
+/** Emit a text append event. */
+function emitText(folder: string, append: string): void {
+  broadcast("text", { folder, append });
 }
+
+/** Emit a current-message event (streaming overlay). */
+function emitCurrent(folder: string, msg: CurrentMessage): void {
+  broadcast("current", { folder, ...msg });
+}
+
+// -- State factory --
 
 function makeState(messages: MockMessage[], status: "idle" | "working" = "idle") {
   return {
@@ -81,6 +113,8 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const FOLDER = "sim-project";
+
 /** Baseline: normal turn lifecycle. Should produce no dupes. */
 async function scenarioBaseline(): Promise<void> {
   const history: MockMessage[] = [
@@ -97,38 +131,40 @@ async function scenarioBaseline(): Promise<void> {
   broadcast("state", makeState(history, "working"));
   await sleep(300);
 
-  // Streaming deltas
-  broadcast("delta", { folder: "sim-project", type: "status", status: "working" });
-  await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "message_start" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "thinking" });
+  // Streaming: thinking → writing → text
+  emitCurrent(FOLDER, { text: null, tool_calls: [], thinking: null, activity: "thinking" });
   await sleep(500);
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "writing" });
+  emitCurrent(FOLDER, { text: null, tool_calls: [], thinking: null, activity: "writing" });
   await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "Let me check the project files for you." });
+  emitText(FOLDER, "Let me check the project files for you.");
   await sleep(300);
 
   // Tool call
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "tool" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "tool_start", index: 0, name: "Bash", input: "ls -la" });
+  emitCurrent(FOLDER, {
+    text: "Let me check the project files for you.",
+    tool_calls: [{ name: "Bash", status: "running", input: "ls -la", output: null, collapsed: false }],
+    thinking: null,
+    activity: "tool",
+  });
   await sleep(500);
-  broadcast("delta", { folder: "sim-project", type: "tool_complete", index: 0, status: "completed", output: "total 42\ndrwxr-xr-x  5 user user  160 Feb 26 10:00 .\n-rw-r--r--  1 user user 1234 Feb 26 10:00 index.html" });
+  emitCurrent(FOLDER, {
+    text: "Let me check the project files for you.",
+    tool_calls: [{ name: "Bash", status: "completed", input: "ls -la", output: "total 42\ndrwxr-xr-x  5 user user  160 Feb 26 10:00 .\n-rw-r--r--  1 user user 1234 Feb 26 10:00 index.html", collapsed: true }],
+    thinking: null,
+    activity: null,
+  });
   await sleep(300);
 
-  // More content
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "Here are the files in the project:\n\n- `index.html` — main frontend\n- `style.css` — styles\n- `server/bridge.ts` — SSE bridge server" });
+  // More text after tool
+  emitText(FOLDER, "\n\nHere are the files in the project:\n\n- `index.html` — main frontend\n- `style.css` — styles\n- `server/bridge.ts` — SSE bridge server");
   await sleep(200);
 
   // Turn complete — full state snapshot
   history.push({
     role: "assistant",
-    content: "Here are the files in the project:\n\n- `index.html` — main frontend\n- `style.css` — styles\n- `server/bridge.ts` — SSE bridge server",
+    content: "Let me check the project files for you.\n\nHere are the files in the project:\n\n- `index.html` — main frontend\n- `style.css` — styles\n- `server/bridge.ts` — SSE bridge server",
     tool_calls: [{ name: "Bash", status: "completed", input: "ls -la", output: "total 42\ndrwxr-xr-x  5 user user  160 Feb 26 10:00 .\n-rw-r--r--  1 user user 1234 Feb 26 10:00 index.html", collapsed: true }],
   });
-  broadcast("delta", { folder: "sim-project", type: "status", status: "idle" });
-  await sleep(100);
   broadcast("state", makeState(history, "idle"));
 }
 
@@ -149,13 +185,9 @@ async function scenarioMidTurn(): Promise<void> {
   await sleep(300);
 
   // CC starts streaming
-  broadcast("delta", { folder: "sim-project", type: "status", status: "working" });
+  emitCurrent(FOLDER, { text: null, tool_calls: [], thinking: null, activity: "writing" });
   await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "message_start" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "writing" });
-  await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "The architecture looks solid. Let me examine" });
+  emitText(FOLDER, "The architecture looks solid. Let me examine");
   await sleep(300);
 
   // *** MID-TURN: upload arrives, bridge broadcasts state snapshot ***
@@ -164,16 +196,24 @@ async function scenarioMidTurn(): Promise<void> {
   broadcast("state", makeState(historyWithDeposit, "working"));
   await sleep(100);
 
-  // Deltas continue for the original turn
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "The architecture looks solid. Let me examine the key patterns:\n\n1. **SSE for real-time updates** — good choice for unidirectional streaming\n2. **State builder pattern** — clean separation of concerns" });
+  // Text continues for the original turn
+  emitText(FOLDER, " the key patterns:\n\n1. **SSE for real-time updates** — good choice for unidirectional streaming\n2. **State builder pattern** — clean separation of concerns");
   await sleep(300);
 
   // Tool
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "tool" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "tool_start", index: 0, name: "Read", input: "server/bridge.ts" });
+  emitCurrent(FOLDER, {
+    text: "The architecture looks solid. Let me examine the key patterns:\n\n1. **SSE for real-time updates** — good choice for unidirectional streaming\n2. **State builder pattern** — clean separation of concerns",
+    tool_calls: [{ name: "Read", status: "running", input: "server/bridge.ts", output: null, collapsed: false }],
+    thinking: null,
+    activity: "tool",
+  });
   await sleep(400);
-  broadcast("delta", { folder: "sim-project", type: "tool_complete", index: 0, status: "completed", output: "/**\n * Guéridon bridge — SSE + POST HTTP server..." });
+  emitCurrent(FOLDER, {
+    text: "The architecture looks solid. Let me examine the key patterns:\n\n1. **SSE for real-time updates** — good choice for unidirectional streaming\n2. **State builder pattern** — clean separation of concerns",
+    tool_calls: [{ name: "Read", status: "completed", input: "server/bridge.ts", output: "/**\n * Guéridon bridge — SSE + POST HTTP server...", collapsed: true }],
+    thinking: null,
+    activity: null,
+  });
   await sleep(300);
 
   // Turn complete
@@ -182,8 +222,6 @@ async function scenarioMidTurn(): Promise<void> {
     content: "The architecture looks solid. Let me examine the key patterns:\n\n1. **SSE for real-time updates** — good choice for unidirectional streaming\n2. **State builder pattern** — clean separation of concerns",
     tool_calls: [{ name: "Read", status: "completed", input: "server/bridge.ts", output: "/**\n * Guéridon bridge — SSE + POST HTTP server...", collapsed: true }],
   });
-  broadcast("delta", { folder: "sim-project", type: "status", status: "idle" });
-  await sleep(100);
   broadcast("state", makeState(historyWithDeposit, "idle"));
 }
 
@@ -197,18 +235,13 @@ async function scenarioUploadRace(): Promise<void> {
   await sleep(1000);
 
   // CC starts responding
-  broadcast("delta", { folder: "sim-project", type: "status", status: "working" });
+  emitCurrent(FOLDER, { text: null, tool_calls: [], thinking: null, activity: "writing" });
   await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "message_start" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "writing" });
-  await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "Sure, show me what you're seeing." });
+  emitText(FOLDER, "Sure, show me what you're seeing.");
   await sleep(200);
 
   // Turn 1 completes
   history.push({ role: "assistant", content: "Sure, show me what you're seeing." });
-  broadcast("delta", { folder: "sim-project", type: "status", status: "idle" });
   broadcast("state", makeState(history, "idle"));
   await sleep(500);
 
@@ -219,13 +252,9 @@ async function scenarioUploadRace(): Promise<void> {
   await sleep(300);
 
   // CC processes both
-  broadcast("delta", { folder: "sim-project", type: "status", status: "working" });
+  emitCurrent(FOLDER, { text: null, tool_calls: [], thinking: null, activity: "writing" });
   await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "message_start" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "writing" });
-  await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "I can see the error in your screenshot. The issue is a null reference in `handleSSEState`." });
+  emitText(FOLDER, "I can see the error in your screenshot. The issue is a null reference in `handleSSEState`.");
   await sleep(400);
 
   // Turn complete
@@ -233,7 +262,6 @@ async function scenarioUploadRace(): Promise<void> {
     role: "assistant",
     content: "I can see the error in your screenshot. The issue is a null reference in `handleSSEState`.",
   });
-  broadcast("delta", { folder: "sim-project", type: "status", status: "idle" });
   broadcast("state", makeState(history, "idle"));
 }
 
@@ -247,13 +275,9 @@ async function scenarioDoubleState(): Promise<void> {
   await sleep(1000);
 
   // CC responding
-  broadcast("delta", { folder: "sim-project", type: "status", status: "working" });
+  emitCurrent(FOLDER, { text: null, tool_calls: [], thinking: null, activity: "writing" });
   await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "message_start" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "writing" });
-  await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "This function handles incoming SSE events. It has two main branches:" });
+  emitText(FOLDER, "This function handles incoming SSE events. It has two main branches:");
   await sleep(400);
 
   // Two state snapshots in rapid succession
@@ -263,11 +287,10 @@ async function scenarioDoubleState(): Promise<void> {
   });
   broadcast("state", makeState(history, "working"));
   await sleep(50);
-  broadcast("delta", { folder: "sim-project", type: "status", status: "idle" });
   broadcast("state", makeState(history, "idle"));
 }
 
-/** Reconnect scenario — SSE drops mid-turn, replay state + live deltas. */
+/** Reconnect scenario — SSE drops mid-turn, replay state + live streaming. */
 async function scenarioReconnect(): Promise<void> {
   const history: MockMessage[] = [
     { role: "user", content: "Refactor the upload handler" },
@@ -277,19 +300,21 @@ async function scenarioReconnect(): Promise<void> {
   await sleep(1000);
 
   // Turn starts
-  broadcast("delta", { folder: "sim-project", type: "status", status: "working" });
-  await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "message_start" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "tool" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "tool_start", index: 0, name: "Read", input: "server/bridge.ts" });
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [{ name: "Read", status: "running", input: "server/bridge.ts", output: null, collapsed: false }],
+    thinking: null,
+    activity: "tool",
+  });
   await sleep(400);
-  broadcast("delta", { folder: "sim-project", type: "tool_complete", index: 0, status: "completed", output: "// file content..." });
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [{ name: "Read", status: "completed", input: "server/bridge.ts", output: "// file content...", collapsed: true }],
+    thinking: null,
+    activity: null,
+  });
   await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "writing" });
-  await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "I'll refactor the upload handler to separate concerns." });
+  emitText(FOLDER, "I'll refactor the upload handler to separate concerns.");
   await sleep(300);
 
   // *** RECONNECT ***
@@ -308,14 +333,28 @@ async function scenarioReconnect(): Promise<void> {
   broadcast("state", makeState(partialHistory, "working"));
   await sleep(300);
 
-  // Deltas continue
-  broadcast("delta", { folder: "sim-project", type: "activity", activity: "tool" });
-  await sleep(100);
-  broadcast("delta", { folder: "sim-project", type: "tool_start", index: 1, name: "Edit", input: "server/bridge.ts" });
+  // Streaming continues after reconnect
+  emitCurrent(FOLDER, {
+    text: "I'll refactor the upload handler to separate concerns.",
+    tool_calls: [
+      { name: "Read", status: "completed", input: "server/bridge.ts", output: "// file content...", collapsed: true },
+      { name: "Edit", status: "running", input: "server/bridge.ts", output: null, collapsed: false },
+    ],
+    thinking: null,
+    activity: "tool",
+  });
   await sleep(500);
-  broadcast("delta", { folder: "sim-project", type: "tool_complete", index: 1, status: "completed", output: "Applied edit" });
+  emitCurrent(FOLDER, {
+    text: "I'll refactor the upload handler to separate concerns.",
+    tool_calls: [
+      { name: "Read", status: "completed", input: "server/bridge.ts", output: "// file content...", collapsed: true },
+      { name: "Edit", status: "completed", input: "server/bridge.ts", output: "Applied edit", collapsed: true },
+    ],
+    thinking: null,
+    activity: null,
+  });
   await sleep(200);
-  broadcast("delta", { folder: "sim-project", type: "content", index: 0, text: "I'll refactor the upload handler to separate concerns.\n\n1. Extract `depositFiles` into its own module\n2. Move MIME validation to a shared utility\n\nDone!" });
+  emitText(FOLDER, "\n\n1. Extract `depositFiles` into its own module\n2. Move MIME validation to a shared utility\n\nDone!");
   await sleep(200);
 
   // Turn complete
@@ -327,8 +366,163 @@ async function scenarioReconnect(): Promise<void> {
       { name: "Edit", status: "completed", input: "server/bridge.ts", output: "Applied edit", collapsed: true },
     ],
   };
-  broadcast("delta", { folder: "sim-project", type: "status", status: "idle" });
   broadcast("state", makeState(partialHistory, "idle"));
+}
+
+/** Current event with no prior text — tests commit logic with empty streamingText. */
+async function scenarioCurrentNoPriorText(): Promise<void> {
+  const history: MockMessage[] = [
+    { role: "user", content: "Run the tests" },
+  ];
+
+  broadcast("state", makeState(history, "idle"));
+  await sleep(1000);
+
+  // Tool starts immediately — no text event before current
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [{ name: "Bash", status: "running", input: "npm test", output: null, collapsed: false }],
+    thinking: null,
+    activity: "tool",
+  });
+  await sleep(800);
+
+  // Tool completes, text follows — current replaces current (commit check with empty streamingText)
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [{ name: "Bash", status: "completed", input: "npm test", output: "42 tests passed", collapsed: true }],
+    thinking: null,
+    activity: null,
+  });
+  await sleep(300);
+  emitText(FOLDER, "All 42 tests passed.");
+  await sleep(200);
+
+  history.push({
+    role: "assistant",
+    content: "All 42 tests passed.",
+    tool_calls: [{ name: "Bash", status: "completed", input: "npm test", output: "42 tests passed", collapsed: true }],
+  });
+  broadcast("state", makeState(history, "idle"));
+}
+
+/** Rapid current transitions — multiple tool start/complete in quick succession. */
+async function scenarioRapidCurrent(): Promise<void> {
+  const history: MockMessage[] = [
+    { role: "user", content: "Read all three config files" },
+  ];
+
+  broadcast("state", makeState(history, "idle"));
+  await sleep(1000);
+
+  // Three tools in rapid succession — each current should commit the previous
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [{ name: "Read", status: "running", input: "tsconfig.json", output: null, collapsed: false }],
+    thinking: null,
+    activity: "tool",
+  });
+  await sleep(200);
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [{ name: "Read", status: "completed", input: "tsconfig.json", output: "{...}", collapsed: true }],
+    thinking: null,
+    activity: null,
+  });
+  await sleep(100);
+  // Second tool — previous current had tool_calls, should commit
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [
+      { name: "Read", status: "completed", input: "tsconfig.json", output: "{...}", collapsed: true },
+      { name: "Read", status: "running", input: "package.json", output: null, collapsed: false },
+    ],
+    thinking: null,
+    activity: "tool",
+  });
+  await sleep(200);
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [
+      { name: "Read", status: "completed", input: "tsconfig.json", output: "{...}", collapsed: true },
+      { name: "Read", status: "completed", input: "package.json", output: "{...}", collapsed: true },
+    ],
+    thinking: null,
+    activity: null,
+  });
+  await sleep(100);
+  // Third tool
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [
+      { name: "Read", status: "completed", input: "tsconfig.json", output: "{...}", collapsed: true },
+      { name: "Read", status: "completed", input: "package.json", output: "{...}", collapsed: true },
+      { name: "Read", status: "running", input: "vitest.config.ts", output: null, collapsed: false },
+    ],
+    thinking: null,
+    activity: "tool",
+  });
+  await sleep(200);
+  emitCurrent(FOLDER, {
+    text: null,
+    tool_calls: [
+      { name: "Read", status: "completed", input: "tsconfig.json", output: "{...}", collapsed: true },
+      { name: "Read", status: "completed", input: "package.json", output: "{...}", collapsed: true },
+      { name: "Read", status: "completed", input: "vitest.config.ts", output: "{...}", collapsed: true },
+    ],
+    thinking: null,
+    activity: null,
+  });
+  await sleep(200);
+
+  // Text after all tools
+  emitText(FOLDER, "Here are your three config files. The TypeScript config targets ES2022...");
+  await sleep(200);
+
+  history.push({
+    role: "assistant",
+    content: "Here are your three config files. The TypeScript config targets ES2022...",
+    tool_calls: [
+      { name: "Read", status: "completed", input: "tsconfig.json", output: "{...}", collapsed: true },
+      { name: "Read", status: "completed", input: "package.json", output: "{...}", collapsed: true },
+      { name: "Read", status: "completed", input: "vitest.config.ts", output: "{...}", collapsed: true },
+    ],
+  });
+  broadcast("state", makeState(history, "idle"));
+}
+
+/** Text after state reset — verifies streamingText doesn't carry over. */
+async function scenarioTextAfterReset(): Promise<void> {
+  const history: MockMessage[] = [
+    { role: "user", content: "First question" },
+  ];
+
+  broadcast("state", makeState(history, "idle"));
+  await sleep(1000);
+
+  // Turn 1: stream some text
+  emitCurrent(FOLDER, { text: null, tool_calls: [], thinking: null, activity: "writing" });
+  await sleep(200);
+  emitText(FOLDER, "Here's my answer to the first question.");
+  await sleep(300);
+
+  // Turn 1 complete — state resets streamingText
+  history.push({ role: "assistant", content: "Here's my answer to the first question." });
+  broadcast("state", makeState(history, "idle"));
+  await sleep(500);
+
+  // Turn 2: new text arrives — should not include turn 1's text
+  history.push({ role: "user", content: "Second question" });
+  broadcast("state", makeState(history, "working"));
+  await sleep(300);
+
+  emitCurrent(FOLDER, { text: null, tool_calls: [], thinking: null, activity: "writing" });
+  await sleep(200);
+  emitText(FOLDER, "And here's the answer to the second question.");
+  await sleep(300);
+
+  history.push({ role: "assistant", content: "And here's the answer to the second question." });
+  broadcast("state", makeState(history, "idle"));
 }
 
 const SCENARIOS: Record<string, () => Promise<void>> = {
@@ -337,28 +531,28 @@ const SCENARIOS: Record<string, () => Promise<void>> = {
   reconnect: scenarioReconnect,
   "upload-race": scenarioUploadRace,
   "double-state": scenarioDoubleState,
+  "current-no-text": scenarioCurrentNoPriorText,
+  "rapid-current": scenarioRapidCurrent,
+  "text-after-reset": scenarioTextAfterReset,
 };
 
 // -- HTTP server --
 
-const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html",
-  ".css": "text/css",
-  ".js": "application/javascript",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-};
-
-function serveFile(res: ServerResponse, path: string): void {
+function serveFile(res: ServerResponse, filePath: string, mime?: string): void {
   try {
-    const content = readFileSync(join(PROJECT_ROOT, path));
-    const ext = extname(path);
-    res.writeHead(200, { "Content-Type": MIME_TYPES[ext] || "application/octet-stream" });
+    const content = readFileSync(join(PROJECT_ROOT, filePath));
+    const FALLBACK_MIME: Record<string, string> = {
+      ".html": "text/html", ".css": "text/css", ".js": "application/javascript",
+      ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png",
+    };
+    const contentType = mime || FALLBACK_MIME[extname(filePath)] || "application/octet-stream";
+    res.writeHead(200, { "Content-Type": contentType });
     res.end(content);
   } catch {
     res.writeHead(404).end("Not found");
   }
 }
+
 
 const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url!, `http://localhost:${PORT}`);
@@ -380,8 +574,6 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     sendSSE(client, "folders", {
       folders: [{ name: "sim-project", path: "/tmp/sim-project", state: "active", sessions: [] }],
     });
-
-    // Scenario starts after POST /session (see session handler below)
 
     req.on("close", () => {
       const idx = clients.indexOf(client);
@@ -406,7 +598,6 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
 
     if (!scenarioRunning) {
       scenarioRunning = true;
-      // Small delay so the client processes the session response first
       setTimeout(async () => {
         sessionBound();
         const fn = SCENARIOS[SCENARIO];
@@ -430,16 +621,10 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     return;
   }
 
-  // Static files
-  if (path === "/" || path === "/index.html") { serveFile(res, "index.html"); return; }
-  if (path === "/style.css") { serveFile(res, "style.css"); return; }
-  if (path === "/sw.js") { serveFile(res, "sw.js"); return; }
-  if (path === "/manifest.json") { serveFile(res, "manifest.json"); return; }
+  // Static files — route + mime from bridge-logic's STATIC_FILES
+  const staticEntry = STATIC_FILES[path];
+  if (staticEntry) { serveFile(res, staticEntry.file, staticEntry.mime); return; }
   if (path.startsWith("/icon-")) { serveFile(res, path.slice(1)); return; }
-  if (path === "/marked.js") {
-    serveFile(res, "node_modules/marked/lib/marked.umd.js");
-    return;
-  }
 
   res.writeHead(404).end("Not found");
 });

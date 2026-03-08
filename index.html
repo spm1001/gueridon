@@ -88,6 +88,7 @@ window.addEventListener('error', function(e) {
 <script src="/render-messages.js"></script>
 <script src="/render-chrome.js"></script>
 <script src="/render-overlays.js"></script>
+<script src="/state-handlers.js"></script>
 <script>
 // === Client error reporting ===
 // Captures unhandled errors and promise rejections, sends to bridge.
@@ -357,8 +358,9 @@ function sseConnect() {
     if (!data) return;
     sseResetWatchdog();
     if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
-    streamingText += data.append || '';
-    liveState.status = 'working';
+    const { updates, effects } = applyTextEvent(data);
+    streamingText += effects.appendText;
+    liveState.status = updates.status;
     sseRender();
   });
 
@@ -367,22 +369,12 @@ function sseConnect() {
     if (!data) return;
     sseResetWatchdog();
     if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
-    // If we had a previous overlay with content, commit it before replacing.
-    // This handles message boundaries (inner API calls) where CC starts a new
-    // assistant message — without this, the previous text/tools vanish.
-    // The turn-end state snapshot replaces liveState.messages authoritatively.
-    if (currentMessage && (streamingText || currentMessage.tool_calls?.length)) {
-      liveState.messages.push({
-        role: 'assistant',
-        content: streamingText || currentMessage.text || null,
-        tool_calls: currentMessage.tool_calls || undefined,
-        thinking: currentMessage.thinking || undefined,
-      });
-    }
-    currentMessage = data;
-    streamingText = data.text || '';
-    liveState.status = 'working';
-    liveState._activity = data.activity || null;
+    const { updates, effects } = applyCurrentEvent(data, { currentMessage, streamingText });
+    if (effects.commitMessage) liveState.messages.push(effects.commitMessage);
+    currentMessage = effects.newCurrentMessage;
+    streamingText = effects.newStreamingText;
+    liveState.status = updates.status;
+    liveState._activity = updates.activity;
     sseRender();
   });
 
@@ -469,63 +461,34 @@ function handleSSEFolders(folders) {
 }
 
 function handleSSEState(data) {
-  // Bridge broadcasts: { session: folderName, ...getState() }
-  // getState().session is {id, model, project, context_pct} — overwrites the string
-  // (later properties win in spread). So data.session is the object.
+  const { updates, effects } = applyStateEvent(data, {
+    currentFolder: sseCurrentFolder,
+    session: liveState.session,
+  });
 
-  // State snapshot arrived — clear loading/disconnected amber tint
-  liveState.connection = 'connected';
-
-  // State snapshot is authoritative — clear streaming overlay (gdn-kemezo)
-  currentMessage = null;
-  streamingText = '';
-
-  if (data.messages) {
-    console.log('[bb] state snapshot:', data.messages.length, 'msgs');
-    liveState.messages = data.messages;
+  // Apply state updates
+  liveState.connection = updates.connection;
+  if ('messages' in updates) {
+    if (data.messages) console.log('[bb] state snapshot:', data.messages.length, 'msgs');
+    liveState.messages = updates.messages;
   }
-  if (data.session && typeof data.session === 'object') {
-    liveState.session = { ...liveState.session, ...data.session };
-  }
-  if (data.status) liveState.status = data.status;
-  if (data.status === 'working') lastPushTag = null; // new turn — allow next idle notification
-  if (data.slashCommands !== undefined) liveState.slashCommands = data.slashCommands;
-  if (data.status === 'idle') {
-    liveState._activity = null;
-    // Local notification when Claude finishes (page unfocused)
-    const folder = sseCurrentFolder || '';
-    pushNotify(`Claude finished in ${folder}`, {
-      tag: `gueridon-done-${folder}`,
-      folder,
-    });
-  }
+  if ('session' in updates) liveState.session = updates.session;
+  if ('status' in updates) liveState.status = updates.status;
+  if ('slashCommands' in updates) liveState.slashCommands = updates.slashCommands;
+  if ('activity' in updates) liveState._activity = updates.activity;
 
-  // Session deliberately closed (/exit) — full nuke
-  if (data.sessionEnded && sseCurrentFolder) {
-    sseCurrentFolder = null;
-    liveState.session = {};
-    liveState.messages = [];
-    liveState.status = 'idle';
-    liveState._activity = null;
-    liveState.slashCommands = null;
-    currentMessage = null;
-    streamingText = '';
-    location.hash = '';
-    switcherOpen = true;
+  // Side effects
+  if (effects.clearStreaming) { currentMessage = null; streamingText = ''; }
+  if (effects.resetPushTag) lastPushTag = null;
+  if (effects.pushNotify) pushNotify(effects.pushNotify.title, effects.pushNotify.opts);
+  if (effects.clearFolder) sseCurrentFolder = null;
+  if (effects.clearHash) location.hash = '';
+  if (effects.openSwitcher) switcherOpen = true;
+  if (effects.fetchFolders) {
     fetch(bridgeUrl + '/folders')
       .then(r => r.json())
       .then(d => { if (d.folders) handleSSEFolders(d.folders); })
       .catch(() => {});
-  }
-
-  // CC process exited (crash/kill/restart) but session persists — keep folder
-  // and messages so SSE reconnect can restore via hello handler. Don't clear
-  // location.hash (belt-and-braces for reconnect).
-  if (data.processAlive === false && !data.sessionEnded && sseCurrentFolder) {
-    liveState.status = 'idle';
-    liveState._activity = null;
-    currentMessage = null;
-    streamingText = '';
   }
 
   sseRender();
@@ -597,21 +560,7 @@ async function ssePostExit(folderName) {
 async function exitSession() {
   if (!bridgeUrl || !sseCurrentFolder) return;
   await ssePostExit(sseCurrentFolder);
-  sseCurrentFolder = null;
-  liveState.session = {};
-  liveState.messages = [];
-  liveState.status = 'idle';
-  liveState._activity = null;
-  liveState.slashCommands = null;
-  currentMessage = null;
-  streamingText = '';
-  location.hash = '';
-  switcherOpen = true;
-  fetch(bridgeUrl + '/folders')
-    .then(r => r.json())
-    .then(d => { if (d.folders) handleSSEFolders(d.folders); })
-    .catch(() => {});
-  sseRender();
+  handleSSEState({ sessionEnded: true });
 }
 
 // showAskUserOverlay, hideAskUserOverlay now in /render-overlays.js
@@ -722,7 +671,8 @@ const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient,
         renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton,
         showAskUserOverlay, hideAskUserOverlay,
         getSlashCommands, renderSlashList, openSlashSheet,
-        showStagedError: _showStagedError, renderStagedDeposits: _renderStagedDeposits } = Gdn;
+        showStagedError: _showStagedError, renderStagedDeposits: _renderStagedDeposits,
+        applyStateEvent, applyTextEvent, applyCurrentEvent } = Gdn;
 
 // Chrome element refs — cached once, passed to render functions
 const chromeEls = {

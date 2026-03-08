@@ -205,7 +205,7 @@ All render logic lives in `client/*.cjs` modules. Each file is served by STATIC_
 
 **Load order matters** — classic `<script>` tags execute sequentially:
 ```
-marked.js → render-utils.js → render-chips.js → render-messages.js → render-chrome.js → render-overlays.js → inline script
+marked.js → render-utils.js → render-chips.js → render-messages.js → render-chrome.js → render-overlays.js → state-handlers.js → inline script
 ```
 
 **The `.cjs` pattern:** `package.json` has `"type": "module"`, making `.js` files ESM. Client files use `module.exports` (CJS) so they work as both classic browser scripts and vitest imports. The `.cjs` extension forces CJS regardless of the package type setting.
@@ -229,6 +229,9 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 | `render-messages.cjs` | `renderUserBubble`, `addCopyButtons`, `renderMessages` |
 | `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` |
 | `render-overlays.cjs` | `showAskUserOverlay`, `hideAskUserOverlay`, `getSlashCommands`, `renderSlashList`, `openSlashSheet`, `showStagedError`, `renderStagedDeposits` |
+| `state-handlers.cjs` | `applyStateEvent`, `applyTextEvent`, `applyCurrentEvent` |
+
+**`state-handlers.cjs` — updates + effects pattern:** Unlike render modules (which receive state and write to DOM), state handlers are pure functions that return `{ updates, effects }`. `updates` are partial liveState fields to merge; `effects` are side-effect flags (`clearStreaming`, `openSwitcher`, `fetchFolders`, `pushNotify`, etc.) that the inline script acts on. This separation keeps the branching logic testable while leaving IO (DOM mutation, fetch, location.hash) in the inline script. `handleSSEState`, the `text` listener, and the `current` listener all follow this pattern. `exitSession` reuses `handleSSEState` with a synthetic `{ sessionEnded: true }` event.
 
 ### Layout model — body-scroll
 

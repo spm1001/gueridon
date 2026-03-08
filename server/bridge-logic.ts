@@ -47,6 +47,7 @@ export const STATIC_FILES: Record<string, { file: string; mime: string }> = {
   "/render-messages.js": { file: "client/render-messages.cjs", mime: "application/javascript" },
   "/render-chrome.js": { file: "client/render-chrome.cjs", mime: "application/javascript" },
   "/render-overlays.js": { file: "client/render-overlays.cjs", mime: "application/javascript" },
+  "/state-handlers.js": { file: "client/state-handlers.cjs", mime: "application/javascript" },
   "/fixtures.js": { file: "client/fixtures.cjs", mime: "application/javascript" },
 };
 
@@ -56,6 +57,7 @@ export const CLIENT_FILES = [
   "index.html", "style.css",
   "client/render-utils.cjs", "client/render-chips.cjs",
   "client/render-messages.cjs", "client/render-chrome.cjs", "client/render-overlays.cjs",
+  "client/state-handlers.cjs",
 ];
 
 // CSP: restrict what index.html can load (gdn-tilozu).
