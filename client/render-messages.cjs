@@ -52,7 +52,11 @@ function renderUserBubble(content) {
   remaining = remaining.replace(/^\n+/, '').replace(/\n+$/, '');
   let html = '';
   if (fileNames.length > 0) html += `<div class="msg-files">\u{1F4CE} ${fileNames.join(', ')}</div>`;
-  if (remaining) html += truncateAutolinks(_marked.parseInline(remaining));
+  if (remaining) {
+    // parseInline collapses newlines — convert to <br> to preserve user's line breaks
+    const withBreaks = remaining.replace(/\n/g, '<br>');
+    html += truncateAutolinks(_marked.parseInline(withBreaks));
+  }
   return html;
 }
 
