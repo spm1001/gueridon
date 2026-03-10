@@ -49,6 +49,7 @@ sudo systemctl status gueridon     # Check health
 journalctl -u gueridon -f          # Tail logs
 ```
 
+- **`EnvironmentFile=/opt/gueridon/.env`** — `TAILSCALE_HOSTNAME`, `VAPID_SUBJECT`, `ENABLE_CLAUDEAI_MCP_SERVERS` live here (not in the unit file). `.env.example` in the repo has placeholders. `.env` is gitignored.
 - **`KillMode=control-group`** — on restart, systemd kills everything in the cgroup: tsx launcher, node server, CC processes, and anything CC spawned (chrome via Passe, python http.server, etc.). This frees port 3001 cleanly and prevents orphan accumulation. **CC resume still works** — session state lives in JSONL on disk, not in the process. The previous `KillMode=process` caused `EADDRINUSE` crash loops (orphan node server held the port) and cgroup bloat (1.2GB of chrome renderer trees from past Passe invocations). Note: processes spawned by CC during normal operation still accumulate between restarts; a periodic restart (or any crash) cleans them up.
 - **HTTPS terminated by `tailscale serve`** — bridge listens on HTTP :3001.
 - **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
