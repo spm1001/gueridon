@@ -1068,12 +1068,15 @@ async function handlePrompt(
 
     if (reason === "self-caused" || reason === "external") {
       const resumeText = buildResumeInjection(reason, sessionAge > STALE_SESSION_MS ? null : lastToolCall);
-      // Combine resume context with user's message as a single prompt.
-      // Two rapid deliverPrompt calls before CC starts processing get
-      // concatenated by CC into one turn — making them explicit avoids
-      // the user seeing their nudge ("Oh?") glued to the system message.
-      const userText = parsed.text || parsed.content || "";
-      deliverPrompt(session, { text: userText ? `${resumeText}\n\n${userText}` : resumeText });
+      // Send resume context as its own turn. CC processes stream-json
+      // envelopes sequentially — two writes queue as two turns, not one.
+      // The user's message (if any) follows as a separate turn so it
+      // renders as its own bubble, not glued to the system message.
+      deliverPrompt(session, { text: resumeText });
+      const userText = parsed.text || (typeof parsed.content === "string" ? parsed.content : "");
+      if (userText) {
+        deliverPrompt(session, { text: userText });
+      }
     } else {
       deliverPrompt(session, parsed);
     }
@@ -1175,7 +1178,8 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
           session.pendingResume = undefined;
           if (reason === "self-caused" || reason === "external") {
             const resumeText = buildResumeInjection(reason, sessionAge > STALE_SESSION_MS ? null : lastToolCall);
-            deliverPrompt(session, { text: `${resumeText}\n\n${note}` });
+            deliverPrompt(session, { text: resumeText });
+            deliverPrompt(session, { text: note });
           } else {
             deliverPrompt(session, { text: note });
           }
