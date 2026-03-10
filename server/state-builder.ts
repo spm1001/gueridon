@@ -202,7 +202,12 @@ export class StateBuilder {
     return JSON.parse(JSON.stringify(this.state.messages));
   }
 
-  /** The in-flight streaming message, or null when idle. */
+  /** The in-flight streaming message, or null when idle.
+   *  Once handleAssistant has committed the message, the committed copy in
+   *  state.messages is patched in place by onContentBlockStop — so the streaming
+   *  overlay only includes content NOT yet in the committed message (new tools
+   *  still accumulating JSON, text not yet stopped). This prevents the same
+   *  tool_call appearing in both messages[] and the overlay simultaneously. */
   getCurrentMessage(): CurrentMessage | null {
     if (this.state.status !== "working") return null;
 
@@ -215,6 +220,23 @@ export class StateBuilder {
         if (t) parts.push(t);
       }
       if (parts.length > 0) thinking = parts.join("\n\n");
+    }
+
+    // When the message is already committed, the committed copy in
+    // state.messages has text, thinking, and tool_calls patched in place by
+    // onContentBlockStop. The overlay only surfaces what's NOT yet committed:
+    // new tools still accumulating, and activity for the working indicator.
+    if (this.currentMessagePushed) {
+      const committedCount = this.lastCommittedToolCalls.length;
+      const uncommittedTools = this.currentToolCalls.slice(committedCount);
+      // If nothing new beyond what's committed, return null — no overlay needed.
+      if (uncommittedTools.length === 0) return null;
+      return {
+        text: null,
+        tool_calls: [...uncommittedTools],
+        thinking: null,
+        activity: this.currentActivity,
+      };
     }
 
     return {
