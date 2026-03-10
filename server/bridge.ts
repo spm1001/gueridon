@@ -1671,6 +1671,9 @@ process.on("unhandledRejection", (reason) => {
 initLogger();
 initStatusBuffer();
 priorSessions = reapOrphans();
+if (priorSessions.length > 0) {
+  emit({ type: "server:prior-sessions", sessions: priorSessions.map(p => ({ folder: basename(p.folder), sessionId: p.sessionId, turnInProgress: p.turnInProgress })) });
+}
 
 // Watch client files for changes — push stale notification to connected clients
 startWatcher(PROJECT_ROOT, (newHash) => {

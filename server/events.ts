@@ -96,7 +96,8 @@ export type BridgeEvent =
   | { type: "server:shutdown-complete" }
   | { type: "server:uncaught-exception"; error: string }
   | { type: "server:unhandled-rejection"; error: string }
-  | { type: "server:persist-error"; error: string };
+  | { type: "server:persist-error"; error: string }
+  | { type: "server:prior-sessions"; sessions: Array<{ folder: string; sessionId: string; turnInProgress: boolean }> };
 
 // -- Level mapping --
 
@@ -152,6 +153,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "server:uncaught-exception": "error",
   "server:unhandled-rejection": "error",
   "server:persist-error": "error",
+  "server:prior-sessions": "info",
 };
 
 export function levelFor(event: BridgeEvent): LogLevel {
