@@ -141,6 +141,8 @@ interface Session {
   subagentFilteredCount: number;
   /** Length of text last sent via new-protocol 'current' event — for computing text appends (gdn-kitere). */
   lastSentTextLength: number;
+  /** Last messagesVersion sent in a current event — skip messages[] when unchanged. */
+  lastSentMessagesVersion: number;
   /** SSE bytes sent this turn, keyed by event type — reported in turn:complete. */
   turnSSEBytes: Map<string, number>;
 }
@@ -539,12 +541,16 @@ function emitSignal(session: Session, signal: StateSignal): void {
       break;
     }
     case "structure": {
-      // Structural change — send committed messages + streaming overlay (if any).
-      // Client replaces both — no client-side commit decisions.
+      // Structural change — send streaming overlay + committed messages (if changed).
+      // Only include messages[] when the version has bumped since last send —
+      // saves ~95% of current-event bandwidth over cellular.
       const current = session.stateBuilder.getCurrentMessage();
-      const payload: Record<string, unknown> = {
-        messages: session.stateBuilder.getMessages(),
-      };
+      const payload: Record<string, unknown> = {};
+      const ver = session.stateBuilder.messagesVersion;
+      if (ver !== session.lastSentMessagesVersion) {
+        payload.messages = session.stateBuilder.getMessages();
+        session.lastSentMessagesVersion = ver;
+      }
       if (current) {
         Object.assign(payload, current);
         session.lastSentTextLength = current.text?.length || 0;
@@ -778,6 +784,7 @@ async function createSession(folderPath: string): Promise<Session> {
     subagentFilteredCount: 0,
     turnSSEBytes: new Map(),
     lastSentTextLength: 0,
+    lastSentMessagesVersion: -1,
   };
 
   // Replay JSONL if resuming (async to avoid blocking on large files)
@@ -916,6 +923,7 @@ async function createSessionWithId(
     subagentFilteredCount: 0,
     turnSSEBytes: new Map(),
     lastSentTextLength: 0,
+    lastSentMessagesVersion: -1,
   };
 
   if (resumable) {

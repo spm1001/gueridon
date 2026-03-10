@@ -183,6 +183,11 @@ export class StateBuilder {
   // messages in the same turn sum correctly.
   private turnOutputTokensById = new Map<string, number>();
 
+  // Monotonic counter incremented on every state.messages mutation (push or patch).
+  // Bridge compares against its last-sent version to skip redundant messages[] in
+  // current events — saves ~95% of SSE bandwidth over cellular.
+  private _messagesVersion = 0;
+
   constructor(sessionId: string, project: string) {
     this.state = {
       session: { id: sessionId, model: "", project, context_pct: 0 },
@@ -200,6 +205,16 @@ export class StateBuilder {
   /** Committed messages — cheaper than getState() for mid-turn broadcasts. */
   getMessages(): BBMessage[] {
     return JSON.parse(JSON.stringify(this.state.messages));
+  }
+
+  /** Monotonic version counter for state.messages — increments on every mutation. */
+  get messagesVersion(): number {
+    return this._messagesVersion;
+  }
+
+  /** Bump after any state.messages mutation (push or in-place patch). */
+  private bumpMessages(): void {
+    this._messagesVersion++;
   }
 
   /** The in-flight streaming message, or null when idle.
@@ -497,6 +512,7 @@ export class StateBuilder {
         const lastMsg = this.state.messages[this.state.messages.length - 1];
         if (lastMsg?.role === "assistant") {
           lastMsg.content = this.currentText || lastMsg.content;
+          this.bumpMessages();
         }
       }
       this.lastSignal = { signal: "text" };
@@ -542,6 +558,7 @@ export class StateBuilder {
         if (lastMsg?.role === "assistant") {
           lastMsg.tool_calls = [...this.currentToolCalls];
           this.lastCommittedToolCalls = lastMsg.tool_calls;
+          this.bumpMessages();
         }
       }
 
@@ -567,6 +584,7 @@ export class StateBuilder {
         const lastMsg = this.state.messages[this.state.messages.length - 1];
         if (lastMsg?.role === "assistant") {
           lastMsg.thinking = combined;
+          this.bumpMessages();
         }
       }
 
@@ -591,6 +609,7 @@ export class StateBuilder {
       const errorText = extractApiErrorText(message);
       this.state.status = "idle";
       this.state.messages.push({ role: "assistant", content: errorText });
+      this.bumpMessages();
       this.lastSignal = { signal: "status" };
       return;
     }
@@ -693,6 +712,7 @@ export class StateBuilder {
       ...(thinking && { thinking }),
     };
     this.state.messages.push(msg);
+    this.bumpMessages();
     this.currentMessagePushed = true;
     this.turnHasAssistant = true;
 
@@ -742,6 +762,7 @@ export class StateBuilder {
       } else {
         this.state.messages.push({ role: "user", content });
       }
+      this.bumpMessages();
       return;
     }
 
@@ -781,6 +802,7 @@ export class StateBuilder {
         hadToolUpdate = true;
       }
       if (hadToolUpdate) {
+        this.bumpMessages();
         this.lastSignal = { signal: "structure" };
       }
     }
@@ -796,6 +818,7 @@ export class StateBuilder {
         role: "assistant",
         content: event.result,
       });
+      this.bumpMessages();
     }
 
     // Extract contextWindow from modelUsage
