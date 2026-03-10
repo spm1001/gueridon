@@ -56,6 +56,7 @@
   <div class="input-area">
     <textarea class="input-field" placeholder="Message Claude..." rows="1" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
     <div class="staged-deposits" id="stagedDeposits"></div>
+    <div class="ask-recovery" id="askRecovery" style="display:none"></div>
     <div class="btn-bar">
       <button class="btn-circle btn-file" aria-label="Attach" id="fileBtn">+</button>
       <button class="btn-circle btn-slash" aria-label="Commands" id="slashBtn">/</button>
@@ -262,6 +263,7 @@ let liveState = {
 // New protocol state (gdn-kemezo) — server-authoritative streaming
 let streamingText = '';       // accumulated from 'text' append events
 let currentMessage = null;    // from 'current' events (full CurrentMessage)
+let pendingAskUser = null;    // stashed ask_user data for recovery after dismiss
 
 /** Parse SSE event data, returning null on malformed JSON (e.g. truncated reconnect). */
 function sseParseData(ev) {
@@ -383,15 +385,8 @@ function sseConnect() {
     if (!data) return;
     sseResetWatchdog();
     if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
-    showAskUserOverlay(data.questions, data.toolCallId, {
-      els: askEls,
-      onAnswer(answer) {
-        ssePostPrompt(sseCurrentFolder, answer);
-        liveState.messages.push({ role: 'user', content: answer });
-        sseRender();
-      },
-      onDismiss() { ta.focus(); },
-    });
+    pendingAskUser = data;
+    openAskUser(data);
   });
 
   sseSource.addEventListener('ping', () => {
@@ -565,11 +560,30 @@ async function exitSession() {
 
 // showAskUserOverlay, hideAskUserOverlay now in /render-overlays.js
 
+/** Open (or reopen) the AskUserQuestion overlay from stashed data. */
+function openAskUser(data) {
+  showAskUserOverlay(data.questions, data.toolCallId, {
+    els: askEls,
+    onAnswer(answer) {
+      pendingAskUser = null;
+      ssePostPrompt(sseCurrentFolder, answer);
+      liveState.messages.push({ role: 'user', content: answer });
+      sseRender();
+    },
+    onDismiss() {
+      // pendingAskUser stays set — recovery chip in status bar will reopen
+      ta.focus();
+      sseRender();
+    },
+  });
+}
+
 function sseConnectFolder(folder, sessionId) {
   const name = folder.name || folder;
   // Allow reconnect to same folder if switching sessions
   if (sseCurrentFolder === name && !sessionId) return;
   sseCurrentFolder = name;
+  pendingAskUser = null;
   liveState.session = { project: name };
   liveState.messages = [];
   liveState.status = 'idle';
@@ -636,6 +650,18 @@ function sseRender() {
     document.getElementById('slashBtn').classList.toggle('visible', hasFolder);
     document.getElementById('fileBtn').classList.toggle('visible', hasFolder);
     refreshPlaceholder();
+
+    // AskUser recovery chip — show when overlay was dismissed but question is pending
+    const askChip = document.getElementById('askRecovery');
+    const overlayOpen = askEls.backdrop.dataset.open === 'true';
+    if (pendingAskUser && !overlayOpen) {
+      askChip.textContent = 'Question waiting — tap to reopen';
+      askChip.style.display = 'block';
+      askChip.onclick = () => openAskUser(pendingAskUser);
+    } else {
+      askChip.style.display = 'none';
+      askChip.onclick = null;
+    }
   });
 }
 

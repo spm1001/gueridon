@@ -103,16 +103,18 @@ function showAskUserOverlay(questions, toolCallId, opts) {
     confirmBtn.addEventListener('click', () => sendAnswer());
   }
 
-  // Custom answer — dismiss overlay
+  // Custom answer — dismiss overlay, let user type freely
   els.content.querySelector('.ask-custom').addEventListener('click', () => {
     hideAskUserOverlay(els);
     onDismiss();
   });
 
-  // Backdrop tap dismisses
-  els.backdrop.addEventListener('click', () => {
-    hideAskUserOverlay(els);
-    onDismiss();
+  // Backdrop tap — absorb but don't dismiss. The overlay is modal:
+  // only an explicit answer or "type custom" should close it.
+  // Prevents accidental dismissal from fat fingers, scroll momentum,
+  // and taps outside the sheet on mobile.
+  els.backdrop.addEventListener('click', (e) => {
+    e.stopPropagation();
   });
 }
 
