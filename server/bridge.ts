@@ -534,11 +534,15 @@ function emitSignal(session: Session, signal: StateSignal): void {
       break;
     }
     case "structure": {
-      // Structural change — send full current message
+      // Structural change — send full current message + committed messages.
+      // Client replaces both — no client-side commit decisions.
       const current = session.stateBuilder.getCurrentMessage();
       if (current) {
         session.lastSentTextLength = current.text?.length || 0;
-        broadcastToSession(session, "current", current);
+        broadcastToSession(session, "current", {
+          ...current,
+          messages: session.stateBuilder.getMessages(),
+        });
       }
       break;
     }

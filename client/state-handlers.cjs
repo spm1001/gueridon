@@ -103,37 +103,26 @@ function applyTextEvent(data) {
 /**
  * Process an SSE current-message event.
  *
- * If a previous streaming message had content (text or tool calls), it is
- * returned as commitMessage for the inline script to push onto liveState.messages.
- * This handles message boundaries where CC starts a new assistant message.
+ * Pure replacement — server sends committed messages + streaming overlay.
+ * Client never decides when messages are committed; server tells it.
  *
- * @param {Object} data - SSE current event payload (CurrentMessage + folder)
- * @param {Object} ctx - Current streaming context
- * @param {Object|null} ctx.currentMessage - Previous CurrentMessage, or null
- * @param {string} ctx.streamingText - Accumulated text from text events
+ * @param {Object} data - SSE current event payload (CurrentMessage + messages + folder)
  * @returns {{ updates: Object, effects: Object }}
  */
-function applyCurrentEvent(data, ctx) {
+function applyCurrentEvent(data) {
   const updates = {
     status: 'working',
     activity: data.activity || null,
   };
 
-  // Commit previous streaming message if it had content
-  let commitMessage = null;
-  if (ctx.currentMessage && (ctx.streamingText || ctx.currentMessage.tool_calls?.length)) {
-    commitMessage = {
-      role: 'assistant',
-      content: ctx.streamingText || ctx.currentMessage.text || null,
-      tool_calls: ctx.currentMessage.tool_calls || undefined,
-      thinking: ctx.currentMessage.thinking || undefined,
-    };
+  // Server sends authoritative committed messages alongside the streaming overlay
+  if (data.messages) {
+    updates.messages = data.messages;
   }
 
   return {
     updates,
     effects: {
-      commitMessage,
       newCurrentMessage: data,
       newStreamingText: data.text || '',
     },

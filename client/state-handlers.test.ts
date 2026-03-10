@@ -269,27 +269,18 @@ describe("applyTextEvent", () => {
 });
 
 // ============================================================
-// applyCurrentEvent
+// applyCurrentEvent — pure replacement, no client-side commit logic
 // ============================================================
-describe("applyCurrentEvent — no previous message", () => {
-  it("does not commit when no previous currentMessage", () => {
-    const { effects } = applyCurrentEvent(
-      { text: "hello", tool_calls: [], thinking: null, activity: "writing" },
-      { currentMessage: null, streamingText: "" },
-    );
-    expect(effects.commitMessage).toBeNull();
-  });
-
+describe("applyCurrentEvent — pure replacement", () => {
   it("sets newCurrentMessage to the data", () => {
     const data = { text: "hello", tool_calls: [], thinking: null, activity: "writing" };
-    const { effects } = applyCurrentEvent(data, { currentMessage: null, streamingText: "" });
+    const { effects } = applyCurrentEvent(data);
     expect(effects.newCurrentMessage).toBe(data);
   });
 
   it("sets newStreamingText from data.text", () => {
     const { effects } = applyCurrentEvent(
       { text: "some text", tool_calls: [], thinking: null, activity: "writing" },
-      { currentMessage: null, streamingText: "" },
     );
     expect(effects.newStreamingText).toBe("some text");
   });
@@ -297,7 +288,6 @@ describe("applyCurrentEvent — no previous message", () => {
   it("sets newStreamingText to empty when data.text is null", () => {
     const { effects } = applyCurrentEvent(
       { text: null, tool_calls: [], thinking: null, activity: "tool" },
-      { currentMessage: null, streamingText: "" },
     );
     expect(effects.newStreamingText).toBe("");
   });
@@ -305,7 +295,6 @@ describe("applyCurrentEvent — no previous message", () => {
   it("sets status to working", () => {
     const { updates } = applyCurrentEvent(
       { text: null, tool_calls: [], thinking: null, activity: "writing" },
-      { currentMessage: null, streamingText: "" },
     );
     expect(updates.status).toBe("working");
   });
@@ -313,7 +302,6 @@ describe("applyCurrentEvent — no previous message", () => {
   it("sets activity from data", () => {
     const { updates } = applyCurrentEvent(
       { text: null, tool_calls: [], thinking: null, activity: "tool" },
-      { currentMessage: null, streamingText: "" },
     );
     expect(updates.activity).toBe("tool");
   });
@@ -321,84 +309,29 @@ describe("applyCurrentEvent — no previous message", () => {
   it("sets activity to null when data has no activity", () => {
     const { updates } = applyCurrentEvent(
       { text: null, tool_calls: [], thinking: null },
-      { currentMessage: null, streamingText: "" },
     );
     expect(updates.activity).toBeNull();
   });
-});
 
-describe("applyCurrentEvent — commit previous message", () => {
-  it("commits when previous message has streamingText", () => {
-    const prev = { text: null, tool_calls: [], thinking: null, activity: "writing" };
-    const { effects } = applyCurrentEvent(
-      { text: null, tool_calls: [{ name: "Bash", status: "running" }], thinking: null, activity: "tool" },
-      { currentMessage: prev, streamingText: "I'll check the files." },
+  it("applies server messages when present", () => {
+    const msgs = [{ role: "user", content: "hi" }, { role: "assistant", content: "hello" }];
+    const { updates } = applyCurrentEvent(
+      { text: "more", tool_calls: [], thinking: null, activity: "writing", messages: msgs },
     );
-    expect(effects.commitMessage).toEqual({
-      role: "assistant",
-      content: "I'll check the files.",
-      tool_calls: [],
-      thinking: undefined,
-    });
+    expect(updates.messages).toEqual(msgs);
   });
 
-  it("commits when previous message has tool_calls", () => {
-    const prev = {
-      text: "some text",
-      tool_calls: [{ name: "Read", status: "completed", input: "f.ts", output: "...", collapsed: true }],
-      thinking: null,
-      activity: null,
-    };
-    const { effects } = applyCurrentEvent(
-      { text: null, tool_calls: [], thinking: null, activity: "writing" },
-      { currentMessage: prev, streamingText: "" },
+  it("does not set messages when absent from data", () => {
+    const { updates } = applyCurrentEvent(
+      { text: "hello", tool_calls: [], thinking: null, activity: "writing" },
     );
-    expect(effects.commitMessage).not.toBeNull();
-    expect(effects.commitMessage!.tool_calls).toEqual(prev.tool_calls);
-    // No streamingText, so content falls back to prev.text
-    expect(effects.commitMessage!.content).toBe("some text");
+    expect("messages" in updates).toBe(false);
   });
 
-  it("prefers streamingText over currentMessage.text for content", () => {
-    const prev = { text: "old text", tool_calls: [], thinking: "hmm", activity: "writing" };
+  it("has no commitMessage in effects", () => {
     const { effects } = applyCurrentEvent(
-      { text: null, tool_calls: [], thinking: null, activity: "tool" },
-      { currentMessage: prev, streamingText: "newer accumulated text" },
+      { text: "hello", tool_calls: [{ name: "Bash", status: "running" }], thinking: null, activity: "tool" },
     );
-    expect(effects.commitMessage!.content).toBe("newer accumulated text");
-    expect(effects.commitMessage!.thinking).toBe("hmm");
-  });
-
-  it("does NOT commit when previous message has no text and no tools", () => {
-    const prev = { text: null, tool_calls: [], thinking: null, activity: "thinking" };
-    const { effects } = applyCurrentEvent(
-      { text: null, tool_calls: [], thinking: null, activity: "writing" },
-      { currentMessage: prev, streamingText: "" },
-    );
-    expect(effects.commitMessage).toBeNull();
-  });
-
-  it("does NOT commit when previous message has empty tool_calls array", () => {
-    // Empty array is falsy for .length check
-    const prev = { text: null, tool_calls: [], thinking: null, activity: "writing" };
-    const { effects } = applyCurrentEvent(
-      { text: "next", tool_calls: [], thinking: null, activity: "writing" },
-      { currentMessage: prev, streamingText: "" },
-    );
-    expect(effects.commitMessage).toBeNull();
-  });
-
-  it("commits with null content when no text anywhere", () => {
-    const prev = {
-      text: null,
-      tool_calls: [{ name: "Bash", status: "completed" }],
-      thinking: null,
-      activity: "tool",
-    };
-    const { effects } = applyCurrentEvent(
-      { text: null, tool_calls: [], thinking: null, activity: "writing" },
-      { currentMessage: prev, streamingText: "" },
-    );
-    expect(effects.commitMessage!.content).toBeNull();
+    expect("commitMessage" in effects).toBe(false);
   });
 });

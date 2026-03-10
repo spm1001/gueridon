@@ -197,6 +197,11 @@ export class StateBuilder {
     return JSON.parse(JSON.stringify(this.state));
   }
 
+  /** Committed messages — cheaper than getState() for mid-turn broadcasts. */
+  getMessages(): BBMessage[] {
+    return JSON.parse(JSON.stringify(this.state.messages));
+  }
+
   /** The in-flight streaming message, or null when idle. */
   getCurrentMessage(): CurrentMessage | null {
     if (this.state.status !== "working") return null;

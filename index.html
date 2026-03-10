@@ -369,8 +369,8 @@ function sseConnect() {
     if (!data) return;
     sseResetWatchdog();
     if (sseCurrentFolder && data.folder && data.folder !== sseCurrentFolder) return;
-    const { updates, effects } = applyCurrentEvent(data, { currentMessage, streamingText });
-    if (effects.commitMessage) liveState.messages.push(effects.commitMessage);
+    const { updates, effects } = applyCurrentEvent(data);
+    if (updates.messages) liveState.messages = updates.messages;
     currentMessage = effects.newCurrentMessage;
     streamingText = effects.newStreamingText;
     liveState.status = updates.status;
