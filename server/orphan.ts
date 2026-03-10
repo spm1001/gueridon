@@ -6,7 +6,7 @@
  * for crash recovery.
  */
 
-import { readFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { homedir } from "node:os";
@@ -59,6 +59,26 @@ export function persistSessions(sessions: Iterable<PersistableSession>): void {
       emit({ type: "server:persist-error", error: errorDetail(err) });
     }
   }, 500);
+}
+
+/** Synchronous write for shutdown — must complete before process exits. */
+export function persistSessionsSync(sessions: Iterable<PersistableSession>): void {
+  const records: SessionRecord[] = [];
+  for (const s of sessions) {
+    if (s.process?.pid) {
+      records.push({
+        sessionId: s.id,
+        folder: s.folder,
+        pid: s.process.pid,
+        spawnedAt: s.spawnedAt ?? Date.now(),
+        turnInProgress: s.turnInProgress,
+      });
+    }
+  }
+  try {
+    mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+    writeFileSync(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
+  } catch { /* best effort */ }
 }
 
 /** Walk /proc to collect all descendant PIDs (children, grandchildren, etc). */

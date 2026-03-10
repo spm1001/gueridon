@@ -66,7 +66,7 @@ import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
 import { buildDepositNote, buildShareDepositNote } from "./upload.js";
 import { depositFiles } from "./deposit.js";
-import { persistSessions, reapOrphans, type PriorSessionInfo } from "./orphan.js";
+import { persistSessions, persistSessionsSync, reapOrphans, type PriorSessionInfo } from "./orphan.js";
 import { generateFolderName } from "./fun-names.js";
 import { getContentHash, startWatcher, stopWatcher } from "./content-hash.js";
 import { requestContext, generateRequestId } from "./request-context.js";
@@ -1625,6 +1625,10 @@ function shutdown(signal: string): void {
   clearInterval(pingTimer);
   stopWatcher();
 
+  // Persist session state synchronously BEFORE killing — the next bridge's
+  // reapOrphans() reads this to know which sessions were mid-turn.
+  persistSessionsSync(sessions.values());
+
   // Kill all child CC processes
   for (const session of sessions.values()) {
     if (session.flushTimer) clearTimeout(session.flushTimer);
@@ -1644,8 +1648,8 @@ function shutdown(signal: string): void {
   clientsById.clear();
   sessions.clear();
 
-  // Leave sse-sessions.json intact — KillMode=process means CC children may
-  // survive this shutdown. The next bridge's reapOrphans() needs the file.
+  // sse-sessions.json was written synchronously above — the next bridge's
+  // reapOrphans() reads it for orphan PIDs and turnInProgress state.
 
   // Give kill escalation time to fire if needed, then exit
   setTimeout(() => {
