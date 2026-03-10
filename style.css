@@ -1252,7 +1252,7 @@ body[data-switcher-open] {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 12px;
-  font-size: 0.85rem;
+  font-size: 16px; /* >=16px prevents iOS auto-zoom on focus */
   outline: none;
 }
 .ask-custom-input:focus {
