@@ -43,6 +43,9 @@ export type BridgeEvent =
   | { type: "process:non-json"; folder: string; line: string }
 
   // Orphan reaping
+  | { type: "orphan:no-file" }
+  | { type: "orphan:loaded"; count: number; turnFlags: Array<{ folder: string; turnInProgress: boolean }> }
+  | { type: "orphan:parse-error" }
   | { type: "orphan:skip"; pid: number; folder: string; ageHours: number }
   | { type: "orphan:reap"; pid: number; folder: string; sessionId: string; children: number }
   | { type: "orphan:sigkill"; pid: number }
@@ -119,6 +122,9 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "process:kill": "warn",
   "process:stdin-error": "error",
   "process:non-json": "debug",
+  "orphan:no-file": "info",
+  "orphan:loaded": "info",
+  "orphan:parse-error": "warn",
   "orphan:skip": "debug",
   "orphan:reap": "info",
   "orphan:sigkill": "warn",

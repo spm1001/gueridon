@@ -115,12 +115,18 @@ export interface PriorSessionInfo {
  *  Returns metadata about the sessions that were running — the bridge uses
  *  `turnInProgress` to decide whether bystander sessions auto-resume. */
 export function reapOrphans(): PriorSessionInfo[] {
-  if (!existsSync(SESSION_FILE)) return [];
+  if (!existsSync(SESSION_FILE)) {
+    emit({ type: "orphan:no-file" });
+    return [];
+  }
 
   let records: SessionRecord[];
   try {
-    records = JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
+    const raw = readFileSync(SESSION_FILE, "utf-8");
+    records = JSON.parse(raw);
+    emit({ type: "orphan:loaded", count: records.length, turnFlags: records.map(r => ({ folder: basename(r.folder), turnInProgress: r.turnInProgress ?? false })) });
   } catch {
+    emit({ type: "orphan:parse-error" });
     return [];
   }
 
