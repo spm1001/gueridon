@@ -66,7 +66,7 @@ import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
 import { buildDepositNote, buildShareDepositNote } from "./upload.js";
 import { depositFiles } from "./deposit.js";
-import { persistSessions, reapOrphans } from "./orphan.js";
+import { persistSessions, reapOrphans, type PriorSessionInfo } from "./orphan.js";
 import { generateFolderName } from "./fun-names.js";
 import { getContentHash, startWatcher, stopWatcher } from "./content-hash.js";
 import { requestContext, generateRequestId } from "./request-context.js";
@@ -169,6 +169,9 @@ const SHUTDOWN_FILE = join(homedir(), ".config", "gueridon", "shutdown.json");
 
 /** Loaded once at startup, consumed by resume logic, then file is deleted. */
 let lastShutdownCtx: ShutdownContext | null = null;
+
+/** Sessions from the previous bridge instance — used for bystander auto-resume. */
+let priorSessions: PriorSessionInfo[] = [];
 
 function loadShutdownContext(): void {
   try {
@@ -1011,10 +1014,13 @@ async function handleSession(
   // Exception: mid-turn bystander sessions auto-resume immediately (gdn-kuhuga).
   // The user was watching CC work when the bridge restarted — waiting for them
   // to type something would be confusing. Auto-inject the resume context now.
+  // We check priorSessions (persisted by the previous bridge) rather than replay
+  // status, because CC flushes its result event before dying — JSONL replay
+  // always shows idle even if the turn was interrupted.
   if (session.pendingResume) {
-    const replayState = session.stateBuilder.getState();
+    const prior = priorSessions.find(p => p.sessionId === session.id);
     const { reason, lastToolCall, sessionAge } = session.pendingResume;
-    if (replayState.status === "working" && (reason === "self-caused" || reason === "external") && sessionAge <= STALE_SESSION_MS) {
+    if (prior?.turnInProgress && (reason === "self-caused" || reason === "external") && sessionAge <= STALE_SESSION_MS) {
       session.pendingResume = undefined;
       const resumeText = buildResumeInjection(reason, lastToolCall);
       deliverPrompt(session, { text: resumeText });
@@ -1664,7 +1670,7 @@ process.on("unhandledRejection", (reason) => {
 
 initLogger();
 initStatusBuffer();
-reapOrphans();
+priorSessions = reapOrphans();
 
 // Watch client files for changes — push stale notification to connected clients
 startWatcher(PROJECT_ROOT, (newHash) => {

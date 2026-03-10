@@ -21,6 +21,7 @@ interface SessionRecord {
   folder: string;
   pid: number;
   spawnedAt: number;
+  turnInProgress?: boolean;
 }
 
 /** Minimal session shape needed by persistSessions. */
@@ -29,6 +30,7 @@ export interface PersistableSession {
   folder: string;
   process: { pid?: number | undefined; exitCode: number | null } | null;
   spawnedAt: number | null;
+  turnInProgress: boolean;
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -46,6 +48,7 @@ export function persistSessions(sessions: Iterable<PersistableSession>): void {
           folder: s.folder,
           pid: s.process.pid,
           spawnedAt: s.spawnedAt ?? Date.now(),
+          turnInProgress: s.turnInProgress,
         });
       }
     }
@@ -81,15 +84,24 @@ function getDescendantPids(pid: number): number[] {
   return descendants;
 }
 
-/** Reap orphaned CC processes from a previous bridge instance. */
-export function reapOrphans(): void {
-  if (!existsSync(SESSION_FILE)) return;
+/** Info about sessions from the previous bridge instance. */
+export interface PriorSessionInfo {
+  sessionId: string;
+  folder: string;
+  turnInProgress: boolean;
+}
+
+/** Reap orphaned CC processes from a previous bridge instance.
+ *  Returns metadata about the sessions that were running — the bridge uses
+ *  `turnInProgress` to decide whether bystander sessions auto-resume. */
+export function reapOrphans(): PriorSessionInfo[] {
+  if (!existsSync(SESSION_FILE)) return [];
 
   let records: SessionRecord[];
   try {
     records = JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
   } catch {
-    return;
+    return [];
   }
 
   const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -129,4 +141,10 @@ export function reapOrphans(): void {
   if (reaped > 0) {
     emit({ type: "orphan:summary", reaped });
   }
+
+  return records.map(r => ({
+    sessionId: r.sessionId,
+    folder: r.folder,
+    turnInProgress: r.turnInProgress ?? false,
+  }));
 }
