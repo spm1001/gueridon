@@ -1239,12 +1239,36 @@ body[data-switcher-open] {
 .ask-confirm[data-visible="true"] { display: block; }
 .ask-confirm:active { opacity: 0.8; }
 
-.ask-custom {
+.ask-custom-row {
+  display: flex;
+  gap: 8px;
   padding: 8px 12px 12px;
-  text-align: center;
-  font-size: 0.72rem;
-  color: var(--text-dim);
+  align-items: center;
+}
+.ask-custom-input {
+  flex: 1;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  outline: none;
+}
+.ask-custom-input:focus {
+  border-color: var(--accent);
+}
+.ask-custom-send {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 1.1rem;
+  font-weight: 700;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .ask-recovery {

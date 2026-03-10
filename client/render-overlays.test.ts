@@ -38,7 +38,7 @@ describe("showAskUserOverlay", () => {
         { label: "JWT", description: "JSON Web Tokens" },
       ],
     }];
-    showAskUserOverlay(questions, "tc1", { els, onAnswer, onDismiss: vi.fn() });
+    showAskUserOverlay(questions, "tc1", { els, onAnswer });
 
     expect(els.backdrop.dataset.open).toBe("true");
     expect(els.sheet.dataset.open).toBe("true");
@@ -56,7 +56,7 @@ describe("showAskUserOverlay", () => {
       multiSelect: false,
       options: [{ label: "A" }, { label: "B" }],
     }];
-    showAskUserOverlay(questions, "tc2", { els, onAnswer, onDismiss: vi.fn() });
+    showAskUserOverlay(questions, "tc2", { els, onAnswer });
 
     // Tap second option
     const opts = els.content.querySelectorAll(".ask-option");
@@ -75,7 +75,7 @@ describe("showAskUserOverlay", () => {
       multiSelect: true,
       options: [{ label: "X" }, { label: "Y" }, { label: "Z" }],
     }];
-    showAskUserOverlay(questions, "tc3", { els, onAnswer, onDismiss: vi.fn() });
+    showAskUserOverlay(questions, "tc3", { els, onAnswer });
 
     expect(els.content.querySelector(".ask-confirm")).not.toBeNull();
 
@@ -92,19 +92,22 @@ describe("showAskUserOverlay", () => {
     expect(onAnswer).toHaveBeenCalledWith("X, Z");
   });
 
-  it("custom answer dismisses and calls onDismiss", () => {
+  it("custom input sends typed text via onAnswer", () => {
     const els = makeAskEls();
-    const onDismiss = vi.fn();
+    const onAnswer = vi.fn();
     const questions = [{
       header: "H",
       question: "Q?",
       multiSelect: false,
       options: [{ label: "A" }],
     }];
-    showAskUserOverlay(questions, "tc4", { els, onAnswer: vi.fn(), onDismiss });
+    showAskUserOverlay(questions, "tc4", { els, onAnswer });
 
-    (els.content.querySelector(".ask-custom") as HTMLElement).click();
-    expect(onDismiss).toHaveBeenCalled();
+    const input = els.content.querySelector(".ask-custom-input") as HTMLInputElement;
+    const send = els.content.querySelector(".ask-custom-send") as HTMLElement;
+    input.value = "my custom answer";
+    send.click();
+    expect(onAnswer).toHaveBeenCalledWith("my custom answer");
     expect(els.backdrop.dataset.open).toBe("false");
   });
 
@@ -115,7 +118,7 @@ describe("showAskUserOverlay", () => {
       { header: "Color", question: "Pick color", multiSelect: false, options: [{ label: "Red" }, { label: "Blue" }] },
       { header: "Size", question: "Pick size", multiSelect: false, options: [{ label: "S" }, { label: "L" }] },
     ];
-    showAskUserOverlay(questions, "tc5", { els, onAnswer, onDismiss: vi.fn() });
+    showAskUserOverlay(questions, "tc5", { els, onAnswer });
 
     // Select Red and L
     const colorOpts = els.content.querySelectorAll('.ask-option[data-qi="0"]');

@@ -570,11 +570,6 @@ function openAskUser(data) {
       liveState.messages.push({ role: 'user', content: answer });
       sseRender();
     },
-    onDismiss() {
-      // pendingAskUser stays set — recovery chip in status bar will reopen
-      ta.focus();
-      sseRender();
-    },
   });
 }
 
@@ -651,11 +646,11 @@ function sseRender() {
     document.getElementById('fileBtn').classList.toggle('visible', hasFolder);
     refreshPlaceholder();
 
-    // AskUser recovery chip — show when overlay was dismissed but question is pending
+    // AskUser recovery chip — safety net if overlay gets hidden unexpectedly
     const askChip = document.getElementById('askRecovery');
     const overlayOpen = askEls.backdrop.dataset.open === 'true';
     if (pendingAskUser && !overlayOpen) {
-      askChip.textContent = 'Question waiting — tap to reopen';
+      askChip.textContent = 'Question waiting \u2014 tap to reopen';
       askChip.style.display = 'block';
       askChip.onclick = () => openAskUser(pendingAskUser);
     } else {

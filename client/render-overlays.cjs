@@ -23,10 +23,9 @@ const { esc } = window.Gdn;
  * @param {HTMLElement} opts.els.sheet - Ask sheet container
  * @param {HTMLElement} opts.els.content - Ask content container
  * @param {Function} opts.onAnswer - (answer: string) => void
- * @param {Function} opts.onDismiss - () => void
  */
 function showAskUserOverlay(questions, toolCallId, opts) {
-  const { els, onAnswer, onDismiss } = opts;
+  const { els, onAnswer } = opts;
 
   let html = '';
   const isSingleImmediate = questions.length === 1 && !questions[0].multiSelect;
@@ -53,7 +52,10 @@ function showAskUserOverlay(questions, toolCallId, opts) {
   if (!isSingleImmediate) {
     html += `<button class="ask-confirm" data-visible="true">Send answers</button>`;
   }
-  html += `<div class="ask-custom">Type a custom answer instead</div>`;
+  html += `<div class="ask-custom-row">`;
+  html += `<input class="ask-custom-input" type="text" placeholder="Or type a custom answer..." autocomplete="off">`;
+  html += `<button class="ask-custom-send" aria-label="Send custom answer">&#x2191;</button>`;
+  html += `</div>`;
 
   els.content.innerHTML = html;
   els.backdrop.dataset.open = 'true';
@@ -103,10 +105,18 @@ function showAskUserOverlay(questions, toolCallId, opts) {
     confirmBtn.addEventListener('click', () => sendAnswer());
   }
 
-  // Custom answer — dismiss overlay, let user type freely
-  els.content.querySelector('.ask-custom').addEventListener('click', () => {
+  // Custom answer — type and send from within the modal
+  const customInput = els.content.querySelector('.ask-custom-input');
+  const customSend = els.content.querySelector('.ask-custom-send');
+  function sendCustom() {
+    const text = customInput.value.trim();
+    if (!text) return;
     hideAskUserOverlay(els);
-    onDismiss();
+    onAnswer(text);
+  }
+  customSend.addEventListener('click', sendCustom);
+  customInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); sendCustom(); }
   });
 
   // Backdrop tap — absorb but don't dismiss. The overlay is modal:
