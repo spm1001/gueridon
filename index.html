@@ -1014,6 +1014,9 @@ sendBtn.addEventListener('click', () => {
       });
     }
 
+    // Any sent message implicitly answers a pending AskUserQuestion
+    pendingAskUser = null;
+
     // Clear staging
     stagedDeposits = [];
     renderStagedDeposits();
