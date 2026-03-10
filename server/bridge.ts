@@ -1008,8 +1008,19 @@ async function handleSession(
   }
 
   // Lazy spawn: CC starts on first prompt, not on session connect (gdn-jeliku).
-  // Resume context (if any) is stashed in session.pendingResume and injected
-  // alongside the user's first prompt in handlePrompt().
+  // Exception: mid-turn bystander sessions auto-resume immediately (gdn-kuhuga).
+  // The user was watching CC work when the bridge restarted — waiting for them
+  // to type something would be confusing. Auto-inject the resume context now.
+  if (session.pendingResume) {
+    const replayState = session.stateBuilder.getState();
+    const { reason, lastToolCall, sessionAge } = session.pendingResume;
+    if (replayState.status === "working" && (reason === "self-caused" || reason === "external") && sessionAge <= STALE_SESSION_MS) {
+      session.pendingResume = undefined;
+      const resumeText = buildResumeInjection(reason, lastToolCall);
+      deliverPrompt(session, { text: resumeText });
+      emit({ type: "session:auto-resume", folder: session.folderName, sessionId: session.id, reason, sessionAge });
+    }
+  }
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
