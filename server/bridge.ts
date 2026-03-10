@@ -141,6 +141,8 @@ interface Session {
   subagentFilteredCount: number;
   /** Length of text last sent via new-protocol 'current' event — for computing text appends (gdn-kitere). */
   lastSentTextLength: number;
+  /** SSE bytes sent this turn, keyed by event type — reported in turn:complete. */
+  turnSSEBytes: Map<string, number>;
 }
 
 // -- State --
@@ -200,6 +202,9 @@ function cleanupClient(client: SSEClient): void {
 
 function broadcastToSession(session: Session, event: string, data: unknown): void {
   const payload = { folder: session.folderName, ...(data as Record<string, unknown>) };
+  const serialized = JSON.stringify(payload);
+  const bytes = Buffer.byteLength(serialized, "utf8");
+  session.turnSSEBytes.set(event, (session.turnSSEBytes.get(event) || 0) + bytes);
   for (const client of session.clients) {
     const decision = shouldSendEvent(event, client.suppressText);
     if (decision.clearSuppression) client.suppressText = false;
@@ -612,6 +617,7 @@ async function onTurnComplete(session: Session): Promise<void> {
     contextPct: session.contextPct,
     toolCalls: metrics.toolCalls,
     ...(session.subagentFilteredCount > 0 && { subagentFiltered: session.subagentFilteredCount }),
+    ...(session.turnSSEBytes.size > 0 && { sseBytes: Object.fromEntries(session.turnSSEBytes) }),
   });
 
   // Push notification when no SSE clients are watching (phone-in-pocket).
@@ -666,6 +672,7 @@ function deliverPrompt(
     session.turnStartedAt = Date.now();
     session.hadContentThisTurn = false;
     session.subagentFilteredCount = 0;
+    session.turnSSEBytes.clear();
 
     emit({ type: "turn:start", folder: session.folderName, sessionId: session.id });
     emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id });
@@ -769,6 +776,7 @@ async function createSession(folderPath: string): Promise<Session> {
     turnStartedAt: null,
     pushedAskThisTurn: false,
     subagentFilteredCount: 0,
+    turnSSEBytes: new Map(),
     lastSentTextLength: 0,
   };
 
@@ -906,6 +914,7 @@ async function createSessionWithId(
     turnStartedAt: null,
     pushedAskThisTurn: false,
     subagentFilteredCount: 0,
+    turnSSEBytes: new Map(),
     lastSentTextLength: 0,
   };
 
