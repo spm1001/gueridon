@@ -30,6 +30,7 @@ import {
   type SessionProcessInfo,
   type PendingDelta,
   type ShutdownContext,
+  type LastToolCall,
   isSubagentEvent,
 } from "./bridge-logic.js";
 
@@ -1447,16 +1448,27 @@ describe("classifyRestart", () => {
     activeTurnFolders: ["/home/user/Repos/gueridon"],
   };
 
+  const deployTool: LastToolCall = { name: "Bash", input: { command: "sudo systemctl restart gueridon" } };
+  const innocentTool: LastToolCall = { name: "Bash", input: { command: "uv run pytest tests/ -x -v" } };
+
   it("returns 'crash' when no shutdown context exists", () => {
-    expect(classifyRestart(null, "/any/folder", now)).toBe("crash");
+    expect(classifyRestart(null, "/any/folder", null, now)).toBe("crash");
   });
 
-  it("returns 'self-caused' when folder had active turn at shutdown", () => {
-    expect(classifyRestart(recentShutdown, "/home/user/Repos/gueridon", now)).toBe("self-caused");
+  it("returns 'self-caused' when folder had active deploy at shutdown", () => {
+    expect(classifyRestart(recentShutdown, "/home/user/Repos/gueridon", deployTool, now)).toBe("self-caused");
+  });
+
+  it("returns 'external' for mid-turn bystander (non-deploy tool)", () => {
+    expect(classifyRestart(recentShutdown, "/home/user/Repos/gueridon", innocentTool, now)).toBe("external");
+  });
+
+  it("returns 'external' for mid-turn session with no tool call info", () => {
+    expect(classifyRestart(recentShutdown, "/home/user/Repos/gueridon", null, now)).toBe("external");
   });
 
   it("returns 'external' when folder was idle at shutdown", () => {
-    expect(classifyRestart(recentShutdown, "/home/user/Repos/other", now)).toBe("external");
+    expect(classifyRestart(recentShutdown, "/home/user/Repos/other", null, now)).toBe("external");
   });
 
   it("returns 'crash' when shutdown context is stale (> 24 hours)", () => {
@@ -1465,7 +1477,7 @@ describe("classifyRestart", () => {
       timestamp: new Date(now.getTime() - SHUTDOWN_STALE_MS - 1000).toISOString(),
       activeTurnFolders: ["/home/user/Repos/gueridon"],
     };
-    expect(classifyRestart(staleCtx, "/home/user/Repos/gueridon", now)).toBe("crash");
+    expect(classifyRestart(staleCtx, "/home/user/Repos/gueridon", deployTool, now)).toBe("crash");
   });
 
   it("returns 'external' when shutdown context is exactly at threshold", () => {
@@ -1474,18 +1486,18 @@ describe("classifyRestart", () => {
       timestamp: new Date(now.getTime() - SHUTDOWN_STALE_MS).toISOString(),
       activeTurnFolders: [],
     };
-    // At threshold, not over — still valid
-    expect(classifyRestart(atThreshold, "/any/folder", now)).toBe("external");
+    expect(classifyRestart(atThreshold, "/any/folder", null, now)).toBe("external");
   });
 
-  it("handles multiple active turn folders", () => {
+  it("handles multiple active turn folders — only deploy causer is self-caused", () => {
     const multi: ShutdownContext = {
       signal: "SIGTERM",
       timestamp: now.toISOString(),
       activeTurnFolders: ["/a", "/b", "/c"],
     };
-    expect(classifyRestart(multi, "/b", now)).toBe("self-caused");
-    expect(classifyRestart(multi, "/d", now)).toBe("external");
+    expect(classifyRestart(multi, "/b", deployTool, now)).toBe("self-caused");
+    expect(classifyRestart(multi, "/b", innocentTool, now)).toBe("external");
+    expect(classifyRestart(multi, "/d", null, now)).toBe("external");
   });
 });
 
@@ -1493,12 +1505,12 @@ describe("buildResumeInjection", () => {
   it("mentions mid-turn for self-caused", () => {
     const msg = buildResumeInjection("self-caused");
     expect(msg).toContain("mid-turn");
-    expect(msg).toContain("likely caused this");
+    expect(msg).toContain("continue");
   });
 
-  it("mentions externally for external", () => {
+  it("apologises for external interruption", () => {
     const msg = buildResumeInjection("external");
-    expect(msg).toContain("externally");
+    expect(msg).toContain("Sorry about the interruption");
     expect(msg).toContain("continue where you left off");
   });
 
@@ -1660,14 +1672,22 @@ describe("buildResumeInjection with lastToolCall", () => {
     expect(msg).toContain("already took effect");
   });
 
-  it("self-caused: falls back to vague message without tool call", () => {
+  it("self-caused: bystander gets interruption notice, not deploy warning", () => {
+    const pytest = { name: "Bash", input: { command: "uv run --extra dev pytest tests/ -x -v" } };
+    const msg = buildResumeInjection("self-caused", pytest);
+    expect(msg).toContain("pytest");
+    expect(msg).toContain("not caused by your action");
+    expect(msg).not.toContain("Do NOT run it again");
+  });
+
+  it("self-caused: falls back to apology without tool call", () => {
     const msg = buildResumeInjection("self-caused");
-    expect(msg).toContain("likely caused this");
+    expect(msg).toContain("Sorry about the interruption");
   });
 
   it("self-caused: falls back when tool call is null", () => {
     const msg = buildResumeInjection("self-caused", null);
-    expect(msg).toContain("likely caused this");
+    expect(msg).toContain("Sorry about the interruption");
   });
 
   it("external: includes interrupted tool call", () => {

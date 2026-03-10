@@ -165,6 +165,7 @@ export const EXPIRED_SESSION_MS = 7 * 24 * 60 * 60 * 1000;
 export function classifyRestart(
   shutdownCtx: ShutdownContext | null,
   folder: string,
+  lastToolCall: LastToolCall | null,
   now: Date = new Date(),
 ): RestartReason {
   if (!shutdownCtx) return "crash";
@@ -173,7 +174,14 @@ export function classifyRestart(
   const shutdownTime = new Date(shutdownCtx.timestamp);
   if (now.getTime() - shutdownTime.getTime() > SHUTDOWN_STALE_MS) return "crash";
 
-  if (shutdownCtx.activeTurnFolders.includes(folder)) return "self-caused";
+  if (!shutdownCtx.activeTurnFolders.includes(folder)) return "external";
+
+  // Mid-turn session — but only "self-caused" if the last action looks like
+  // a deploy. Otherwise it's a bystander that got caught in the blast.
+  if (lastToolCall) {
+    const summary = formatToolCallSummary(lastToolCall.name, lastToolCall.input);
+    if (/systemctl|restart|gueridon|rsync.*\/opt/i.test(summary)) return "self-caused";
+  }
   return "external";
 }
 
@@ -193,26 +201,34 @@ export function buildResumeInjection(
     case "self-caused": {
       const base = "[guéridon:system] The bridge was restarted while you were mid-turn.";
       if (tool) {
+        const looksLikeDeploy = /systemctl|restart|gueridon|rsync.*\/opt/i.test(tool);
+        if (looksLikeDeploy) {
+          return (
+            `${base} Your last action was:\n\n  ${tool}\n\n` +
+            "This caused the restart — the command already took effect. " +
+            "Do NOT run it again. Review the outcome and continue."
+          );
+        }
         return (
           `${base} Your last action was:\n\n  ${tool}\n\n` +
-          "This caused the restart — the command already took effect. " +
-          "Do NOT run it again. Review the outcome and continue."
+          "The restart was not caused by your action, but it may not have completed. " +
+          "Check its outcome before continuing."
         );
       }
       return (
-        `${base} Your last action likely caused this (e.g. systemctl restart, deployment). ` +
-        "Review what you were doing and verify it took effect before continuing."
+        `${base} ` +
+        "Sorry about the interruption. Please continue where you left off."
       );
     }
     case "external": {
-      const base = "[guéridon:system] The bridge was restarted externally and your session has been resumed.";
+      const base = "[guéridon:system] The bridge was restarted and your session has been resumed.";
       if (tool) {
         return (
           `${base} You were mid-action when interrupted:\n\n  ${tool}\n\n` +
-          "This action may not have completed. Check its outcome before continuing."
+          "This action may not have completed. Check its outcome and continue where you left off."
         );
       }
-      return base + " Review the conversation and continue where you left off.";
+      return base + " Sorry about the interruption — please continue where you left off.";
     }
     case "crash": {
       const base = "[guéridon:system] The bridge crashed and your session has been recovered.";

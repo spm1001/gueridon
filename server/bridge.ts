@@ -806,7 +806,7 @@ async function createSession(folderPath: string): Promise<Session> {
       } catch { /* JSONL tail read may fail */ }
 
       session.pendingResume = {
-        reason: classifyRestart(lastShutdownCtx, folderPath),
+        reason: classifyRestart(lastShutdownCtx, folderPath, lastToolCall),
         lastToolCall,
         sessionAge,
       };
@@ -1059,17 +1059,21 @@ async function handlePrompt(
   }
 
   // Consume pending resume context on first prompt (gdn-jeliku).
-  // Only "self-caused" restarts get the injection — that's the session whose
-  // action triggered the bridge restart (e.g. self-deploy). Other sessions
-  // were just bystanders and don't need restart context.
+  // All mid-turn restarts get the injection (self-caused gets deploy-aware
+  // wording, bystanders get interruption notice). The resume message is sent
+  // as a separate turn so it doesn't concatenate with the user's actual message.
   if (session.pendingResume) {
     const { reason, lastToolCall, sessionAge } = session.pendingResume;
     session.pendingResume = undefined;
 
-    if (reason === "self-caused") {
+    if (reason === "self-caused" || reason === "external") {
       const resumeText = buildResumeInjection(reason, sessionAge > STALE_SESSION_MS ? null : lastToolCall);
-      const combined = resumeText + "\n\n" + (parsed.text || "");
-      deliverPrompt(session, { text: combined, content: parsed.content });
+      // Combine resume context with user's message as a single prompt.
+      // Two rapid deliverPrompt calls before CC starts processing get
+      // concatenated by CC into one turn — making them explicit avoids
+      // the user seeing their nudge ("Oh?") glued to the system message.
+      const userText = parsed.text || parsed.content || "";
+      deliverPrompt(session, { text: userText ? `${resumeText}\n\n${userText}` : resumeText });
     } else {
       deliverPrompt(session, parsed);
     }
@@ -1169,9 +1173,9 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, folderPat
         if (session.pendingResume) {
           const { reason, lastToolCall, sessionAge } = session.pendingResume;
           session.pendingResume = undefined;
-          if (reason === "self-caused") {
+          if (reason === "self-caused" || reason === "external") {
             const resumeText = buildResumeInjection(reason, sessionAge > STALE_SESSION_MS ? null : lastToolCall);
-            deliverPrompt(session, { text: resumeText + "\n\n" + note });
+            deliverPrompt(session, { text: `${resumeText}\n\n${note}` });
           } else {
             deliverPrompt(session, { text: note });
           }
