@@ -145,6 +145,8 @@ interface Session {
   lastSentMessagesVersion: number;
   /** SSE bytes sent this turn, keyed by event type — reported in turn:complete. */
   turnSSEBytes: Map<string, number>;
+  /** Bytes saved by version-counter skip — counterfactual measurement. */
+  turnSkippedBytes: number;
 }
 
 // -- State --
@@ -550,6 +552,9 @@ function emitSignal(session: Session, signal: StateSignal): void {
       if (ver !== session.lastSentMessagesVersion) {
         payload.messages = session.stateBuilder.getMessages();
         session.lastSentMessagesVersion = ver;
+      } else {
+        // Counterfactual: how many bytes would messages[] have cost?
+        session.turnSkippedBytes += Buffer.byteLength(JSON.stringify(session.stateBuilder.getMessages()), "utf8");
       }
       if (current) {
         Object.assign(payload, current);
@@ -624,6 +629,7 @@ async function onTurnComplete(session: Session): Promise<void> {
     toolCalls: metrics.toolCalls,
     ...(session.subagentFilteredCount > 0 && { subagentFiltered: session.subagentFilteredCount }),
     ...(session.turnSSEBytes.size > 0 && { sseBytes: Object.fromEntries(session.turnSSEBytes) }),
+    ...(session.turnSkippedBytes > 0 && { sseSkippedBytes: session.turnSkippedBytes }),
   });
 
   // Push notification when no SSE clients are watching (phone-in-pocket).
@@ -679,6 +685,7 @@ function deliverPrompt(
     session.hadContentThisTurn = false;
     session.subagentFilteredCount = 0;
     session.turnSSEBytes.clear();
+    session.turnSkippedBytes = 0;
 
     emit({ type: "turn:start", folder: session.folderName, sessionId: session.id });
     emit({ type: "prompt:deliver", folder: session.folderName, sessionId: session.id });
@@ -783,6 +790,7 @@ async function createSession(folderPath: string): Promise<Session> {
     pushedAskThisTurn: false,
     subagentFilteredCount: 0,
     turnSSEBytes: new Map(),
+    turnSkippedBytes: 0,
     lastSentTextLength: 0,
     lastSentMessagesVersion: -1,
   };
@@ -922,6 +930,7 @@ async function createSessionWithId(
     pushedAskThisTurn: false,
     subagentFilteredCount: 0,
     turnSSEBytes: new Map(),
+    turnSkippedBytes: 0,
     lastSentTextLength: 0,
     lastSentMessagesVersion: -1,
   };
