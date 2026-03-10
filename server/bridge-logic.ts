@@ -81,9 +81,10 @@ const ALLOWED_TOOLS = [
   "WebSearch",
   "Task", "TaskOutput", "TaskStop",
   "Skill", "AskUserQuestion",
-  "EnterPlanMode", "ExitPlanMode", "EnterWorktree", "ToolSearch",
+  "EnterPlanMode", "ExitPlanMode",
+  "EnterWorktree", "ExitWorktree",
+  "ToolSearch",
   "mcp__*",
-  "mcp__mise__search", "mcp__mise__fetch", "mcp__mise__do",
 ];
 
 // Tools hidden from the model entirely. WebFetch returns AI summaries not
