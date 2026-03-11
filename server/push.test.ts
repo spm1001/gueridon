@@ -71,28 +71,24 @@ describe("MAX_SUBSCRIPTIONS cap", () => {
   });
 
   it("caps at MAX_SUBSCRIPTIONS, dropping oldest", () => {
-    // Pre-load 2 subs (at the cap)
+    // Pre-load 1 sub (at the cap)
     const existing = new Map<string, webpush.PushSubscription>();
-    for (let i = 1; i <= 2; i++) {
-      const s = makeSub(i);
-      existing.set(s.endpoint, s);
-    }
+    const s = makeSub(1);
+    existing.set(s.endpoint, s);
     _testing.reset(existing);
 
-    // Adding a 3rd should drop sub-1 (oldest)
-    addSubscription(makeSub(3));
+    // Adding a 2nd should drop sub-1 (oldest)
+    addSubscription(makeSub(2));
     const subs = _testing.getSubscriptions();
-    expect(subs.size).toBe(2);
+    expect(subs.size).toBe(1);
     expect(subs.has("https://push.example.com/sub-1")).toBe(false);
-    expect(subs.has("https://push.example.com/sub-3")).toBe(true);
+    expect(subs.has("https://push.example.com/sub-2")).toBe(true);
   });
 
   it("never drops the newly added subscription", () => {
     const existing = new Map<string, webpush.PushSubscription>();
-    for (let i = 1; i <= 2; i++) {
-      const s = makeSub(i);
-      existing.set(s.endpoint, s);
-    }
+    const s = makeSub(1);
+    existing.set(s.endpoint, s);
     _testing.reset(existing);
 
     const newSub = makeSub(99);

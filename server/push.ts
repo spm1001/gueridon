@@ -28,7 +28,7 @@ let subscriptions: Map<string, webpush.PushSubscription> = new Map();
 // Low cap: a single phone typically has 1 active SW (home screen PWA).
 // Higher values cause duplicate notifications because tag-based dedup
 // only works within one SW scope — different SWs each show their own.
-const MAX_SUBSCRIPTIONS = 2;
+const MAX_SUBSCRIPTIONS = 1;
 
 function init(): void {
   if (!existsSync(VAPID_PATH)) {
