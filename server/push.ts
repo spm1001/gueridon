@@ -23,12 +23,12 @@ let publicKey = "";
 
 // Subscription keyed by endpoint URL (deduplicates re-subscribes)
 let subscriptions: Map<string, webpush.PushSubscription> = new Map();
+// deviceId → endpoint — used to evict old endpoints when a device re-subscribes.
+// Persisted alongside subscriptions so it survives bridge restarts.
+let deviceMap: Map<string, string> = new Map();
 
-// Safety cap — prevents unbounded growth across SW re-registrations.
-// Low cap: a single phone typically has 1 active SW (home screen PWA).
-// Higher values cause duplicate notifications because tag-based dedup
-// only works within one SW scope — different SWs each show their own.
-const MAX_SUBSCRIPTIONS = 1;
+// Safety cap — prevents unbounded growth if deviceId dedup fails.
+const MAX_SUBSCRIPTIONS = 3;
 
 function init(): void {
   if (!existsSync(VAPID_PATH)) {
@@ -54,8 +54,14 @@ function init(): void {
 function loadSubscriptions(): void {
   if (!existsSync(SUBS_PATH)) return;
   try {
-    const data = JSON.parse(readFileSync(SUBS_PATH, "utf-8")) as webpush.PushSubscription[];
-    subscriptions = new Map(data.map((s) => [s.endpoint, s]));
+    const raw = JSON.parse(readFileSync(SUBS_PATH, "utf-8"));
+    // Support both old format (array) and new format (object with devices)
+    if (Array.isArray(raw)) {
+      subscriptions = new Map(raw.map((s: webpush.PushSubscription) => [s.endpoint, s]));
+    } else {
+      subscriptions = new Map((raw.subscriptions ?? []).map((s: webpush.PushSubscription) => [s.endpoint, s]));
+      deviceMap = new Map(Object.entries(raw.devices ?? {}));
+    }
     emit({ type: "push:subscriptions-loaded", count: subscriptions.size });
   } catch {
     emit({ type: "push:subscriptions-load-error" });
@@ -64,7 +70,10 @@ function loadSubscriptions(): void {
 
 function saveSubscriptions(): void {
   mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(SUBS_PATH, JSON.stringify([...subscriptions.values()], null, 2));
+  writeFileSync(SUBS_PATH, JSON.stringify({
+    subscriptions: [...subscriptions.values()],
+    devices: Object.fromEntries(deviceMap),
+  }, null, 2));
 }
 
 /** Get the VAPID public key for client subscription. */
@@ -72,8 +81,19 @@ export function getVapidPublicKey(): string | null {
   return vapidReady ? publicKey : null;
 }
 
-/** Store a push subscription from a client. */
-export function addSubscription(sub: webpush.PushSubscription): void {
+/** Store a push subscription from a client.
+ *  deviceId (from client localStorage) deduplicates across SW re-registrations:
+ *  same device, new endpoint → old endpoint evicted. */
+export function addSubscription(sub: webpush.PushSubscription, deviceId?: string): void {
+  // Evict previous endpoint from the same device
+  if (deviceId) {
+    const oldEndpoint = deviceMap.get(deviceId);
+    if (oldEndpoint && oldEndpoint !== sub.endpoint) {
+      subscriptions.delete(oldEndpoint);
+    }
+    deviceMap.set(deviceId, sub.endpoint);
+  }
+
   subscriptions.set(sub.endpoint, sub);
 
   // Cap: if over limit, drop oldest (Map preserves insertion order)

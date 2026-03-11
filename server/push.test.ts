@@ -71,29 +71,61 @@ describe("MAX_SUBSCRIPTIONS cap", () => {
   });
 
   it("caps at MAX_SUBSCRIPTIONS, dropping oldest", () => {
-    // Pre-load 1 sub (at the cap)
+    // Pre-load 3 subs (at the cap)
     const existing = new Map<string, webpush.PushSubscription>();
-    const s = makeSub(1);
-    existing.set(s.endpoint, s);
+    for (let i = 1; i <= 3; i++) {
+      const s = makeSub(i);
+      existing.set(s.endpoint, s);
+    }
     _testing.reset(existing);
 
-    // Adding a 2nd should drop sub-1 (oldest)
-    addSubscription(makeSub(2));
+    // Adding a 4th should drop sub-1 (oldest)
+    addSubscription(makeSub(4));
+    const subs = _testing.getSubscriptions();
+    expect(subs.size).toBe(3);
+    expect(subs.has("https://push.example.com/sub-1")).toBe(false);
+    expect(subs.has("https://push.example.com/sub-4")).toBe(true);
+  });
+
+  it("never drops the newly added subscription", () => {
+    const existing = new Map<string, webpush.PushSubscription>();
+    for (let i = 1; i <= 3; i++) {
+      const s = makeSub(i);
+      existing.set(s.endpoint, s);
+    }
+    _testing.reset(existing);
+
+    const newSub = makeSub(99);
+    addSubscription(newSub);
+    expect(_testing.getSubscriptions().has(newSub.endpoint)).toBe(true);
+  });
+});
+
+describe("deviceId dedup", () => {
+  beforeEach(() => {
+    _testing.reset();
+    vi.mocked(webpush.sendNotification).mockResolvedValue({} as any);
+  });
+
+  it("evicts old endpoint when same device re-subscribes", () => {
+    addSubscription(makeSub(1), "device-A");
+    addSubscription(makeSub(2), "device-A");
     const subs = _testing.getSubscriptions();
     expect(subs.size).toBe(1);
     expect(subs.has("https://push.example.com/sub-1")).toBe(false);
     expect(subs.has("https://push.example.com/sub-2")).toBe(true);
   });
 
-  it("never drops the newly added subscription", () => {
-    const existing = new Map<string, webpush.PushSubscription>();
-    const s = makeSub(1);
-    existing.set(s.endpoint, s);
-    _testing.reset(existing);
+  it("keeps subscriptions from different devices", () => {
+    addSubscription(makeSub(1), "device-A");
+    addSubscription(makeSub(2), "device-B");
+    expect(_testing.getSubscriptions().size).toBe(2);
+  });
 
-    const newSub = makeSub(99);
-    addSubscription(newSub);
-    expect(_testing.getSubscriptions().has(newSub.endpoint)).toBe(true);
+  it("works without deviceId (backwards compat)", () => {
+    addSubscription(makeSub(1));
+    addSubscription(makeSub(2));
+    expect(_testing.getSubscriptions().size).toBe(2);
   });
 });
 

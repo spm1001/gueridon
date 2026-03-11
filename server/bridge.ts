@@ -1518,7 +1518,8 @@ const server = createServer((req, res) => {
         res.writeHead(400).end(JSON.stringify({ error: "Missing endpoint" }));
         return;
       }
-      addSubscription(sub);
+      const { deviceId, ...pushSub } = sub;
+      addSubscription(pushSub, deviceId);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ subscribed: true }));
     } catch {

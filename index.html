@@ -198,14 +198,19 @@ async function pushSubscribe(vapidPublicKey) {
       for (let i = 0; i < raw.length; i++) key[i] = raw.charCodeAt(i);
       sub = await swRegistration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
     }
-    // POST subscription to bridge
+    // POST subscription to bridge with stable device ID for dedup
     if (bridgeUrl) {
+      let deviceId = localStorage.getItem('gueridon-device-id');
+      if (!deviceId) {
+        deviceId = crypto.randomUUID();
+        localStorage.setItem('gueridon-device-id', deviceId);
+      }
       const subHeaders = { 'Content-Type': 'application/json' };
       if (ssePushToken) subHeaders['X-Push-Token'] = ssePushToken;
       await fetch(`${bridgeUrl}/push/subscribe`, {
         method: 'POST',
         headers: subHeaders,
-        body: JSON.stringify(sub.toJSON()),
+        body: JSON.stringify({ ...sub.toJSON(), deviceId }),
       });
       console.log('[push] Subscription sent to bridge');
     }
