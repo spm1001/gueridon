@@ -66,7 +66,7 @@ import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
 import { buildDepositNote, buildShareDepositNote } from "./upload.js";
 import { depositFiles } from "./deposit.js";
-import { cancelPendingPersist, persistSessions, persistSessionsSync, reapOrphans, type PriorSessionInfo } from "./orphan.js";
+import { cancelPendingPersist, persistSessions, persistSessionsSyncWithSnapshot, reapOrphans, type PriorSessionInfo } from "./orphan.js";
 import { generateFolderName } from "./fun-names.js";
 import { getContentHash, startWatcher, stopWatcher } from "./content-hash.js";
 import { requestContext, generateRequestId } from "./request-context.js";
@@ -1637,9 +1637,13 @@ function shutdown(signal: string): void {
   // find process=null on all sessions, and overwrite our sync write with [].
   cancelPendingPersist();
 
-  // Persist session state synchronously BEFORE killing — the next bridge's
-  // reapOrphans() reads this to know which sessions were mid-turn.
-  persistSessionsSync(sessions.values());
+  // Persist session state synchronously BEFORE any exit handlers fire.
+  // KillMode=control-group sends SIGTERM to CC at the same instant as the bridge,
+  // so CC's exit handler (which clears process/turnInProgress) may have ALREADY
+  // fired by now. Snapshot uses lastPid to survive process=null.
+  // But turnInProgress may also be cleared — so snapshot it from activeTurnFolders
+  // which was captured at the top of shutdown() before any async work.
+  persistSessionsSyncWithSnapshot(sessions.values(), activeTurnFolders);
 
   // Kill all child CC processes
   for (const session of sessions.values()) {

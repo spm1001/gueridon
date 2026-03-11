@@ -93,6 +93,33 @@ export function persistSessionsSync(sessions: Iterable<PersistableSession>): voi
   } catch { /* best effort */ }
 }
 
+/** Shutdown-safe persist: uses activeTurnFolders snapshot taken before exit handlers fire.
+ *  KillMode=control-group sends SIGTERM to CC simultaneously with the bridge,
+ *  so by the time this runs, exit handlers may have cleared process/turnInProgress. */
+export function persistSessionsSyncWithSnapshot(
+  sessions: Iterable<PersistableSession>,
+  activeTurnFolders: string[],
+): void {
+  const activeSet = new Set(activeTurnFolders);
+  const records: SessionRecord[] = [];
+  for (const s of sessions) {
+    const pid = s.process?.pid ?? s.lastPid;
+    if (pid) {
+      records.push({
+        sessionId: s.id,
+        folder: s.folder,
+        pid,
+        spawnedAt: s.spawnedAt ?? Date.now(),
+        turnInProgress: activeSet.has(s.folder),
+      });
+    }
+  }
+  try {
+    mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+    writeFileSync(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
+  } catch { /* best effort */ }
+}
+
 /** Walk /proc to collect all descendant PIDs (children, grandchildren, etc). */
 function getDescendantPids(pid: number): number[] {
   const descendants: number[] = [];
