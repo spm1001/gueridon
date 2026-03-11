@@ -115,6 +115,7 @@ interface Session {
   resumable: boolean;
   stderrBuffer: string[];
   spawnedAt: number | null;
+  lastPid: number | null;
   turnInProgress: boolean;
   hadContentThisTurn: boolean;
   lastOutputTime: number | null;
@@ -362,6 +363,7 @@ function spawnCC(session: Session): void {
   });
   session.resumable = true;
   session.spawnedAt = Date.now();
+  session.lastPid = session.process.pid ?? null;
   session.stderrBuffer = [];
   wireProcess(session);
   emit({ type: "session:spawn", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
@@ -780,6 +782,7 @@ async function createSession(folderPath: string): Promise<Session> {
     resumable: resolution.resumable,
     stderrBuffer: [],
     spawnedAt: null,
+    lastPid: null,
     turnInProgress: false,
     hadContentThisTurn: false,
     lastOutputTime: null,
@@ -920,6 +923,7 @@ async function createSessionWithId(
     resumable,
     stderrBuffer: [],
     spawnedAt: null,
+    lastPid: null,
     turnInProgress: false,
     hadContentThisTurn: false,
     lastOutputTime: null,

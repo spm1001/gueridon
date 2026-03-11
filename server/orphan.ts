@@ -31,6 +31,8 @@ export interface PersistableSession {
   process: { pid?: number | undefined; exitCode: number | null } | null;
   spawnedAt: number | null;
   turnInProgress: boolean;
+  /** Last known PID — survives process exit (unlike process.pid which is nulled). */
+  lastPid: number | null;
 }
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -50,11 +52,12 @@ export function persistSessions(sessions: Iterable<PersistableSession>): void {
     persistTimer = null;
     const records: SessionRecord[] = [];
     for (const s of sessions) {
-      if (s.process?.pid) {
+      const pid = s.process?.pid ?? s.lastPid;
+      if (pid) {
         records.push({
           sessionId: s.id,
           folder: s.folder,
-          pid: s.process.pid,
+          pid,
           spawnedAt: s.spawnedAt ?? Date.now(),
           turnInProgress: s.turnInProgress,
         });
@@ -73,11 +76,12 @@ export function persistSessions(sessions: Iterable<PersistableSession>): void {
 export function persistSessionsSync(sessions: Iterable<PersistableSession>): void {
   const records: SessionRecord[] = [];
   for (const s of sessions) {
-    if (s.process?.pid) {
+    const pid = s.process?.pid ?? s.lastPid;
+    if (pid) {
       records.push({
         sessionId: s.id,
         folder: s.folder,
-        pid: s.process.pid,
+        pid,
         spawnedAt: s.spawnedAt ?? Date.now(),
         turnInProgress: s.turnInProgress,
       });
