@@ -55,6 +55,7 @@ export type BridgeEvent =
   | { type: "session:interrupted"; folder: string; sessionId: string; midTurn: boolean }
   | { type: "session:lazy-resume"; folder: string; sessionId: string; sessionAge: number }
   | { type: "session:auto-resume"; folder: string; sessionId: string; reason: string; sessionAge: number }
+  | { type: "session:auto-resume-fail"; folder: string; error: string }
 
   // Handoff staleness
   | { type: "handoff:stale"; folder: string; sessionId: string }
@@ -132,6 +133,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "session:interrupted": "info",
   "session:lazy-resume": "info",
   "session:auto-resume": "info",
+  "session:auto-resume-fail": "error",
   "handoff:stale": "info",
   "replay:ok": "info",
   "replay:fail": "warn",

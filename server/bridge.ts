@@ -961,6 +961,23 @@ async function createSessionWithId(
   return session;
 }
 
+// -- Startup auto-resume (gdn-kuhuga) --
+
+/** Resume a mid-turn session at startup without any client connected.
+ *  CC runs headless; push notification fires on turn complete. */
+async function autoResumeOnStartup(prior: PriorSessionInfo): Promise<void> {
+  const session = await resolveOrCreateSession(prior.folder);
+  if (!session.pendingResume) return; // already consumed or not resumable
+
+  const { reason, lastToolCall, sessionAge } = session.pendingResume;
+  if (sessionAge > STALE_SESSION_MS) return; // too old
+
+  session.pendingResume = undefined;
+  const resumeText = buildResumeInjection(reason, lastToolCall);
+  deliverPrompt(session, { text: resumeText });
+  emit({ type: "session:auto-resume", folder: session.folderName, sessionId: session.id, reason, sessionAge });
+}
+
 // -- Route handlers --
 
 async function handleSession(
@@ -1705,4 +1722,13 @@ startWatcher(PROJECT_ROOT, (newHash) => {
 
 server.listen(PORT, () => {
   emit({ type: "server:start", port: PORT, scanRoot: SCAN_ROOT });
+
+  // Auto-resume mid-turn sessions from the previous bridge (gdn-kuhuga).
+  // No client needed — CC runs headless, push notification fires on turn complete.
+  for (const prior of priorSessions) {
+    if (!prior.turnInProgress) continue;
+    autoResumeOnStartup(prior).catch((err) =>
+      emit({ type: "session:auto-resume-fail", folder: basename(prior.folder), error: errorDetail(err) }),
+    );
+  }
 });
