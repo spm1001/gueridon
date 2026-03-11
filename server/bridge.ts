@@ -174,6 +174,9 @@ let lastShutdownCtx: ShutdownContext | null = null;
 /** Sessions from the previous bridge instance — used for bystander auto-resume. */
 let priorSessions: PriorSessionInfo[] = [];
 
+/** Set during shutdown — prevents process exit handlers from overwriting the session file. */
+let isShuttingDown = false;
+
 function loadShutdownContext(): void {
   try {
     if (!existsSync(SHUTDOWN_FILE)) return; // crash or first start
@@ -439,7 +442,7 @@ function wireProcess(session: Session): void {
       ...session.stateBuilder.getState(),
       processAlive: false,
     });
-    persistSessions(sessions.values());
+    if (!isShuttingDown) persistSessions(sessions.values());
   });
 }
 
@@ -1602,6 +1605,7 @@ pingTimer.unref(); // don't prevent clean shutdown
 // -- Graceful shutdown --
 
 function shutdown(signal: string): void {
+  isShuttingDown = true;
   emit({ type: "server:shutdown", signal });
 
   // Persist shutdown context so the next bridge can classify the restart (gdn-bokimo).
