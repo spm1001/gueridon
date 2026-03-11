@@ -66,7 +66,7 @@ import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
 import { buildDepositNote, buildShareDepositNote } from "./upload.js";
 import { depositFiles } from "./deposit.js";
-import { persistSessions, persistSessionsSync, reapOrphans, type PriorSessionInfo } from "./orphan.js";
+import { cancelPendingPersist, persistSessions, persistSessionsSync, reapOrphans, type PriorSessionInfo } from "./orphan.js";
 import { generateFolderName } from "./fun-names.js";
 import { getContentHash, startWatcher, stopWatcher } from "./content-hash.js";
 import { requestContext, generateRequestId } from "./request-context.js";
@@ -1624,6 +1624,10 @@ function shutdown(signal: string): void {
   // Stop pinging and file watching
   clearInterval(pingTimer);
   stopWatcher();
+
+  // Cancel any pending debounced persist — it would fire after kills,
+  // find process=null on all sessions, and overwrite our sync write with [].
+  cancelPendingPersist();
 
   // Persist session state synchronously BEFORE killing — the next bridge's
   // reapOrphans() reads this to know which sessions were mid-turn.

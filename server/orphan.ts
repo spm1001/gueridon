@@ -35,6 +35,14 @@ export interface PersistableSession {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Cancel any pending debounced persist — call before persistSessionsSync in shutdown. */
+export function cancelPendingPersist(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+}
+
 /** Debounced write of active sessions to disk. */
 export function persistSessions(sessions: Iterable<PersistableSession>): void {
   if (persistTimer) return;
