@@ -134,7 +134,7 @@ claude -p --verbose \
 
 - `--verbose` is mandatory for stream-json mode.
 - `--allowed-tools` lists all tools permissively, including `mcp__*` for all MCP tools. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
-- `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`. **The JSON file MUST contain a `"mcpServers"` key** (even `"mcpServers": {}` is fine). If the key is missing, CC hangs silently during init — no error, no stderr, no stdout. Debug log stops at "Parsed repository" (8 lines instead of 100+). This caused a 3-session outage in March 2026.
+- `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`. **The file must exist and contain a `"mcpServers"` key** (even `"mcpServers": {}` is fine). As of CC 2.1.69: missing file = immediate exit code 1. Missing `mcpServers` key (file exists) = silent hang during init — no error, no stderr. Debug log stops at "Parsed repository" (8 lines instead of 100+). This caused outages in March 2026.
 - `--disallowedTools` hides tools from the model entirely: WebFetch (returns AI summaries, use curl instead), TodoWrite (use bon), NotebookEdit (no notebooks).
 - `--permission-mode default` respects settings.json allow/deny lists.
 - `--append-system-prompt` is built dynamically by `buildSystemPrompt()` in `bridge-logic.ts`. Includes: machine context (hostname, "this IS the production server, do not SSH here"), working directory, and AskUserQuestion coaching (tool returns error on mobile, user sees tappable buttons).
@@ -158,10 +158,10 @@ partial 4: content=[tool_use Agent3]  stop_reason=tool_use
 
 ### CC Init Hang Diagnosis Checklist
 
-If CC spawns but produces zero stdout (init timeout after 30s):
+If CC spawns but fails immediately (exit code 1) or produces zero stdout (init timeout after 30s):
 
 1. **Check the debug log** (`~/.claude/debug/<session-uuid>.txt`). Normal init = 100+ lines through permissions, MCP, setup, skills. If it stops at "Parsed repository" (8 lines), CC is hung during init.
-2. **Check `--mcp-config` target** — the JSON file must have `"mcpServers": {}`. Missing key = silent hang.
+2. **Check `--mcp-config` target** — the file must exist AND contain `"mcpServers": {}`. Missing file (CC ≥2.1.69) = immediate exit code 1. Missing key = silent hang.
 3. **Check `settings.json` after any config refactor** — if mcpServers was never in the file (or was removed), the bridge-spawned CC will hang even though interactive CC works fine (because interactive CC doesn't use `--mcp-config`).
 4. **strace is the definitive tool** — attach to the bridge's Node child process (not the tsx launcher), trigger a session, and look for socket/connect/openat calls. A hung CC will show zero network sockets and zero stdout writes.
 

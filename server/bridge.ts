@@ -1194,8 +1194,13 @@ function serveStatic(pathname: string, res: ServerResponse): boolean {
 
 // CORS: only accept requests from known origins (gdn-kukohe).
 // Same-origin requests omit the Origin header — allow those unconditionally.
+// TAILSCALE_PORT: set to a non-443 port (e.g. 8443) when sharing a hostname with
+// another service — gives Guéridon a permanent URL that no other app can steal.
+const _tsHost = process.env.TAILSCALE_HOSTNAME || "tube.atlas-cloud.ts.net";
+const _tsPort = process.env.TAILSCALE_PORT;
+const _tsOrigin = `https://${_tsHost}${_tsPort && _tsPort !== "443" ? `:${_tsPort}` : ""}`;
 const ALLOWED_ORIGINS = new Set([
-  `https://${process.env.TAILSCALE_HOSTNAME || "tube.atlas-cloud.ts.net"}`,
+  _tsOrigin,
   `http://localhost:${PORT}`,
   `http://127.0.0.1:${PORT}`,
 ]);
@@ -1220,7 +1225,7 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse): boolean {
 const server = createServer((req, res) => {
   requestContext.run({ requestId: generateRequestId() }, async () => {
   if (!setCorsHeaders(req, res)) {
-    emit({ type: "request:rejected", reason: "cors-origin", method: req.method || "UNKNOWN", url: req.url || "/" });
+    emit({ type: "request:rejected", reason: "cors-origin", method: req.method || "UNKNOWN", url: req.url || "/", origin: req.headers.origin });
     res.writeHead(403).end("Forbidden: origin not allowed");
     return;
   }

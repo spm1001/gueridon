@@ -83,7 +83,7 @@ export type BridgeEvent =
 
   // Request handling
   | { type: "request:http"; method: string; url: string; status: number; durationMs: number }
-  | { type: "request:rejected"; reason: string; method: string; url: string }
+  | { type: "request:rejected"; reason: string; method: string; url: string; origin?: string }
   | { type: "request:error"; action: string; error: string }
 
   // Content hash
