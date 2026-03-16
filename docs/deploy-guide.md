@@ -68,6 +68,11 @@ Merge these keys into `~/.claude.json`:
 "claudeInChromeDefaultEnabled": false
 ```
 
+Create `~/.claude/settings.json` (required for `--mcp-config` — CC errors on startup if missing):
+```bash
+echo '{"mcpServers": {}}' > ~/.claude/settings.json
+```
+
 Create `~/.claude/settings.local.json`:
 ```json
 {
@@ -149,20 +154,59 @@ node -e "
 The bridge runs plain HTTP on port 3001. Tailscale serve terminates TLS with
 auto-provisioned Let's Encrypt certs via your tailnet domain.
 
+### Dedicated port (recommended if sharing a hostname)
+
+If another service (e.g. Open WebUI, Grafana) also uses `tailscale serve` on the
+same machine, give Guéridon its own HTTPS port so the two can never conflict.
+Updates to the other app can't reclaim Guéridon's URL:
+
+```bash
+sudo tailscale serve --bg --https=8443 http://localhost:3001
+```
+
+Guéridon will be at `https://<hostname>.<tailnet>.ts.net:8443/`.
+
+Set matching env vars in `gueridon.service`:
+```ini
+Environment=TAILSCALE_HOSTNAME=your-machine.your-tailnet.ts.net
+Environment=TAILSCALE_PORT=8443
+```
+
+### Single service (port 443)
+
+If Guéridon is the only `tailscale serve` consumer on the machine, use the
+default port instead and omit `TAILSCALE_PORT` from the service file:
+
 ```bash
 sudo tailscale serve --bg --https=443 http://localhost:3001
 ```
 
-Verify:
+Guéridon will be at `https://<hostname>.<tailnet>.ts.net/`.
+
+### Verify
+
 ```bash
 sudo tailscale serve status
-# Should show: https://<hostname>.<tailnet>.ts.net/ → proxy http://localhost:3001
+# Dedicated port: https://<hostname>.<tailnet>.ts.net:8443/ → proxy http://localhost:3001
+# Default port:   https://<hostname>.<tailnet>.ts.net/      → proxy http://localhost:3001
 ```
 
 > **Required for push notifications.** The Push API needs a secure context (HTTPS).
 
 ## 6. Systemd service
 
+First, find your Tailscale hostname:
+```bash
+sudo tailscale serve status   # first line: https://<hostname>.<tailnet>.ts.net
+```
+
+Run the interactive configure script — it auto-detects your Tailscale hostname and writes `~/.config/gueridon/env`:
+
+```bash
+npm run configure
+```
+
+Then install:
 ```bash
 sudo cp /opt/gueridon/gueridon.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -183,7 +227,7 @@ sudo journalctl -u gueridon --no-pager -n 30
 
 ## 7. Verify from phone
 
-1. Open `https://<hostname>.<tailnet>.ts.net/` on your phone
+1. Open `https://<hostname>.<tailnet>.ts.net:8443/` (or `:443/` if not using a dedicated port) on your phone
 2. You should see the folder switcher with project folders listed
 3. Tap a folder → send a test prompt → verify you get a response
 4. When prompted, allow notifications
@@ -227,6 +271,24 @@ Check: `resolvectl status` — look for a physical interface with DNS servers.
 The fix is upstream: configure your Tailscale DNS settings or router DHCP to
 hand out public DNS servers. This ensures all tailnet machines get working
 DNS without per-machine hacks.
+
+### CORS rejections / stuck on "resuming"
+
+Symptom: folders load but tapping a folder gets stuck on "resuming". Bridge logs show `request:rejected` with `reason: cors-origin`.
+
+**Cause 1: wrong URL on the phone.** The bridge only accepts the Tailscale HTTPS URL. If you navigate to `http://clawdbot.tail8553f1.ts.net:3001` (direct HTTP, port 3001) instead of `https://clawdbot.tail8553f1.ts.net` (HTTPS, no port), every POST is rejected. Use the URL from `sudo tailscale serve status` — HTTPS, no port.
+
+**Cause 2: `TAILSCALE_HOSTNAME` not set.** The bridge defaults to `tube.atlas-cloud.ts.net`. Set your actual hostname in the service file:
+
+```ini
+Environment=TAILSCALE_HOSTNAME=your-machine.your-tailnet.ts.net
+```
+
+Find your hostname: `sudo tailscale serve status` (first line, strip `https://`).
+
+After editing: `sudo systemctl daemon-reload && sudo systemctl restart gueridon`.
+
+Verify the env var was picked up: `sudo systemctl show gueridon | grep Environment`.
 
 ### Reboot verification
 

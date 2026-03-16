@@ -6,6 +6,7 @@
   "description": "Mobile web UI for Claude Code",
   "scripts": {
     "start": "tsx server/bridge.ts",
+    "configure": "tsx scripts/configure.ts",
     "test": "tsc --noEmit && vitest run",
     "test:watch": "vitest"
   },
