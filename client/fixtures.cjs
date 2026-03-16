@@ -124,7 +124,7 @@
   const SWITCHER_SESSIONS = [
     {
       project: "gueridon",
-      id: "/home/modha/Repos/gueridon",
+      id: "/home/user/Repos/gueridon",
       status: "now",
       backendState: "active",
       context_pct: 45,
@@ -137,7 +137,7 @@
     },
     {
       project: "bon",
-      id: "/home/modha/Repos/bon",
+      id: "/home/user/Repos/bon",
       status: "now",
       backendState: "paused",
       context_pct: 72,
@@ -151,7 +151,7 @@
     },
     {
       project: "trousse",
-      id: "/home/modha/Repos/trousse",
+      id: "/home/user/Repos/trousse",
       status: "previous",
       backendState: "closed",
       context_pct: 88,
@@ -164,7 +164,7 @@
     },
     {
       project: "passe",
-      id: "/home/modha/Repos/passe",
+      id: "/home/user/Repos/passe",
       status: "previous",
       backendState: "closed",
       context_pct: 30,
@@ -177,7 +177,7 @@
     },
     {
       project: "dotfiles",
-      id: "/home/modha/Repos/dotfiles",
+      id: "/home/user/Repos/dotfiles",
       status: "fresh",
       backendState: "fresh",
       context_pct: 0,

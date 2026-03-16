@@ -24,7 +24,7 @@ system:init → stream_event:message_start → stream_event:content_block_start
 {
   "type": "system",
   "subtype": "init",
-  "cwd": "/home/modha/Repos/gueridon",
+  "cwd": "/home/user/Repos/gueridon",
   "session_id": "8ca79bd7-...",
   "model": "claude-opus-4-6",
   "permissionMode": "bypassPermissions",
@@ -48,6 +48,10 @@ system:init → stream_event:message_start → stream_event:content_block_start
   "session_id": "...", "parent_tool_use_id": null
 }
 ```
+
+**`parent_tool_use_id`**: `null` for parent events, non-null UUID for subagent events.
+This is the ONLY reliable way to distinguish parent vs subagent events on stdout.
+See "Subagent Events on Parent Stdout" section below.
 
 ## stream_event:content_block_start (tool_use)
 
@@ -124,9 +128,14 @@ Multiple fragments concatenate to form valid JSON. Parse on `content_block_stop`
       "output_tokens": 1
     }
   },
-  "session_id": "..."
+  "session_id": "...",
+  "parent_tool_use_id": null
 }
 ```
+
+`parent_tool_use_id` is `null` for parent events, non-null for subagent events.
+**Filter on this field** when extracting usage for context percentage — subagent
+usage reflects the subagent's context, not the parent's.
 
 For tool use, `content` includes `{ "type": "tool_use", "id": "toolu_...", "name": "Bash", "input": {...} }` and `stop_reason` is `"tool_use"`.
 
@@ -250,6 +259,40 @@ events fire (`message_start`, `content_block_*`). The turn just... ends.
 **Verified:** 2026-02-24, CC v2.1.50, session c73cd33d. Two PNG files read via the Read
 tool produced base64 image blocks the API couldn't process. Every subsequent prompt
 replayed the poisoned context and hit the same 400 — permanent death spiral.
+
+## Subagent Events on Parent Stdout (2026-03-04, CC v2.1.68)
+
+When CC dispatches a Task/Agent subagent, the **subagent's streaming events flow through
+the parent's stdout**. These include `stream_event` wrappers AND `assistant` messages with
+the subagent's own `usage` data. The subagent events are distinguished by a non-null
+`parent_tool_use_id` field.
+
+**What appears on stdout during Agent execution:**
+```
+parent assistant (stop_reason: tool_use, tool: Agent)   ← parent context, ~80%
+  subagent stream_event (message_start)                  ← parent_tool_use_id set
+  subagent stream_event (content_block_delta)             ← parent_tool_use_id set
+  subagent assistant (usage: ~53% of subagent's context)  ← parent_tool_use_id set
+  subagent stream_event (message_stop)                    ← parent_tool_use_id set
+parent user (tool_result)                                ← Agent result
+parent assistant (usage back to parent context, ~82%)
+```
+
+**What does NOT appear in JSONL:** Subagent events are not persisted to the parent's
+session JSONL (`isSidechain` is always `false` on parent events, and subagent events
+simply aren't recorded). The contamination is **stdout-only** — visible to the bridge
+in real-time but invisible in post-hoc JSONL analysis.
+
+**Key consequence for Guéridon:** The `usage` field on subagent `assistant` events
+reflects the subagent's own (smaller) context window, not the parent's. If the bridge
+extracts usage from ALL `assistant` events without filtering on `parent_tool_use_id`,
+the reported context percentage drops to the subagent's value during Agent execution,
+then jumps back when the parent resumes. See gdn-pimime.
+
+**Confirmed from session 85c5d728 (itv-slides-formatter):** Context dropped from ~80%
+to ~53% during a docs-audit Agent dispatch, recovered to ~82% when Agent completed.
+Bridge logs show 10+ minute gap between turn completions with SSE client reconnects
+during the drop.
 
 ## Stdin Envelope Format
 

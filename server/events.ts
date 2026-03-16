@@ -21,7 +21,7 @@ export type BridgeEvent =
 
   // Turn lifecycle
   | { type: "turn:start"; folder: string; sessionId: string }
-  | { type: "turn:complete"; folder: string; sessionId: string; durationMs: number; inputTokens: number | null; outputTokens: number | null; contextPct: number | null; toolCalls: number }
+  | { type: "turn:complete"; folder: string; sessionId: string; durationMs: number; inputTokens: number | null; outputTokens: number | null; contextPct: number | null; toolCalls: number; subagentFiltered?: number }
 
   // SSE client lifecycle
   | { type: "sse:connect"; clientId: string }

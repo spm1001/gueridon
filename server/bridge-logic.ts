@@ -5,6 +5,21 @@
  * session resolution, path validation, arg construction, delta conflation.
  */
 
+/**
+ * Subagent (Agent/Task) events flow through the parent's stdout with their own
+ * context window, usage data, message IDs, and streaming state. They're identified
+ * by a non-null `parent_tool_use_id` at the top level of the event object.
+ *
+ * Without filtering, they contaminate: context_pct (subagent's smaller token count
+ * overwrites parent's), state.messages (phantom messages pushed), and streaming
+ * accumulation (subagent message_start wipes currentText/currentToolCalls).
+ *
+ * See CC-EVENTS.md "Subagent Events on Parent Stdout" and gdn-pimime.
+ */
+export function isSubagentEvent(event: Record<string, unknown>): boolean {
+  return event.parent_tool_use_id != null;
+}
+
 import { resolve, join } from "node:path";
 import { homedir, hostname } from "node:os";
 
