@@ -276,4 +276,4 @@ The document body scrolls (not a container element). This enables Safari Full Pa
 | `docs/deploy-guide.md` | Deployment guide — systemd, Tailscale, VAPID keys |
 | `docs/css-shell.md` | CSS shell test page — layout validation, streaming simulator, iOS checklist |
 | `docs/empirical-verification.md` | Verified CC event schemas, edge cases, abort mechanisms |
-| `server/CC-EVENTS.md` | CC event reference for state-builder development |
+| `docs/CC-EVENTS.md` | CC event reference for state-builder development |

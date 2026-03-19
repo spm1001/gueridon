@@ -97,7 +97,7 @@ See [`docs/deploy-guide.md`](docs/deploy-guide.md) for the full walkthrough: Nod
 | [`docs/empirical-verification.md`](docs/empirical-verification.md) | CC stream-json event schemas, verified behaviour |
 | [`docs/idle-guards-design.md`](docs/idle-guards-design.md) | Idle guard escalation design |
 | [`docs/lifecycle-map.md`](docs/lifecycle-map.md) | Session lifecycle state machine |
-| [`server/CC-EVENTS.md`](server/CC-EVENTS.md) | CC event reference for state-builder development |
+| [`docs/CC-EVENTS.md`](docs/CC-EVENTS.md) | CC event reference for state-builder development |
 
 ## Part of the brigade
 
