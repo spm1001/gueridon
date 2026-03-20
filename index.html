@@ -31,6 +31,7 @@
   <div class="ask-backdrop" id="askBackdrop"></div>
   <div class="ask-sheet" id="askSheet">
     <div class="ask-handle"></div>
+    <button class="ask-dismiss" id="askDismiss" aria-label="Dismiss">&#x00D7;</button>
     <div id="askContent"></div>
   </div>
 
@@ -719,6 +720,7 @@ const askEls = {
   sheet: document.getElementById('askSheet'),
   content: document.getElementById('askContent'),
 };
+document.getElementById('askDismiss').addEventListener('click', () => hideAskUserOverlay(askEls));
 const slashEls = {
   list: document.getElementById('slashList'),
   sheet: document.getElementById('slashSheet'),
