@@ -37,7 +37,7 @@ export interface PersistableSession {
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Cancel any pending debounced persist — call before persistSessionsSync in shutdown. */
+/** Cancel any pending debounced persist — call before persistSessionsSyncWithSnapshot in shutdown. */
 export function cancelPendingPersist(): void {
   if (persistTimer) {
     clearTimeout(persistTimer);
@@ -45,35 +45,12 @@ export function cancelPendingPersist(): void {
   }
 }
 
-/** Debounced write of active sessions to disk. */
-export function persistSessions(sessions: Iterable<PersistableSession>): void {
-  if (persistTimer) return;
-  persistTimer = setTimeout(async () => {
-    persistTimer = null;
-    const records: SessionRecord[] = [];
-    for (const s of sessions) {
-      const pid = s.process?.pid ?? s.lastPid;
-      if (pid) {
-        records.push({
-          sessionId: s.id,
-          folder: s.folder,
-          pid,
-          spawnedAt: s.spawnedAt ?? Date.now(),
-          turnInProgress: s.turnInProgress,
-        });
-      }
-    }
-    try {
-      mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
-      await writeFile(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
-    } catch (err) {
-      emit({ type: "server:persist-error", error: errorDetail(err) });
-    }
-  }, 500);
-}
-
-/** Synchronous write for shutdown — must complete before process exits. */
-export function persistSessionsSync(sessions: Iterable<PersistableSession>): void {
+/** Build SessionRecord array from sessions. Optional turnOverride replaces session.turnInProgress
+ *  (used by shutdown snapshot to survive KillMode=control-group race). */
+function buildSessionRecords(
+  sessions: Iterable<PersistableSession>,
+  turnOverride?: Set<string>,
+): SessionRecord[] {
   const records: SessionRecord[] = [];
   for (const s of sessions) {
     const pid = s.process?.pid ?? s.lastPid;
@@ -83,14 +60,25 @@ export function persistSessionsSync(sessions: Iterable<PersistableSession>): voi
         folder: s.folder,
         pid,
         spawnedAt: s.spawnedAt ?? Date.now(),
-        turnInProgress: s.turnInProgress,
+        turnInProgress: turnOverride ? turnOverride.has(s.folder) : s.turnInProgress,
       });
     }
   }
-  try {
-    mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
-    writeFileSync(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
-  } catch { /* best effort */ }
+  return records;
+}
+
+/** Debounced write of active sessions to disk. */
+export function persistSessions(sessions: Iterable<PersistableSession>): void {
+  if (persistTimer) return;
+  persistTimer = setTimeout(async () => {
+    persistTimer = null;
+    try {
+      mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+      await writeFile(SESSION_FILE, JSON.stringify(buildSessionRecords(sessions), null, 2), "utf-8");
+    } catch (err) {
+      emit({ type: "server:persist-error", error: errorDetail(err) });
+    }
+  }, 500);
 }
 
 /** Shutdown-safe persist: uses activeTurnFolders snapshot taken before exit handlers fire.
@@ -100,23 +88,10 @@ export function persistSessionsSyncWithSnapshot(
   sessions: Iterable<PersistableSession>,
   activeTurnFolders: string[],
 ): void {
-  const activeSet = new Set(activeTurnFolders);
-  const records: SessionRecord[] = [];
-  for (const s of sessions) {
-    const pid = s.process?.pid ?? s.lastPid;
-    if (pid) {
-      records.push({
-        sessionId: s.id,
-        folder: s.folder,
-        pid,
-        spawnedAt: s.spawnedAt ?? Date.now(),
-        turnInProgress: activeSet.has(s.folder),
-      });
-    }
-  }
   try {
     mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
-    writeFileSync(SESSION_FILE, JSON.stringify(records, null, 2), "utf-8");
+    writeFileSync(SESSION_FILE, JSON.stringify(
+      buildSessionRecords(sessions, new Set(activeTurnFolders)), null, 2), "utf-8");
   } catch { /* best effort */ }
 }
 

@@ -1623,6 +1623,7 @@ pingTimer.unref(); // don't prevent clean shutdown
 // -- Graceful shutdown --
 
 function shutdown(signal: string): void {
+  if (isShuttingDown) return; // guard against duplicate signals
   isShuttingDown = true;
   emit({ type: "server:shutdown", signal });
 

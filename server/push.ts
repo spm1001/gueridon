@@ -38,10 +38,12 @@ function init(): void {
   try {
     const keys = JSON.parse(readFileSync(VAPID_PATH, "utf-8"));
     publicKey = keys.publicKey;
-    webpush.setVapidDetails(
-      process.env.VAPID_SUBJECT || "mailto:admin@example.com",
-      keys.publicKey, keys.privateKey,
-    );
+    const vapidSubject = process.env.VAPID_SUBJECT;
+    if (!vapidSubject) {
+      emit({ type: "push:init", status: "error", detail: "VAPID_SUBJECT env var not set" });
+      return;
+    }
+    webpush.setVapidDetails(vapidSubject, keys.publicKey, keys.privateKey);
     vapidReady = true;
     emit({ type: "push:init", status: "configured" });
   } catch (e) {
@@ -135,7 +137,13 @@ async function pruneStaleSubscriptions(excludeEndpoint: string): Promise<void> {
   }
 
   if (stale.length > 0) {
-    for (const ep of stale) subscriptions.delete(ep);
+    for (const ep of stale) {
+      subscriptions.delete(ep);
+      // Clean up deviceMap — remove any device pointing at this endpoint
+      for (const [deviceId, mapped] of deviceMap) {
+        if (mapped === ep) { deviceMap.delete(deviceId); break; }
+      }
+    }
     saveSubscriptions();
     emit({ type: "push:subscribe-prune", pruned: stale.length, remaining: subscriptions.size });
   }
@@ -144,6 +152,10 @@ async function pruneStaleSubscriptions(excludeEndpoint: string): Promise<void> {
 /** Remove a push subscription. */
 export function removeSubscription(endpoint: string): void {
   if (subscriptions.delete(endpoint)) {
+    // Clean up deviceMap — remove any device pointing at this endpoint
+    for (const [deviceId, ep] of deviceMap) {
+      if (ep === endpoint) { deviceMap.delete(deviceId); break; }
+    }
     saveSubscriptions();
     emit({ type: "push:unsubscribe", total: subscriptions.size });
   }
@@ -183,7 +195,13 @@ export async function sendPush(payload: {
   }
 
   if (expired.length > 0) {
-    for (const ep of expired) subscriptions.delete(ep);
+    for (const ep of expired) {
+      subscriptions.delete(ep);
+      // Clean up deviceMap — remove any device pointing at this endpoint
+      for (const [deviceId, mapped] of deviceMap) {
+        if (mapped === ep) { deviceMap.delete(deviceId); break; }
+      }
+    }
     saveSubscriptions();
     emit({ type: "push:expired-cleanup", count: expired.length });
   }
@@ -224,9 +242,11 @@ export function pushAskUser(folder: string): Promise<void> {
 export const _testing = {
   reset(subs: Map<string, webpush.PushSubscription> = new Map()) {
     subscriptions = subs;
+    deviceMap = new Map();
     vapidReady = true;
   },
   getSubscriptions() { return subscriptions; },
+  getDeviceMap() { return deviceMap; },
   pruneStaleSubscriptions,
 };
 

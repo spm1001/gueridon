@@ -57,6 +57,13 @@ describe("push subscription management", () => {
     expect(_testing.getSubscriptions().size).toBe(0);
   });
 
+  it("removeSubscription cleans up deviceMap", () => {
+    addSubscription(makeSub(1), "device-A");
+    expect(_testing.getDeviceMap().size).toBe(1);
+    removeSubscription("https://push.example.com/sub-1");
+    expect(_testing.getDeviceMap().size).toBe(0);
+  });
+
   it("removeSubscription is idempotent for unknown endpoints", () => {
     removeSubscription("https://push.example.com/unknown");
     // No throw, no change
@@ -127,6 +134,14 @@ describe("deviceId dedup", () => {
     addSubscription(makeSub(2));
     expect(_testing.getSubscriptions().size).toBe(2);
   });
+
+  it("updates deviceMap when same device re-subscribes", () => {
+    addSubscription(makeSub(1), "device-A");
+    expect(_testing.getDeviceMap().get("device-A")).toBe("https://push.example.com/sub-1");
+    addSubscription(makeSub(2), "device-A");
+    expect(_testing.getDeviceMap().get("device-A")).toBe("https://push.example.com/sub-2");
+    expect(_testing.getDeviceMap().size).toBe(1);
+  });
 });
 
 describe("pruneStaleSubscriptions", () => {
@@ -158,6 +173,26 @@ describe("pruneStaleSubscriptions", () => {
     const subs = _testing.getSubscriptions();
     expect(subs.has(live.endpoint)).toBe(true);
     expect(subs.has(dead.endpoint)).toBe(false);
+  });
+
+  it("cleans up deviceMap when pruning stale subscriptions", async () => {
+    addSubscription(makeSub(1), "device-A");
+    addSubscription(makeSub(2), "device-B");
+    expect(_testing.getDeviceMap().size).toBe(2);
+
+    vi.mocked(webpush.sendNotification).mockImplementation(async (sub: any) => {
+      if (sub.endpoint.includes("sub-1")) {
+        const err = new Error("Gone") as any;
+        err.statusCode = 410;
+        throw err;
+      }
+      return {} as any;
+    });
+
+    await _testing.pruneStaleSubscriptions("https://push.example.com/new");
+    expect(_testing.getDeviceMap().size).toBe(1);
+    expect(_testing.getDeviceMap().has("device-A")).toBe(false);
+    expect(_testing.getDeviceMap().has("device-B")).toBe(true);
   });
 
   it("removes subscriptions that return 404 or 403", async () => {
@@ -274,6 +309,26 @@ describe("sendPush", () => {
     await sendPush(payload);
     expect(_testing.getSubscriptions().has(dead.endpoint)).toBe(false);
     expect(_testing.getSubscriptions().has(live.endpoint)).toBe(true);
+  });
+
+  it("cleans up deviceMap when send finds expired endpoints", async () => {
+    addSubscription(makeSub(1), "device-A");
+    addSubscription(makeSub(2), "device-B");
+    expect(_testing.getDeviceMap().size).toBe(2);
+
+    vi.mocked(webpush.sendNotification).mockImplementation(async (sub: any) => {
+      if (sub.endpoint.includes("sub-1")) {
+        const err = new Error("Gone") as any;
+        err.statusCode = 410;
+        throw err;
+      }
+      return {} as any;
+    });
+
+    await sendPush(payload);
+    expect(_testing.getDeviceMap().size).toBe(1);
+    expect(_testing.getDeviceMap().has("device-A")).toBe(false);
+    expect(_testing.getDeviceMap().has("device-B")).toBe(true);
   });
 
   it("skips when not configured", async () => {
