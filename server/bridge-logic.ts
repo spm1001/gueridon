@@ -116,6 +116,18 @@ const CC_BASE_FLAGS = [
   MCP_CONFIG_PATH,
 ];
 
+// Vertex AI env vars to forward from bridge environment to CC spawn.
+// Set these in .env (loaded by systemd EnvironmentFile) to route CC
+// through VertexAI billing instead of Anthropic API directly.
+export const VERTEX_ENV_VARS = [
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLOUD_ML_REGION",
+  "ANTHROPIC_VERTEX_PROJECT_ID",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+];
+
 /** Build the --append-system-prompt value with machine context. */
 export function buildSystemPrompt(folder?: string): string {
   const host = hostname();
@@ -127,6 +139,8 @@ export function buildSystemPrompt(folder?: string): string {
       "The user sees your questions as tappable buttons and will respond with their selection " +
       "in their next message. Do not apologize for the error or retry the tool. " +
       "End your turn and wait for the user's response.",
+    "Files in ~/.claude/ are protected — Write and Edit tools will be denied for these paths. " +
+      "Use Bash with a heredoc to write to ~/.claude/ instead.",
   ];
   return lines.join("\n");
 }
@@ -373,14 +387,17 @@ export function validateFolderPath(
 /**
  * Build the CLI arguments for spawning a CC process.
  * Uses --resume for paused sessions, --session-id for fresh ones.
+ * Optional model override via CC_MODEL env var (e.g. "opus").
  */
 export function buildCCArgs(
   sessionId: string,
   resume: boolean,
   folder?: string,
+  model?: string,
 ): string[] {
   return [
     ...CC_BASE_FLAGS,
+    ...(model ? ["--model", model] : []),
     "--append-system-prompt",
     buildSystemPrompt(folder),
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),

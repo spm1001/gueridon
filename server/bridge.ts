@@ -339,7 +339,7 @@ function buildActiveSessionsMap(): Map<string, { sessionId: string; activity: "w
 // -- CC process lifecycle --
 
 function spawnCC(session: Session): void {
-  const args = buildCCArgs(session.id, session.resumable, session.folder);
+  const args = buildCCArgs(session.id, session.resumable, session.folder, process.env.CC_MODEL);
   const env = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(

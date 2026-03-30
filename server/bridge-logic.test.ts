@@ -448,6 +448,25 @@ describe("buildCCArgs", () => {
     expect(args[args.length - 2]).toBe("--session-id");
     expect(args[args.length - 1]).toBe("abc");
   });
+
+  it("includes --model when model is provided", () => {
+    const args = buildCCArgs("x", false, undefined, "opus");
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("opus");
+  });
+
+  it("omits --model when model is undefined", () => {
+    const args = buildCCArgs("x", false);
+    expect(args).not.toContain("--model");
+  });
+
+  it("system prompt includes ~/.claude protection warning", () => {
+    const args = buildCCArgs("x", false, "/home/user/Repos/test");
+    const promptIndex = args.indexOf("--append-system-prompt");
+    const prompt = args[promptIndex + 1];
+    expect(prompt).toContain("~/.claude/");
+    expect(prompt).toContain("Bash");
+  });
 });
 
 // --- getActiveSessions ---

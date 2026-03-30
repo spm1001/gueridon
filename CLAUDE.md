@@ -49,7 +49,7 @@ sudo systemctl status gueridon     # Check health
 journalctl -u gueridon -f          # Tail logs
 ```
 
-- **`EnvironmentFile=/opt/gueridon/.env`** — `TAILSCALE_HOSTNAME`, `VAPID_SUBJECT`, `ENABLE_CLAUDEAI_MCP_SERVERS` live here (not in the unit file). `.env.example` in the repo has placeholders. `.env` is gitignored.
+- **`EnvironmentFile=/opt/gueridon/.env`** — `TAILSCALE_HOSTNAME`, `VAPID_SUBJECT`, `ENABLE_CLAUDEAI_MCP_SERVERS`, VertexAI vars, and `CC_MODEL` live here (not in the unit file). `.env.example` in the repo has placeholders. `.env` is gitignored.
 - **`KillMode=control-group`** — on restart, systemd kills everything in the cgroup: tsx launcher, node server, CC processes, and anything CC spawned (chrome via Passe, python http.server, etc.). This frees port 3001 cleanly and prevents orphan accumulation. **CC resume still works** — session state lives in JSONL on disk, not in the process. The previous `KillMode=process` caused `EADDRINUSE` crash loops (orphan node server held the port) and cgroup bloat (1.2GB of chrome renderer trees from past Passe invocations). Note: processes spawned by CC during normal operation still accumulate between restarts; a periodic restart (or any crash) cleans them up.
 - **HTTPS terminated by `tailscale serve`** — bridge listens on HTTP :3001.
 - **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
@@ -73,7 +73,7 @@ The bridge is split across several modules in `server/`:
 | `bridge.ts` | HTTP server, SSE transport, process lifecycle |
 | `bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
 | `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape. `handleEventSignal()` → StateSignal (text/structure/status/ask_user). `getCurrentMessage()` exposes in-flight streaming message. |
-| `folders.ts` | Folder scanning, session discovery, handoff reading |
+| `folders.ts` | Folder scanning (two-level: projects + containers), session discovery, handoff reading |
 | `deposit.ts` | Multipart/binary upload parsing, file validation, mise-style deposit to disk |
 | `orphan.ts` | Orphan CC process reaping, debounced session persistence |
 | `push.ts` | Web Push (VAPID) notification delivery, device-based dedup, subscribe-time stale endpoint pruning (MAX_SUBSCRIPTIONS=3) |
@@ -120,7 +120,7 @@ The bridge is split across several modules in `server/`:
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
 - **`processAlive` field:** All `state` broadcasts include `processAlive: boolean`. The client uses `processAlive: false` to detect CC process exit (as opposed to idle between turns) — clears messages, opens switcher, same as the deliberate `/exit` path. Without this, stale messages lingered behind the switcher after natural CC exit.
 
-## CC Process Flags (verified CC v2.1.63, 2026-03-02)
+## CC Process Flags (verified CC v2.1.87, 2026-03-30)
 
 ```bash
 claude -p --verbose \
@@ -132,6 +132,7 @@ claude -p --verbose \
   --disallowedTools "WebFetch,TodoWrite,NotebookEdit" \
   --permission-mode default \
   --mcp-config ~/.claude/settings.json \
+  --model opus \                          # optional, from CC_MODEL env var
   --session-id <uuid> \
   --append-system-prompt "The user is on a mobile device using Guéridon. ..."
 ```
@@ -142,10 +143,12 @@ claude -p --verbose \
 - **MCP gap:** `settings.json` has `"mcpServers": {}` — bridge-spawned CC has zero MCP servers. Interactive CC discovers MCP via project-level `.mcp.json` files (e.g., mise in `~/Repos/mise-en-space/.mcp.json`), but `-p` mode with `--mcp-config` does not auto-discover these. To enable MCP in bridge sessions, add servers to `settings.json`'s `mcpServers`.
 - `--disallowedTools` hides tools from the model entirely: WebFetch (returns AI summaries, use curl instead), TodoWrite (use bon), NotebookEdit (no notebooks).
 - `--permission-mode default` respects settings.json allow/deny lists.
-- `--append-system-prompt` is built dynamically by `buildSystemPrompt()` in `bridge-logic.ts`. Includes: machine context (hostname, "this IS the production server, do not SSH here"), working directory, and AskUserQuestion coaching (tool returns error on mobile, user sees tappable buttons).
+- `--model` is optional, set via `CC_MODEL` env var in `.env`. Used for VertexAI billing (`CC_MODEL=opus`).
+- `--append-system-prompt` is built dynamically by `buildSystemPrompt()` in `bridge-logic.ts`. Includes: machine context (hostname, "this IS the production server, do not SSH here"), working directory, AskUserQuestion coaching (tool returns error on mobile, user sees tappable buttons), and `~/.claude/` write protection warning (use Bash heredoc, not Write/Edit).
 - `--session-id <uuid>` for fresh sessions; `--resume <uuid>` for resuming after process kill. Decided by `resolveSessionForFolder()` in `bridge-logic.ts`.
 - **Local commands (`/context`, `/cost`, `/compact`) produce NO stdout.** Bridge reads JSONL tail on empty-result turns to recover output.
 - **Input format** (critical): `{"type":"user","message":{"role":"user","content":"..."}}`
+- **`~/.claude/` write protection (CC v2.1.87+):** Write and Edit tools are auto-denied for `~/.claude/` paths in `-p` mode — CC returns `is_error: true` with "Claude requested permissions to edit ... which is a sensitive file." The bridge cannot intercept or override this (CC handles it internally). The system prompt coaches the model to use Bash heredoc instead. The denied tool appears in `result.permission_denials[]` but the bridge does not currently surface this to the UI.
 
 ### `--include-partial-messages` Emission Pattern
 
@@ -182,6 +185,8 @@ The bridge sets these on spawned CC processes (in `spawnCC()` in `bridge.ts`):
 | `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY` | `1` | Survey is interactive TUI, can't work through bridge |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | No telemetry/analytics from bridge-spawned processes |
 | `CLAUDE_CODE_HIDE_ACCOUNT_INFO` | `1` | Account info is noise in headless mode |
+
+VertexAI env vars (`CLAUDE_CODE_USE_VERTEX`, `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`, model overrides) pass through from `process.env` — set them in `.env` to route CC through GCP billing. `CC_MODEL` sets the `--model` flag (e.g. `CC_MODEL=opus`).
 
 Other CC environment variables worth knowing about (not currently set):
 

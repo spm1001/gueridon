@@ -268,6 +268,8 @@ describe("scanFolders", () => {
   ) {
     const fullPath = join(REPOS, name);
     addDir(fullPath); // stat says it's a directory
+    // Mark as a project (classifyDir checks for .git)
+    addDir(join(fullPath, ".git"));
 
     const encoded = encodePath(fullPath);
 
@@ -525,5 +527,34 @@ describe("scanFolders", () => {
       expect(f).toHaveProperty("humanSessionCount");
       expect(typeof f.humanSessionCount).toBe("number");
     }
+  });
+
+  it("scans container directories that hold git-repo children", async () => {
+    // batterie/ has no .git but contains children with .git → container
+    addDir(REPOS, ["batterie", "solo-project"]);
+    addDir(join(REPOS, "batterie")); // no .git → potential container
+    addDir(join(REPOS, "batterie", "bon"));
+    addDir(join(REPOS, "batterie", "bon", ".git")); // child has .git → makes parent a container
+    addDir(join(REPOS, "batterie", "trousse"));
+    addDir(join(REPOS, "batterie", "trousse", ".git"));
+    // Wire up readdir entries for the container
+    vfsDirs.set(join(REPOS, "batterie"), ["bon", "trousse"]);
+
+    addFolder("solo-project"); // has .git via addFolder
+
+    const result = await scanFolders(new Map());
+    const names = result.map((f) => f.name).sort();
+    expect(names).toEqual(["batterie/bon", "batterie/trousse", "solo-project"]);
+  });
+
+  it("non-git directory with no git children is treated as project, not container", async () => {
+    // share-sheet folder: no .git, no children with .git
+    addDir(REPOS, ["dusty-dove"]);
+    addDir(join(REPOS, "dusty-dove"));
+    vfsDirs.set(join(REPOS, "dusty-dove"), []);
+
+    const result = await scanFolders(new Map());
+    expect(result.map((f) => f.name)).toEqual(["dusty-dove"]);
+    expect(result[0].state).toBe("fresh");
   });
 });

@@ -374,7 +374,37 @@ export async function getLatestHandoff(
 // --- Main scan ---
 
 /**
+ * Check if a directory is a project or a container whose children are projects.
+ * A container is a directory without .git that has at least one child with .git
+ * (e.g. ~/Repos/batterie/ containing bon/, gueridon/, trousse/).
+ * Everything else is a project — with or without .git.
+ */
+async function classifyDir(dirPath: string): Promise<"project" | "container"> {
+  try {
+    await access(join(dirPath, ".git"));
+    return "project";
+  } catch {
+    // No .git — check if any visible child directory has .git
+    try {
+      const children = await readdir(dirPath);
+      for (const child of children) {
+        if (child.startsWith(".")) continue;
+        try {
+          const cs = await stat(join(dirPath, child));
+          if (!cs.isDirectory()) continue;
+          await access(join(dirPath, child, ".git"));
+          return "container"; // at least one child is a git repo
+        } catch { continue; }
+      }
+    } catch { /* empty */ }
+    return "project"; // no git-repo children — treat as leaf project
+  }
+}
+
+/**
  * Scan SCAN_ROOT for directories and enrich each with session state.
+ * Supports two-level hierarchy: direct project folders (have .git) and
+ * container directories whose children are project folders (e.g. batterie/).
  *
  * @param activeSessions - Map of folder path → session info for currently
  *   running CC processes (from the bridge's runtime state).
@@ -390,20 +420,47 @@ export async function scanFolders(
     return [];
   }
 
+  // Build flat list of { name, fullPath } candidates, expanding containers.
+  const visible = entries.filter((name) => !name.startsWith("."));
+  const candidates: { name: string; fullPath: string }[] = [];
+
+  await Promise.allSettled(
+    visible.map(async (name) => {
+      const fullPath = join(SCAN_ROOT, name);
+      try {
+        const s = await stat(fullPath);
+        if (!s.isDirectory()) return;
+      } catch {
+        return;
+      }
+
+      const kind = await classifyDir(fullPath);
+      if (kind === "project") {
+        candidates.push({ name, fullPath });
+      } else if (kind === "container") {
+        // Scan children of the container (one level deeper)
+        try {
+          const children = await readdir(fullPath);
+          for (const child of children) {
+            if (child.startsWith(".")) continue;
+            const childPath = join(fullPath, child);
+            try {
+              const cs = await stat(childPath);
+              if (cs.isDirectory()) {
+                candidates.push({ name: `${name}/${child}`, fullPath: childPath });
+              }
+            } catch { continue; }
+          }
+        } catch { /* skip unreadable containers */ }
+      }
+      // kind === "skip" — no .git, no subdirectories → ignore
+    }),
+  );
+
   // Process all folders concurrently (gdn-fisimu). Each folder's stat,
   // session lookup, handoff, and exit marker checks run in parallel.
-  const visible = entries.filter((name) => !name.startsWith("."));
-
-  async function processFolder(name: string): Promise<FolderInfo | null> {
-    const fullPath = join(SCAN_ROOT, name);
-
-    // stat follows symlinks — includes things like claude-config -> ~/.claude
-    try {
-      const s = await stat(fullPath);
-      if (!s.isDirectory()) return null;
-    } catch {
-      return null; // skip broken symlinks or permission errors
-    }
+  async function processFolder(candidate: { name: string; fullPath: string }): Promise<FolderInfo | null> {
+    const { name, fullPath } = candidate;
 
     // Fetch all sessions for this folder (used in all branches)
     const folderSessions = await getSessionsForFolder(fullPath);
@@ -488,7 +545,7 @@ export async function scanFolders(
     }
   }
 
-  const results = await Promise.allSettled(visible.map(processFolder));
+  const results = await Promise.allSettled(candidates.map(processFolder));
   const folders: FolderInfo[] = [];
   for (const result of results) {
     if (result.status === "fulfilled" && result.value) {
