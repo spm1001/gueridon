@@ -749,7 +749,7 @@ async function resolveOrCreateSession(folderPath: string): Promise<Session> {
 }
 
 async function createSession(folderPath: string): Promise<Session> {
-  const folderName = basename(folderPath);
+  const folderName = deriveFolderName(folderPath);
   const latestSession = await getLatestSession(folderPath);
   const handoff = await getLatestHandoff(folderPath);
   const exited = latestSession ? await hasExitMarker(folderPath, latestSession.id) : false;
@@ -867,6 +867,22 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+// -- Folder name derivation --
+
+/**
+ * Derive the display name for a folder path relative to SCAN_ROOT.
+ * For direct children: "/home/user/Repos/gueridon" → "gueridon"
+ * For nested children: "/home/user/Repos/batterie/gueridon" → "batterie/gueridon"
+ * Must match what scanFolders returns as `name` — SSE events carry this as a
+ * routing key, and the client discards events where it doesn't match.
+ */
+function deriveFolderName(folderPath: string): string {
+  const relative = folderPath.startsWith(SCAN_ROOT + "/")
+    ? folderPath.slice(SCAN_ROOT.length + 1)
+    : basename(folderPath);
+  return relative;
+}
+
 // -- Folder path resolution --
 
 function resolveFolder(folderParam: string): string | null {
@@ -915,7 +931,7 @@ async function createSessionWithId(
   sessionId: string,
   resumable: boolean,
 ): Promise<Session> {
-  const folderName = basename(folderPath);
+  const folderName = deriveFolderName(folderPath);
   const session: Session = {
     id: sessionId,
     folder: folderPath,
