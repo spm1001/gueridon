@@ -359,6 +359,67 @@ describe("bridge HTTP smoke tests", () => {
     expect(names).toContain(newFolder);
   });
 
+  it("nested folder (container/project) appears with correct name in /folders", async () => {
+    // Create a container directory with a git-repo child
+    const containerPath = join(tempDir, "suite");
+    const projectPath = join(containerPath, "my-tool");
+    mkdirSync(join(projectPath, ".git"), { recursive: true });
+
+    const foldersRes = await fetch(`${baseUrl}/folders`);
+    const { folders } = await foldersRes.json();
+    const names = folders.map((f: any) => f.name);
+    expect(names).toContain("suite/my-tool");
+    expect(names).not.toContain("suite"); // container itself is not listed
+  });
+
+  it("POST /session for nested folder uses matching folderName in SSE events", async () => {
+    // Create container with git-repo child
+    const containerPath = join(tempDir, "nested");
+    const projectPath = join(containerPath, "child-proj");
+    mkdirSync(join(projectPath, ".git"), { recursive: true });
+
+    // Open SSE, get clientId
+    const sseRes = await fetch(`${baseUrl}/events?clientId=nested-test`);
+    const reader = sseRes.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      if (buffer.includes("event: hello")) break;
+    }
+
+    // Connect to the nested folder session
+    const sessionRes = await fetch(`${baseUrl}/session/${encodeURIComponent("nested/child-proj")}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Client-ID": "nested-test" },
+      body: "{}",
+    });
+    expect(sessionRes.status).toBe(200);
+
+    // Read SSE events — expect state event with folder = "nested/child-proj"
+    buffer = "";
+    const stateDeadline = Date.now() + 5_000;
+    let folderInEvent: string | null = null;
+    while (Date.now() < stateDeadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const stateMatch = buffer.match(/event: state\ndata: (.+)\n/);
+      if (stateMatch) {
+        const data = JSON.parse(stateMatch[1]);
+        folderInEvent = data.folder;
+        break;
+      }
+    }
+    reader.cancel();
+
+    // The routing key must match what scanFolders returns
+    expect(folderInEvent).toBe("nested/child-proj");
+  });
+
   it("SSE /events delivers hello event", async () => {
     const res = await fetch(`${baseUrl}/events`);
     expect(res.status).toBe(200);
