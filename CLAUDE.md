@@ -120,7 +120,7 @@ The bridge is split across several modules in `server/`:
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
 - **`processAlive` field:** All `state` broadcasts include `processAlive: boolean`. The client uses `processAlive: false` to detect CC process exit (as opposed to idle between turns) — clears messages, opens switcher, same as the deliberate `/exit` path. Without this, stale messages lingered behind the switcher after natural CC exit.
 
-## CC Process Flags (verified CC v2.1.87, 2026-03-30)
+## CC Process Flags (verified CC v2.1.89, 2026-04-01)
 
 ```bash
 claude -p --verbose \
@@ -139,7 +139,8 @@ claude -p --verbose \
 
 - `--verbose` is mandatory for stream-json mode.
 - `--allowed-tools` lists all tools permissively, including `mcp__*` for all MCP tools. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
-- `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`. **The JSON file MUST contain a `"mcpServers"` key** (even `"mcpServers": {}` is fine). If the key is missing, CC hangs silently during init — no error, no stderr, no stdout. Debug log stops at "Parsed repository" (8 lines instead of 100+). This caused a 3-session outage in March 2026.
+- **VertexAI tool restrictions:** When `CLAUDE_CODE_USE_VERTEX` is set, `WebSearch` is automatically moved from `--allowed-tools` to `--disallowedTools`. Vertex blocks WebSearch server-side; hiding it prevents wasted tool calls. The toggle is in `buildBaseFlags()` in `bridge-logic.ts`.
+- `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`. **The JSON file MUST contain a `"mcpServers"` key** (even `"mcpServers": {}` is fine). If the key is missing, CC v2.1.87 hangs silently during init; CC v2.1.89+ exits with code 1 and `"Does not adhere to MCP server configuration schema"` on stderr.
 - **MCP gap:** `settings.json` has `"mcpServers": {}` — bridge-spawned CC has zero MCP servers. Interactive CC discovers MCP via project-level `.mcp.json` files (e.g., mise in `~/Repos/mise-en-space/.mcp.json`), but `-p` mode with `--mcp-config` does not auto-discover these. To enable MCP in bridge sessions, add servers to `settings.json`'s `mcpServers`.
 - `--disallowedTools` hides tools from the model entirely: WebFetch (returns AI summaries, use curl instead), TodoWrite (use bon), NotebookEdit (no notebooks).
 - `--permission-mode default` respects settings.json allow/deny lists.

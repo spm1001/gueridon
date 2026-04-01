@@ -91,30 +91,48 @@ const ALLOWED_TOOLS = [
 // raw content (use curl via Bash instead). TodoWrite conflicts with bon.
 const DISALLOWED_TOOLS = ["WebFetch", "TodoWrite", "NotebookEdit"];
 
+// Tools unavailable on VertexAI-billed sessions (Vertex blocks them server-side).
+const VERTEX_BLOCKED_TOOLS = ["WebSearch"];
+
 // CC in -p (print) mode does not load MCP servers from ~/.claude/settings.json.
 // Pass --mcp-config explicitly so bridge-spawned sessions have MCP access.
 const MCP_CONFIG_PATH = join(homedir(), ".claude", "settings.json");
 
-// Base flags without --append-system-prompt (added dynamically in buildCCArgs
-// so we can inject hostname and working directory).
-const CC_BASE_FLAGS = [
-  "-p",
-  "--verbose",
-  "--input-format",
-  "stream-json",
-  "--output-format",
-  "stream-json",
-  "--include-partial-messages",
-  "--replay-user-messages",
-  "--allowed-tools",
-  ALLOWED_TOOLS.join(","),
-  "--disallowedTools",
-  DISALLOWED_TOOLS.join(","),
-  "--permission-mode",
-  "default",
-  "--mcp-config",
-  MCP_CONFIG_PATH,
-];
+// Whether this bridge instance routes through VertexAI billing.
+const IS_VERTEX = !!process.env.CLAUDE_CODE_USE_VERTEX;
+
+/**
+ * Build base CC flags. Computed once at module load.
+ * When running through VertexAI, WebSearch is moved from allowed to disallowed
+ * (Vertex blocks it server-side, so offering it just wastes a tool call).
+ */
+function buildBaseFlags(): string[] {
+  const allowed = IS_VERTEX
+    ? ALLOWED_TOOLS.filter((t) => !VERTEX_BLOCKED_TOOLS.includes(t))
+    : ALLOWED_TOOLS;
+  const disallowed = IS_VERTEX
+    ? [...DISALLOWED_TOOLS, ...VERTEX_BLOCKED_TOOLS]
+    : DISALLOWED_TOOLS;
+  return [
+    "-p",
+    "--verbose",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--replay-user-messages",
+    "--allowed-tools",
+    allowed.join(","),
+    "--disallowedTools",
+    disallowed.join(","),
+    "--permission-mode",
+    "default",
+    "--mcp-config",
+    MCP_CONFIG_PATH,
+  ];
+}
+const CC_BASE_FLAGS = buildBaseFlags();
 
 // Vertex AI env vars to forward from bridge environment to CC spawn.
 // Set these in .env (loaded by systemd EnvironmentFile) to route CC
