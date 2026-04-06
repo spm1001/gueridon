@@ -253,6 +253,43 @@ describe("getLatestHandoff", () => {
     const result = await getLatestHandoff(FOLDER);
     expect(result?.sessionId).toBe("sess-1");
   });
+
+  it("finds handoff in .bon/handoffs/ (walk-up)", async () => {
+    const bonHandoffDir = join(FOLDER, ".bon", "handoffs");
+    const mtime = new Date("2026-03-15");
+    addDir(bonHandoffDir, ["2026-03-15-abc12345.md"]);
+    addFile(join(bonHandoffDir, "2026-03-15-abc12345.md"), {
+      mtime,
+      content: makeHandoff("abc12345-full-uuid", "Bon handoff"),
+    });
+
+    const result = await getLatestHandoff(FOLDER);
+    expect(result).toEqual({
+      sessionId: "abc12345-full-uuid",
+      purpose: "Bon handoff",
+      mtime,
+    });
+  });
+
+  it("prefers .bon/handoffs/ over legacy location", async () => {
+    // Legacy handoff
+    addDir(HANDOFF_DIR, ["old.md"]);
+    addFile(join(HANDOFF_DIR, "old.md"), {
+      mtime: new Date("2026-04-01"),
+      content: makeHandoff("legacy-sess", "Legacy purpose"),
+    });
+    // Bon handoff
+    const bonHandoffDir = join(FOLDER, ".bon", "handoffs");
+    addDir(bonHandoffDir, ["2026-03-15-abc12345.md"]);
+    addFile(join(bonHandoffDir, "2026-03-15-abc12345.md"), {
+      mtime: new Date("2026-03-15"),
+      content: makeHandoff("bon-sess", "Bon purpose"),
+    });
+
+    const result = await getLatestHandoff(FOLDER);
+    expect(result?.sessionId).toBe("bon-sess");
+    expect(result?.purpose).toBe("Bon purpose");
+  });
 });
 
 // --- scanFolders (state derivation — the crown jewel) ---

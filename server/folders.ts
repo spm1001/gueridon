@@ -1,5 +1,5 @@
 import { readdir, stat, readFile, writeFile, access, open as fsOpen } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import type { ActiveSessionInfo } from "./bridge-logic.js";
 import { emit, errorDetail } from "./event-bus.js";
@@ -303,22 +303,57 @@ interface HandoffInfo {
 }
 
 /**
+ * Find the .bon/handoffs/ directory by walking up from folderPath.
+ * Returns the first .bon/handoffs/ found, or null.
+ */
+async function findBonHandoffDir(folderPath: string): Promise<string | null> {
+  let walk = folderPath;
+  while (walk !== dirname(walk)) {
+    const candidate = join(walk, ".bon", "handoffs");
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      walk = dirname(walk);
+    }
+  }
+  return null;
+}
+
+/**
  * Find the most recent handoff .md file for a folder.
+ * Checks .bon/handoffs/ (walk up from folder) first, then legacy ~/.claude/handoffs/.
  * Extracts session_id (line 3) and purpose (line 4).
  * Returns null if no handoffs exist or file is malformed.
  */
 export async function getLatestHandoff(
   folderPath: string,
 ): Promise<HandoffInfo | null> {
-  const encoded = encodePath(folderPath);
-  const dir = join(HANDOFFS_DIR, encoded);
+  // Primary: .bon/handoffs/ (walk up from project)
+  // Fallback: legacy ~/.claude/handoffs/{encoded}
+  const bonDir = await findBonHandoffDir(folderPath);
+  const legacyDir = join(HANDOFFS_DIR, encodePath(folderPath));
 
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch {
-    return null;
+  const dirs = [bonDir, legacyDir].filter((d): d is string => d !== null);
+
+  let entries: string[] = [];
+  let resolvedDir: string | null = null;
+
+  for (const dir of dirs) {
+    try {
+      entries = await readdir(dir);
+      if (entries.length > 0) {
+        resolvedDir = dir;
+        break;
+      }
+    } catch {
+      continue;
+    }
   }
+
+  if (!resolvedDir || entries.length === 0) return null;
+
+  const dir = resolvedDir;
 
   // Filter to .md files, skip symlinks
   const mdFiles: string[] = [];
