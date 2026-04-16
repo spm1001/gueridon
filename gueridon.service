@@ -10,6 +10,7 @@ WorkingDirectory=/opt/gueridon
 Environment=HOME=/home/YOUR_USER
 Environment=PATH=/home/YOUR_USER/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=/opt/gueridon/.env
+EnvironmentFile=/home/YOUR_USER/Repos/dotfiles/shell/claude-vertex.env
 ExecStart=/opt/gueridon/node_modules/.bin/tsx server/bridge.ts
 KillMode=control-group
 Restart=always
