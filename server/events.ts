@@ -18,6 +18,7 @@ export type BridgeEvent =
   | { type: "session:exit"; folder: string; sessionId: string; code: number | null; signal: string | null }
   | { type: "session:resolve"; folder: string; sessionId: string; outcome: "fresh" | "resume" }
   | { type: "session:teardown"; folder: string; sessionId: string }
+  | { type: "session:billing"; folder: string; billing: "vertex" | "max" }
 
   // Turn lifecycle
   | { type: "turn:start"; folder: string; sessionId: string }
@@ -110,6 +111,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "session:exit": "info",
   "session:resolve": "info",
   "session:teardown": "info",
+  "session:billing": "info",
   "turn:start": "debug",
   "turn:complete": "info",
   "sse:connect": "info",

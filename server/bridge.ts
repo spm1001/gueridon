@@ -339,13 +339,33 @@ function buildActiveSessionsMap(): Map<string, { sessionId: string; activity: "w
 // -- CC process lifecycle --
 
 function spawnCC(session: Session): void {
+  // Billing mode: read .gueridon-billing from project folder.
+  // "max" → claude.ai billing (enables Channels, 1M context).
+  // "vertex" or absent → Vertex billing (ITV pays, 200k context cap).
+  let billingMode: "vertex" | "max" = "vertex";
+  try {
+    const raw = readFileSync(join(session.folder, ".gueridon-billing"), "utf-8").trim().toLowerCase();
+    if (raw === "max") billingMode = "max";
+  } catch { /* absent or unreadable → default to vertex */ }
+
   const args = buildCCArgs(session.id, session.resumable, session.folder, process.env.CC_MODEL);
-  const env = {
-    ...Object.fromEntries(
-      Object.entries(process.env).filter(
-        ([k]) => k !== "CLAUDECODE" && k !== "CLAUDE_CODE_ENTRYPOINT",
-      ),
+
+  // Start from process.env, stripping CC internal vars
+  const baseEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([k]) => k !== "CLAUDECODE" && k !== "CLAUDE_CODE_ENTRYPOINT",
     ),
+  );
+
+  // For max billing: remove Vertex env vars so CC falls through to claude.ai auth
+  if (billingMode === "max") {
+    delete baseEnv.CLAUDE_CODE_USE_VERTEX;
+    delete baseEnv.CLOUD_ML_REGION;
+    delete baseEnv.ANTHROPIC_VERTEX_PROJECT_ID;
+  }
+
+  const env = {
+    ...baseEnv,
     // Reset CWD after each Bash command — sessions must stay in their project folder
     CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: "1",
     // No TTY — background task management is meaningless
@@ -354,11 +374,14 @@ function spawnCC(session: Session): void {
     CLAUDE_CODE_DISABLE_TERMINAL_TITLE: "1",
     // No interactive survey through bridge
     CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1",
-    // No telemetry/analytics from bridge-spawned processes
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     // Account info is noise in headless mode
     CLAUDE_CODE_HIDE_ACCOUNT_INFO: "1",
+    // Vertex: disable nonessential traffic (no feature flags needed).
+    // Max: MUST allow nonessential traffic — feature flags gate Channels.
+    ...(billingMode === "vertex" && { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" }),
   };
+
+  emit({ type: "session:billing", folder: session.folderName, billing: billingMode });
   session.process = spawn("claude", args, {
     stdio: ["pipe", "pipe", "pipe"],
     env,
