@@ -232,8 +232,16 @@ export async function getSessionsForFolder(
                   const input = (usage.input_tokens ?? 0)
                     + (usage.cache_creation_input_tokens ?? 0)
                     + (usage.cache_read_input_tokens ?? 0);
-                  // 200K is the standard context window
-                  contextPct = Math.round((input / 200_000) * 100);
+                  // Transcripts don't record the context window, so infer it:
+                  // Fable 5 always runs 1M, [1m]-suffixed models too, and any
+                  // session whose input already exceeds 200K provably had 1M.
+                  // Residual: a [1m] session still under 200K reads against
+                  // 200K and overstates — bounded, never >100% absurd.
+                  const window =
+                    (model && /fable|\[1m\]/i.test(model)) || input > 200_000
+                      ? 1_000_000
+                      : 200_000;
+                  contextPct = Math.round((input / window) * 100);
                 }
               }
             }
