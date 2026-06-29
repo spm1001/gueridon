@@ -105,7 +105,10 @@ The bridge is split across several modules in `server/`:
 | POST | `/client-error` | Mobile error reporting (rate-limited) |
 | POST | `/upload` | Share-sheet new-session upload (auto-injects prompt) |
 | POST | `/upload/:folder` | Multipart file upload (`?stage=true` for client staging, default auto-injects) |
-| POST | `/launch/:folder` | **Future B (gated on `GUERIDON_ENABLE_RC=1`, else 404):** spawn a `claude --remote-control` RC session; returns `{status, pid, folder, url}` (the claude.ai attach URL, awaited up to 15s) |
+| GET | `/repos` | **Future B (ungated, read-only):** lean launcher repo list — `listRepos`, git-commit-recency order, reads no sessions. `{repos:[{name,path,lastCommit}]}` |
+| POST | `/launch/:folder` | **Future B (gated on `GUERIDON_ENABLE_RC=1`, else 404):** spawn a `claude --remote-control` RC session; returns `{status, pid, folder, url}` (the claude.ai attach URL, awaited up to 15s). `handleLaunch` passes `/open` as the initial prompt (auto-orient) |
+| GET | `/rc` | **Future B (gated):** live RC sessions for the launcher's RUNNING list — `{sessions:[{folder,url,pid,spawnedAt}]}` |
+| DELETE | `/launch/:folder` | **Future B (gated):** cleanly end an RC session — `handleRcExit` SIGTERMs it (claude's GracefulShutdown: SessionEnd hooks fire, JSONL flushed, resumable), SIGKILL fallback @ 8s. NOT a literal `/exit` keystroke |
 
 **Key design:**
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
@@ -125,11 +128,17 @@ The bridge is split across several modules in `server/`:
 
 ### Future B — `--remote-control` launch path (flag-gated, dormant)
 
-Additive path (gated on `GUERIDON_ENABLE_RC=1`; inert in prod) that spawns a
-claude.ai-attachable session instead of a `claude -p` pipe. Driving moves to claude.ai's
-native UI; gueridon keeps only the launch/notify front-half. Lives **alongside** the `-p`
-path — `spawnCC` and its billing modes are untouched. Full framing + the 5-outcome plan
-are in `.bon/understanding.md`. Built so far: the spawn path, URL capture, and push delivery.
+Additive path (gated on `GUERIDON_ENABLE_RC=1`; **now LIVE in prod** — flag set in
+`/opt/.env` 2026-06-29) that spawns a claude.ai-attachable session instead of a `claude -p`
+pipe. Driving moves to claude.ai's native UI (Desktop via account-sync / iOS / web); gueridon
+keeps only the launch/notify/lifecycle front-half. Lives **alongside** the `-p` path —
+`spawnCC` and its billing modes are untouched. Full framing + the plan are in
+`.bon/understanding.md`. **Built + deployed + proven end-to-end:** the spawn path, URL capture,
+push, the **launcher UI** (`launch.html` at `/launch.html` — RUNNING list + searchable
+git-recency repos via `GET /repos`), **clean End** (`DELETE /launch` → SIGTERM graceful
+shutdown, SessionEnd hooks fire), and **auto-`/open`** on launch. Remaining: conditional-`/open`
++ readiness spinner (`gdn-cumado`), share-sheet→RC (`gdn-fuzeba`), launcher tests (`gdn-towiva`).
+The old streaming UI still serves at `/` until `gdn-deloce`/`gdn-wimera` retire it (last).
 
 | Piece | Where | What |
 |------|-------|------|

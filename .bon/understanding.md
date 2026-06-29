@@ -121,19 +121,51 @@ favour of B being viable:**
 
 ## Future B — build framing (planned 2026-06-29, post-gdn-hocede)
 
-**Build progress (2026-06-29 — the loop works end-to-end):** `gdn-difoto` (node-pty
-`--remote-control` spawn, Vertex-stripped→Teams, `POST /launch` gated on `GUERIDON_ENABLE_RC`,
-+ a main-guard so `bridge.ts` imports without booting), `gdn-senila` (URL captured from the
-pty via `extractClaudeAiUrl`), and `gdn-dofuza` (push the URL to the phone via
-`pushLaunchReady`/sw.js) are SHIPPED. `gdn-tetepu` (trust) is MOOT — trust cascades from
-`~/repos` (see the trust bullet above). Outcomes `gdn-pijuti`/`gdn-maroke`/`gdn-bekegu` are
-DONE. The spawn→URL→phone loop is verified at the real layer (Teams session, /proc shows zero
-Vertex, push fires with the url). REMAINS: `gdn-todidu` (strip the launcher UI to
-folder-list+launch+URL — this is where dofuza's in-page tap-through lands; `/launch` already
-returns the url), `gdn-fuzeba` (re-point share-sheet at the RC path, passing the deposit as
-the initial prompt — mode (a)), then `gdn-deloce`/`gdn-wimera` (delete the streaming back-half
-+ rewrite CLAUDE.md) LAST, only after the RC path proves out in daily use. Everything below is
-the original plan framing.
+**Build progress (2026-06-29 — LIVE IN PROD, loop proven end-to-end through the deployed
+bridge):** Spawn path shipped earlier (`gdn-difoto` node-pty `--remote-control` Vertex→Teams
++ main-guard; `gdn-senila` URL capture; `gdn-dofuza` push; trust MOOT via `~/repos` cascade).
+**Then the launcher itself shipped + DEPLOYED (`GUERIDON_ENABLE_RC=1` in `/opt/.env`, prod
+@ 2f10bbd+):**
+- `gdn-todidu` DONE — fresh `launch.html` (two-list: RUNNING + searchable repos), `GET /repos`
+  (lean: `listRepos`/`collectRepoCandidates`, git-commit recency order, reads NO sessions so
+  subagent noise can't appear), flat `.btn-send`-style button. Served at `/launch.html`.
+- `gdn-rilope` DONE — RUNNING list (`GET /rc`) + **End = `DELETE /launch/:folder` → SIGTERM**.
+  Open reopens the claude.ai URL. **SIGTERM is a faithful `/exit`**: claude's
+  `process.on("SIGTERM")` GracefulShutdown fires SessionEnd hooks + flushes the JSONL +
+  leaves the session resumable — VERIFIED via `notes-capture.log` archiving the ended glaneur
+  session. (NOT SIGHUP — claude survives that; NOT typing `/exit` into the pty — view-state
+  fragile, gets swallowed by menus. SIGTERM is out-of-band + reliable.) SIGKILL fallback @ 8s.
+- `gdn-cumado` OPEN — auto-`/open` on launch WIRED + verified (a slash-command as the initial
+  prompt fires the skill). **Spike (2026-06-29) found two refinements still to do:** (1) the
+  readiness signal for "session ready for input" = first `stop_reason: end_turn` in the
+  session JSONL after `/open` (clean, structured, no view-sniffing; the bridge can find the
+  JSONL from just the folder — proven live). (2) `/open` latency is UNBOUNDED (good run ~1m45s;
+  context-less run never finished in 220s), so any "spin until ready" UI needs a TIMEOUT
+  fallback, AND auto-`/open` must be CONDITIONAL on the repo having `.bon` — an empty repo
+  makes `/open` flail endlessly. So `handleLaunch` should pass `/open` only when `.bon` exists.
+
+**Proven in prod 2026-06-29:** Sameer launched real sessions (glaneur, infra) from his phone;
+the loop POST `/launch` → real Teams session + claude.ai URL → RUNNING → End (clean SIGTERM)
+all verified end-to-end through `/opt`. Native surface: launched sessions appear in Claude
+**Desktop** (account sync) and open on **iOS** (the Open link worked); web-vs-native is parked
+(the native apps notify session-alive, so it doesn't matter — and the AASA/Universal-Link
+route can't be forced from JS anyway; see below). The **old streaming UI still serves at `/`**
+— additive, migrate-don't-big-bang; `gdn-deloce`/`gdn-wimera` (delete back-half + rewrite
+CLAUDE.md) stay LAST.
+
+**Native-app deep-link — investigated + closed (2026-06-29):** you CANNOT force a hezza RC
+session into a native Claude app from a web page. Universal Links (`claude.ai/code/session_*`)
+are unforceable from JS by design AND the installed Mac app (`com.anthropic.claudefordesktop`)
+has no `applinks` entitlement (the AASA names `…claudenestfordesktop`, which isn't installed).
+The forceable custom scheme `claude-cli://open?cwd&repo&q` launches a NEW LOCAL session — it
+has no session-id input, so it can't attach to a remote session. Net: web/Desktop-account-sync
+is the driving surface; native-attach is gated on Anthropic shipping an entitled handler.
+
+**Open launcher follow-ups:** `gdn-cumado` (conditional-`/open` + readiness spinner, spike done),
+`gdn-fuzeba` (share-sheet → RC path), `gdn-towiva` (tests for the launcher endpoints — verified
+live-only so far), `gdn-nagepa` (launcher launches triple-notify; gate the push), `gdn-mupito`
+(idle reaping — now LIVE-relevant: the launcher makes lingering sessions easy; `infra` is
+idle-burning Teams quota as of this writing). Everything below is the original plan framing.
 
 Shape: replace the `claude -p` + hand-rolled streaming UI with `claude
 --remote-control` spawns whose `claude.ai/code` URL is pushed to the phone —
