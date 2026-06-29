@@ -138,18 +138,21 @@ Cross-cutting decisions:
   spike to yield Teams, which is what the claude.ai relay attaches to. **Tradeoff,
   Sameer's call:** RC sessions bill to Teams/MAX (its rate limits), not Vertex.
   Side effect: satisfies gdn-rosara's contamination concern.
-- **Pre-seed folder trust, don't send-keys.** The spike hit "trust this folder?"
-  and accepted via send-keys (fragile). Production should pre-write the folder to
-  CC's trusted list before spawn. SPIKE: find the trust-store (likely
-  `~/.claude.json`) and confirm pre-seeding suppresses the prompt.
-- **Initial-prompt injection — OPEN.** Autonomous/share-sheet launches must start
-  on the deposit immediately. SPIKE: can `claude --remote-control <name> "<prompt>"`
-  take an initial prompt, or must we type it into the pty?
-- **One spawn mode or two — THE central fork.** (a) ALL launches become
-  `--remote-control`, claude.ai is the universal driver/viewer, full render-layer
-  deletion — depends on initial-prompt injection. (b) keep `claude -p` for
-  autonomous share-sheet (push result, no URL), add `--remote-control` for
-  interactive. Lean (a) if the injection spike passes.
+- **Pre-seed folder trust — store FOUND (2026-06-29, gdn-tetepu).** Trust lives in
+  `~/.claude.json` → `projects["<abs-path>"].hasTrustDialogAccepted = true`
+  (confirmed: a pre-trusted folder spawns with no prompt). GOTCHA: `~/.claude.json`
+  is the SHARED config every CC session writes — pre-seeding at launch must be an
+  atomic/careful write (or a CC trust flag), never a naïve hand-edit while sessions
+  are live. Fallback: detect the prompt in the pty and send Enter (as the spike did).
+- **Initial-prompt injection — CONFIRMED (2026-06-29, gdn-lohupa).**
+  `claude --remote-control <name> "<prompt>"` runs the prompt autonomously AND stays
+  remote-control-attachable (spiked: it executed the prompt, printed the result, and
+  held the claude.ai URL).
+- **One spawn mode or two — RESOLVED → mode (a).** Because injection works, ALL
+  launches unify under `--remote-control`: interactive AND autonomous/share-sheet
+  (pass the deposit as the initial prompt; the user can still attach via the URL to
+  watch/continue). So the full render-layer deletion (O5) is on — no separate
+  `claude -p` path needed.
 - **What dies vs survives.** DIES (driving moves to claude.ai): SSE transport,
   state-builder.ts, delta conflation, the whole client render layer (render-*.cjs
   + streaming index.html), content-hash watcher, the AskUser overlay, the context
