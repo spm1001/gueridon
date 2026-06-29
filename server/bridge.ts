@@ -24,6 +24,7 @@ import { spawn as ptySpawn, type IPty } from "node-pty";
 import {
   buildCCArgs,
   buildRemoteControlEnv,
+  extractClaudeAiUrl,
   VERTEX_ENV_VARS,
   KILL_ESCALATION_MS,
   CONFLATION_INTERVAL_MS,
@@ -173,6 +174,7 @@ interface RCSession {
 }
 export const rcSessions = new Map<string, RCSession>();   // keyed by folder path
 const RC_BUFFER_CAP = 64 * 1024;                   // keep the last 64 KB of pty output
+const RC_URL_TIMEOUT_MS = 15_000;                  // claude.ai URL prints ~8s after init (gdn-senila)
 
 // -- State --
 
@@ -468,7 +470,15 @@ export function spawnRemoteControl(folderPath: string): RCSession {
   p.onData((data) => {
     rc.buffer += data;
     if (rc.buffer.length > RC_BUFFER_CAP) rc.buffer = rc.buffer.slice(-RC_BUFFER_CAP);
-    // URL extraction + lifecycle parsing land in gdn-senila — here we only buffer.
+    // Capture the claude.ai/code URL once it prints (gdn-senila). It arrives ~8s after
+    // init on the "/remote-control is active" line; store it for delivery to the phone.
+    if (!rc.url) {
+      const url = extractClaudeAiUrl(rc.buffer);
+      if (url) {
+        rc.url = url;
+        emit({ type: "rc:url", folder: folderName, pid: rc.pid, url });
+      }
+    }
   });
 
   p.onExit(({ exitCode }) => {
@@ -479,6 +489,23 @@ export function spawnRemoteControl(folderPath: string): RCSession {
   rcSessions.set(folderPath, rc);
   emit({ type: "rc:spawn", folder: folderName, pid: rc.pid });
   return rc;
+}
+
+/**
+ * Wait (bounded) for an RC session's claude.ai URL to be captured by the onData matcher
+ * (gdn-senila). Resolves with the URL or null on timeout — the matcher keeps trying after,
+ * so a late URL still lands on rc.url for later delivery (gdn-dofuza).
+ */
+function waitForRcUrl(rc: RCSession, timeoutMs: number): Promise<string | null> {
+  if (rc.url) return Promise.resolve(rc.url);
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const iv = setInterval(() => {
+      if (rc.url) { clearInterval(iv); resolve(rc.url); }
+      else if (Date.now() > deadline) { clearInterval(iv); resolve(null); }
+    }, 200);
+    iv.unref();
+  });
 }
 
 function wireProcess(session: Session): void {
@@ -1096,17 +1123,20 @@ async function autoResumeOnStartup(prior: PriorSessionInfo): Promise<void> {
 
 /**
  * POST /launch/:folder — spawn a claude.ai-attachable RC session (Future B, gdn-difoto).
- * Idempotent per folder. Responds with the pid + folderName; URL delivery is gdn-senila.
+ * Idempotent per folder. Waits (bounded) for the claude.ai URL (gdn-senila) so the phone
+ * gets it in one round-trip; url is null if it doesn't print within the window.
  */
-async function handleLaunch(folderPath: string, res: ServerResponse): Promise<void> {
+export async function handleLaunch(folderPath: string, res: ServerResponse): Promise<void> {
   const existing = rcSessions.get(folderPath);
   const rc = existing ?? spawnRemoteControl(folderPath);
+  const url = await waitForRcUrl(rc, RC_URL_TIMEOUT_MS);
+  if (!url) emit({ type: "rc:url-timeout", folder: rc.folderName, pid: rc.pid });
   res.writeHead(200, { "Content-Type": "application/json" }).end(
     JSON.stringify({
       status: existing ? "already-running" : "launched",
       pid: rc.pid,
       folder: rc.folderName,
-      url: rc.url,
+      url,
     }),
   );
 }

@@ -175,6 +175,21 @@ export function buildRemoteControlEnv(
   return env;
 }
 
+/**
+ * Extract the claude.ai/code session URL from a `claude --remote-control` pty buffer
+ * (Future B, gdn-senila). The URL prints on the "/remote-control is active · …" line
+ * ~8s after init. We ANSI-strip first so TUI styling can't split the match, then take
+ * the LAST occurrence (the active-line URL, after any earlier redraws). Returns null
+ * until it appears. Session IDs are alphanumeric (e.g. session_013GBXc41Hdnv4BvRf3nMfUg).
+ */
+export function extractClaudeAiUrl(buffer: string): string | null {
+  const clean = buffer
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
+    .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, "");
+  const matches = clean.match(/https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/g);
+  return matches ? matches[matches.length - 1] : null;
+}
+
 /** Build the --append-system-prompt value with machine context. */
 export function buildSystemPrompt(folder?: string): string {
   const host = hostname();

@@ -95,9 +95,11 @@ export type BridgeEvent =
   // Content hash
   | { type: "content:changed"; contentHash: string }
 
-  // Remote control — Future B launcher (gdn-difoto)
+  // Remote control — Future B launcher (gdn-difoto, gdn-senila)
   | { type: "rc:spawn"; folder: string; pid: number }
   | { type: "rc:exit"; folder: string; pid: number; exitCode: number }
+  | { type: "rc:url"; folder: string; pid: number; url: string }
+  | { type: "rc:url-timeout"; folder: string; pid: number }
 
   // Server lifecycle
   | { type: "server:start"; port: number; scanRoot: string }
@@ -163,6 +165,8 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "content:changed": "info",
   "rc:spawn": "info",
   "rc:exit": "info",
+  "rc:url": "info",
+  "rc:url-timeout": "warn",
   "server:start": "info",
   "server:shutdown": "info",
   "server:shutdown-complete": "info",

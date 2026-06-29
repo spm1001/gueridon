@@ -34,6 +34,7 @@ import {
   isSubagentEvent,
   buildRemoteControlEnv,
   VERTEX_ENV_VARS,
+  extractClaudeAiUrl,
 } from "./bridge-logic.js";
 
 // --- resolveSessionForFolder ---
@@ -2155,5 +2156,49 @@ describe("buildRemoteControlEnv", () => {
     const env = buildRemoteControlEnv({ FOO: undefined, BAR: "baz" });
     expect("FOO" in env).toBe(false);
     expect(env.BAR).toBe("baz");
+  });
+});
+
+// --- extractClaudeAiUrl (Future B, gdn-senila) ---
+describe("extractClaudeAiUrl", () => {
+  const URL = "https://claude.ai/code/session_013GBXc41Hdnv4BvRf3nMfUg";
+
+  it("returns null before the URL appears", () => {
+    expect(extractClaudeAiUrl("")).toBeNull();
+    expect(extractClaudeAiUrl("/rc connecting…\r\nstill warming up")).toBeNull();
+  });
+
+  it("extracts the URL from a plain active-line", () => {
+    const buf = "gueridon hezza Opus 4.8 Teams\r\n/remote-control is active · Continue here, or at\r\n" + URL + "\r\n";
+    expect(extractClaudeAiUrl(buf)).toBe(URL);
+  });
+
+  it("extracts through ANSI styling (real pty fragment)", () => {
+    // Representative raw tail from a live spawn: cursor saves, CSI colour codes, CRs.
+    const raw = "78[>4;2m\rgueridon hezza [1mOpus 4.8 Teams[0m\r" +
+      "[2m/remote-control[0m is active · Continue here, on your phone, or at \r" +
+      URL + "\r\r            /rc";
+    expect(extractClaudeAiUrl(raw)).toBe(URL);
+  });
+
+  it("takes the LAST URL when redraws print it more than once", () => {
+    const stale = "https://claude.ai/code/session_AAAAstaleAAAA";
+    const buf = stale + "\r\n...redraw...\r\n" + URL + "\r\n";
+    expect(extractClaudeAiUrl(buf)).toBe(URL);
+  });
+
+  it("stops at the session-id boundary — no trailing control chars gobbled", () => {
+    expect(extractClaudeAiUrl(URL + "[0m\r\n more text")).toBe(URL);
+    expect(extractClaudeAiUrl(URL + " · trailing")).toBe(URL);
+  });
+
+  it("ignores other claude.ai URLs that aren't /code/session_", () => {
+    expect(extractClaudeAiUrl("see https://claude.ai/settings for more")).toBeNull();
+  });
+
+  it("strips real CSI escape sequences adjacent to the URL", () => {
+    const ESC = String.fromCharCode(27); // \x1b — unambiguous, no source-escape games
+    expect(extractClaudeAiUrl(`${ESC}[2m${URL}${ESC}[0m`)).toBe(URL);
+    expect(extractClaudeAiUrl(`text ${ESC}[1;32m${URL}${ESC}[0m more`)).toBe(URL);
   });
 });
