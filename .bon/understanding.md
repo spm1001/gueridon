@@ -135,14 +135,30 @@ bridge):** Spawn path shipped earlier (`gdn-difoto` node-pty `--remote-control` 
   leaves the session resumable — VERIFIED via `notes-capture.log` archiving the ended glaneur
   session. (NOT SIGHUP — claude survives that; NOT typing `/exit` into the pty — view-state
   fragile, gets swallowed by menus. SIGTERM is out-of-band + reliable.) SIGKILL fallback @ 8s.
-- `gdn-cumado` OPEN — auto-`/open` on launch WIRED + verified (a slash-command as the initial
-  prompt fires the skill). **Spike (2026-06-29) found two refinements still to do:** (1) the
-  readiness signal for "session ready for input" = first `stop_reason: end_turn` in the
-  session JSONL after `/open` (clean, structured, no view-sniffing; the bridge can find the
-  JSONL from just the folder — proven live). (2) `/open` latency is UNBOUNDED (good run ~1m45s;
-  context-less run never finished in 220s), so any "spin until ready" UI needs a TIMEOUT
-  fallback, AND auto-`/open` must be CONDITIONAL on the repo having `.bon` — an empty repo
-  makes `/open` flail endlessly. So `handleLaunch` should pass `/open` only when `.bon` exists.
+- `gdn-cumado` DONE (built+deployed+live-verified) — **conditional auto-`/open`** (`handleLaunch`
+  passes `/open` only when the repo has `.bon`; else bare spawn, ready immediately) + **readiness
+  spinner**. Readiness = last MAIN-thread (`parent_tool_use_id` null) assistant `stop_reason:
+  end_turn` (or an AskUserQuestion) in the session JSONL — `isSessionReadyFromTail` (pure) +
+  `isRcSessionReady` (fs glue, newest JSONL with mtime ≥ spawnedAt so a stale prior session can't
+  false-ready). `/launch`+`/rc` carry `ready`/`autoOpened`; launcher spins "Orienting…" with a
+  4-min TIMEOUT fallback (`/open` latency unbounded). Live: glaneur flipped ready at 72s.
+- `gdn-nagepa` DONE — **launch-push gating** via `RCSession.pushOnReady` (default false). Launcher
+  launches no longer double/triple-notify (the URL is delivered in-page + via the roster);
+  `pushLaunchReady` fires only `pushOnReady && allClients.size===0`. Share-sheet (`gdn-fuzeba`)
+  will opt in with `pushOnReady=true`. (Gueridon can only suppress its OWN push; the native
+  claude.ai ping is outside our control — this is 3→2, removing the redundancy we own.)
+- `gdn-towiva` DONE — launcher endpoint tests. `server/bridge-rc.test.ts` (node-pty + push.js
+  mocked, **imports `bridge.ts` under its main-guard** — first test to do so) covers
+  spawnRemoteControl/handleLaunch/handleRcExit; integration tests cover `/repos` recency-order,
+  `/rc`+`/sessions` gating+shape, `/launch` traversal-400. 757 tests total.
+- `gdn-batogo` DONE (built+deployed+live-verified) — **the live-sessions roster.** The launcher's
+  top section now lists EVERY live `claude` session (`GET /sessions`), not just RC ones. Born when
+  Sameer noticed a hand-started session in `~` was invisible. `server/sessions.ts` `/proc`-scans
+  `comm=="claude"` (catches RC, `-p`, and terminal sessions; excludes node/bash/in-process
+  subagents); pure `buildSessionRoster` classifies rc (attachable: Open/End) vs local (read-only,
+  "local · 44m"). READ-ONLY by Sameer's pick — no kill/attach on foreign sessions (gueridon has no
+  pty handle; the `~/.claude/remote` roster daemon only knows daemonized agents, not terminals).
+  Live-verified: the `~` session showed `local`, a bare spawn showed `rc attachable`.
 
 **Proven in prod 2026-06-29:** Sameer launched real sessions (glaneur, infra) from his phone;
 the loop POST `/launch` → real Teams session + claude.ai URL → RUNNING → End (clean SIGTERM)
@@ -161,15 +177,23 @@ The forceable custom scheme `claude-cli://open?cwd&repo&q` launches a NEW LOCAL 
 has no session-id input, so it can't attach to a remote session. Net: web/Desktop-account-sync
 is the driving surface; native-attach is gated on Anthropic shipping an entitled handler.
 
-**Open launcher follow-ups:** `gdn-cumado` (conditional-`/open` + readiness spinner, spike done),
-`gdn-fuzeba` (share-sheet → RC path), `gdn-towiva` (tests for the launcher endpoints — verified
-live-only so far), `gdn-nagepa` (launcher launches triple-notify; gate the push), `gdn-mupito`
-(idle reaping — **process hygiene, NOT a quota-saver**. The 2026-06-29 "infra is idle-burning
-Teams quota" claim was WRONG and is retracted: an idle session burns ZERO tokens — cost tracks
-*turns* only, there is no passive bleed. Verified 2026-06-29: an "idle" launched session sits at
-flat CPU and a static JSONL; its quota cost is just the one-time `/open` turn plus whatever
-driving the user actually does. The real (weaker) case for reaping is orphan PIDs + ~440MB RSS
-per forgotten session). Everything below is the original plan framing.
+**Open launcher follow-ups** (cumado/towiva/nagepa/batogo all shipped 2026-06-29):
+- `gdn-fuzeba` (share-sheet → RC path) — **PAUSED** mid-step-1 (pivoted to the roster). When
+  resumed: re-point `handleShareUpload` to `spawnRemoteControl(folderPath, depositNote, true)` —
+  the deposit note as the initial prompt, **`pushOnReady=true`** (the phone-in-pocket push the
+  gdn-nagepa flag was built for); keep a `-p` fallback when RC is off (migrate-don't-big-bang).
+- `gdn-mupito` (idle reaping) — **process hygiene, NOT a quota-saver, and largely ERODED.** The
+  2026-06-29 "infra is idle-burning Teams quota" claim was WRONG and is retracted: an idle session
+  burns ZERO tokens — cost tracks *turns* only, no passive bleed (verified: an "idle" session sits
+  at flat CPU + static JSONL). Its other motivations also eroded under parallel work: invisibility
+  is covered by the RUNNING list / roster (gdn-rilope/gdn-batogo), and relaunch-collision can't
+  happen for RC (spawnRemoteControl is idempotent per folder). Residual case = orphan PIDs +
+  ~440MB RSS per forgotten `-p` session, and that path retires with gdn-deloce. Low priority.
+- `gdn-deloce`/`gdn-wimera` — delete the streaming back-half + rewrite CLAUDE.md, LAST, once the
+  RC path has proven in daily use. (gdn-towiva's tests guard `/repos`,`/rc`,`/sessions`,`/launch`
+  against the deletion breaking them silently.)
+
+Everything below is the original plan framing.
 
 Shape: replace the `claude -p` + hand-rolled streaming UI with `claude
 --remote-control` spawns whose `claude.ai/code` URL is pushed to the phone —

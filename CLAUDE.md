@@ -10,7 +10,7 @@ Phone browser → HTTP → Node.js bridge → claude -p (stream-json) → MAX su
 
 One HTML file (`index.html`) served by the bridge. SSE for live events, POST for commands. Process-per-session with `--session-id <uuid>`, resume via `--resume` after process kill.
 
-**Future B (in progress, flag-gated `GUERIDON_ENABLE_RC=1`, dormant in prod):** a second, additive spawn path that runs `claude --remote-control` in a pty and hands the *driving* to claude.ai's native UI — the phone gets a `claude.ai/code/session_…` link instead of the hand-rolled streaming back-half. The `-p` stream-json path above is unchanged and still primary. See **Bridge Server → Future B** below and `.bon/understanding.md` for the full framing. (When the RC path proves out in daily use, `gdn-deloce`/`gdn-wimera` will delete the streaming back-half and rewrite this file for the launcher.)
+**Future B (flag-gated `GUERIDON_ENABLE_RC=1`, LIVE in prod since 2026-06-29):** a second, additive spawn path that runs `claude --remote-control` in a pty and hands the *driving* to claude.ai's native UI — the phone gets a `claude.ai/code/session_…` link instead of the hand-rolled streaming back-half. The `-p` stream-json path above is unchanged and still primary. See **Bridge Server → Future B** below and `.bon/understanding.md` for the full framing. (When the RC path proves out in daily use, `gdn-deloce`/`gdn-wimera` will delete the streaming back-half and rewrite this file for the launcher.)
 
 ## Running
 
@@ -75,7 +75,8 @@ The bridge is split across several modules in `server/`:
 | `bridge.ts` | HTTP server, SSE transport, process lifecycle |
 | `bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
 | `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape. `handleEventSignal()` → StateSignal (text/structure/status/ask_user). `getCurrentMessage()` exposes in-flight streaming message. |
-| `folders.ts` | Folder scanning (two-level: projects + containers), session discovery, handoff reading |
+| `folders.ts` | Folder scanning (two-level: projects + containers), session discovery, handoff reading, RC readiness (`isRcSessionReady`, `hasBonContext`) |
+| `sessions.ts` | **Future B:** `/proc`-scan for live `claude` sessions (`comm=="claude"`) — feeds the launcher's `GET /sessions` roster (gdn-batogo) |
 | `deposit.ts` | Multipart/binary upload parsing, file validation, mise-style deposit to disk |
 | `orphan.ts` | Orphan CC process reaping, debounced session persistence |
 | `push.ts` | Web Push (VAPID) notification delivery, device-based dedup, subscribe-time stale endpoint pruning (MAX_SUBSCRIPTIONS=3) |
@@ -106,8 +107,9 @@ The bridge is split across several modules in `server/`:
 | POST | `/upload` | Share-sheet new-session upload (auto-injects prompt) |
 | POST | `/upload/:folder` | Multipart file upload (`?stage=true` for client staging, default auto-injects) |
 | GET | `/repos` | **Future B (ungated, read-only):** lean launcher repo list — `listRepos`, git-commit-recency order, reads no sessions. `{repos:[{name,path,lastCommit}]}` |
-| POST | `/launch/:folder` | **Future B (gated on `GUERIDON_ENABLE_RC=1`, else 404):** spawn a `claude --remote-control` RC session; returns `{status, pid, folder, url}` (the claude.ai attach URL, awaited up to 15s). `handleLaunch` passes `/open` as the initial prompt (auto-orient) |
-| GET | `/rc` | **Future B (gated):** live RC sessions for the launcher's RUNNING list — `{sessions:[{folder,url,pid,spawnedAt}]}` |
+| POST | `/launch/:folder` | **Future B (gated on `GUERIDON_ENABLE_RC=1`, else 404):** spawn a `claude --remote-control` RC session; returns `{status, pid, folder, url, autoOpened, ready}` (the claude.ai attach URL, awaited up to 15s). `handleLaunch` passes `/open` as the initial prompt **only when the repo has `.bon`** (gdn-cumado conditional-`/open` — a context-less repo makes `/open` flail); `autoOpened` reflects that, `ready` is the JSONL-derived orientation status |
+| GET | `/rc` | **Future B (gated):** live RC sessions Guéridon spawned — `{sessions:[{folder,url,pid,spawnedAt,ready}]}`. `ready` (gdn-cumado) = false while the auto-`/open` turn runs. (The launcher now reads `/sessions`, not this; `/rc` stays for the RC-only contract + tests.) |
+| GET | `/sessions` | **Future B (gated):** the launcher roster — EVERY live `claude` session (gdn-batogo), not just RC ones. `{sessions:[{pid,name,cwd,ageSec,kind,attachable,url,ready}]}`, newest first. `kind:"rc"` = Guéridon-spawned (attachable, Open+End); `kind:"local"` = hand-started/foreign (read-only, e.g. a terminal session in `~`). `/proc`-scans `comm=="claude"`, cross-refs `rcSessions` by pid |
 | DELETE | `/launch/:folder` | **Future B (gated):** cleanly end an RC session — `handleRcExit` SIGTERMs it (claude's GracefulShutdown: SessionEnd hooks fire, JSONL flushed, resumable), SIGKILL fallback @ 8s. NOT a literal `/exit` keystroke |
 
 **Key design:**
@@ -126,27 +128,33 @@ The bridge is split across several modules in `server/`:
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
 - **`processAlive` field:** All `state` broadcasts include `processAlive: boolean`. The client uses `processAlive: false` to detect CC process exit (as opposed to idle between turns) — clears messages, opens switcher, same as the deliberate `/exit` path. Without this, stale messages lingered behind the switcher after natural CC exit.
 
-### Future B — `--remote-control` launch path (flag-gated, dormant)
+### Future B — `--remote-control` launch path (flag-gated, LIVE in prod)
 
-Additive path (gated on `GUERIDON_ENABLE_RC=1`; **now LIVE in prod** — flag set in
+Additive path (gated on `GUERIDON_ENABLE_RC=1`; **LIVE in prod** — flag set in
 `/opt/.env` 2026-06-29) that spawns a claude.ai-attachable session instead of a `claude -p`
 pipe. Driving moves to claude.ai's native UI (Desktop via account-sync / iOS / web); gueridon
 keeps only the launch/notify/lifecycle front-half. Lives **alongside** the `-p` path —
 `spawnCC` and its billing modes are untouched. Full framing + the plan are in
 `.bon/understanding.md`. **Built + deployed + proven end-to-end:** the spawn path, URL capture,
-push, the **launcher UI** (`launch.html` at `/launch.html` — RUNNING list + searchable
-git-recency repos via `GET /repos`), **clean End** (`DELETE /launch` → SIGTERM graceful
-shutdown, SessionEnd hooks fire), and **auto-`/open`** on launch. Remaining: conditional-`/open`
-+ readiness spinner (`gdn-cumado`), share-sheet→RC (`gdn-fuzeba`), launcher tests (`gdn-towiva`).
-The old streaming UI still serves at `/` until `gdn-deloce`/`gdn-wimera` retire it (last).
+push, the **launcher UI** (`launch.html` at `/launch.html`), **clean End** (`DELETE /launch` →
+SIGTERM graceful shutdown, SessionEnd hooks fire), **conditional auto-`/open`** + readiness
+spinner (`gdn-cumado`), the **live-sessions roster** (`gdn-batogo`), launch-notify gating
+(`gdn-nagepa`), and **endpoint tests** (`gdn-towiva`). The launcher's top section is a roster
+of EVERY live `claude` session (`GET /sessions`) — RC sessions Guéridon spawned are attachable
+(Open/End/orienting); hand-started/foreign sessions show read-only ("local · 44m"). Remaining:
+share-sheet→RC (`gdn-fuzeba`, paused — it'll pass the deposit as the initial prompt with
+`pushOnReady=true`). The old streaming UI still serves at `/` until `gdn-deloce`/`gdn-wimera`
+retire it (last).
 
 | Piece | Where | What |
 |------|-------|------|
-| `spawnRemoteControl(folder)` | `bridge.ts` | Spawns `claude --remote-control <folder>` in a **node-pty** (interactive TUI needs a real terminal). Reads the pty only to buffer output — never to render. |
+| `spawnRemoteControl(folder, initialPrompt?, pushOnReady?)` | `bridge.ts` | Spawns `claude --remote-control <folder> [prompt]` in a **node-pty** (interactive TUI needs a real terminal). Reads the pty only to buffer output — never to render. `initialPrompt` (e.g. `/open`) sets `autoPrompted`; `pushOnReady` (default false) gates the URL push. |
 | `buildRemoteControlEnv()` | `bridge-logic.ts` | Strips the full `VERTEX_ENV_VARS` set + CC-internal markers → the session comes up on **Teams** (which the claude.ai relay attaches to; the `-p` path's `max` mode reuses this var list). Unit-tested. |
 | `extractClaudeAiUrl(buffer)` | `bridge-logic.ts` | ANSI-strips + matches the `claude.ai/code/session_…` URL (last occurrence). Unit-tested. |
-| `rcSessions` map + `handleLaunch` | `bridge.ts` | Lightweight registry (separate from the `-p` `sessions` map); `POST /launch` awaits the URL (≤15s) and returns it. |
-| `pushLaunchReady(folder, url)` | `push.ts` | Pushes the attach URL to the phone (sw.js opens it on tap); fires only when `allClients.size===0` (phone-in-pocket). |
+| `isSessionReadyFromTail(tail)` | `bridge-logic.ts` | Readiness from a session JSONL tail (gdn-cumado): last MAIN-thread (`parent_tool_use_id` null) assistant `stop_reason==="end_turn"` (or an AskUserQuestion) → ready. `isRcSessionReady(folder, spawnedAt)` (folders.ts) is the fs glue. Unit-tested. |
+| `scanClaudeSessions()` + `buildSessionRoster()` | `sessions.ts` / `bridge-logic.ts` | Roster (gdn-batogo): `/proc`-scan `comm=="claude"` for live sessions (pid/cwd/age), then classify rc/local by pid membership in `rcSessions`. `GET /sessions` feeds the launcher. Pure classifier unit-tested. |
+| `rcSessions` map + `handleLaunch` | `bridge.ts` | Lightweight registry (separate from the `-p` `sessions` map); `POST /launch` passes `/open` only when `.bon` exists, awaits the URL (≤15s), returns `{…, autoOpened, ready}`. |
+| `pushLaunchReady(folder, url)` | `push.ts` | Pushes the attach URL to the phone (sw.js opens it on tap); fires only when `rc.pushOnReady && allClients.size===0`. Launcher launches set `pushOnReady=false` (URL delivered in-page + via the roster) — the push is for phone-in-pocket paths (share-sheet) only (gdn-nagepa). |
 
 - **Main-guard (load-bearing — do not remove):** `bridge.ts`'s `// -- Start --` block (reapOrphans, watcher, `server.listen`) runs only when `IS_ENTRYPOINT` (i.e. `tsx server/bridge.ts`). This lets tests/harnesses **import** `bridge.ts` without booting the server — critically without `reapOrphans()` clobbering the SHARED `~/.config/gueridon` state the live bridge owns. Removing the guard re-breaks import-safety.
 - **Folder trust:** *no seeding needed.* CC trust **cascades from the nearest trusted ancestor dir** (empirically verified); `~/repos` is trusted and `SCAN_ROOT=~/repos`, so every launch inherits trust. Precondition for a fresh machine: trust `~/repos` once (a rebuild/setup step, not gueridon's job).
