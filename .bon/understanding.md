@@ -138,12 +138,20 @@ Cross-cutting decisions:
   spike to yield Teams, which is what the claude.ai relay attaches to. **Tradeoff,
   Sameer's call:** RC sessions bill to Teams/MAX (its rate limits), not Vertex.
   Side effect: satisfies gdn-rosara's contamination concern.
-- **Pre-seed folder trust — store FOUND (2026-06-29, gdn-tetepu).** Trust lives in
-  `~/.claude.json` → `projects["<abs-path>"].hasTrustDialogAccepted = true`
-  (confirmed: a pre-trusted folder spawns with no prompt). GOTCHA: `~/.claude.json`
-  is the SHARED config every CC session writes — pre-seeding at launch must be an
-  atomic/careful write (or a CC trust flag), never a naïve hand-edit while sessions
-  are live. Fallback: detect the prompt in the pty and send Enter (as the spike did).
+- **Folder trust — CASCADES from a trusted ancestor; no seeding needed (RESOLVED 2026-06-29, gdn-tetepu MOOT, gdn-bekegu DONE).**
+  CC's trust is NOT per-path at decision time — it walks up to the nearest trusted ANCESTOR
+  directory. Verified empirically (3 spawns): a fresh git folder under `~/repos/spm1001`
+  spawned `--remote-control` with NO trust prompt *even though its own*
+  `hasTrustDialogAccepted` *was false*; a control folder under untrusted `~` DID prompt and
+  block (same code, only location changed). `~/repos` is trusted, the live
+  `SCAN_ROOT=/home/modha/repos`, and `resolveFolder` only launches folders UNDER SCAN_ROOT —
+  so every gueridon launch inherits trust. **NO per-folder seeding, NO `~/.claude.json` write
+  — the earlier "shared-file atomic-write hazard" is GONE. DO NOT rebuild per-folder trust
+  seeding; the cascade covers it.** The only precondition is "`~/repos` is trusted", handled
+  as a machine-setup/rebuild step (infra runbook + `docs/deploy-guide.md` when Future B ships),
+  deliberately NOT gueridon's job — keeps the launcher out of CC's shared config (option A).
+  *Method note:* a claude-code-guide agent claimed "no subtree trust" (citing a glob-pattern
+  feature request, #23109); the empirical spawn test contradicted it — for behaviour, test > docs agent.
 - **Initial-prompt injection — CONFIRMED (2026-06-29, gdn-lohupa).**
   `claude --remote-control <name> "<prompt>"` runs the prompt autonomously AND stays
   remote-control-attachable (spiked: it executed the prompt, printed the result, and
