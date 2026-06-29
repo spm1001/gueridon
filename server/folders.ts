@@ -1,8 +1,12 @@
 import { readdir, stat, readFile, writeFile, access, open as fsOpen } from "node:fs/promises";
 import { join, basename, dirname } from "node:path";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { ActiveSessionInfo } from "./bridge-logic.js";
 import { emit, errorDetail } from "./event-bus.js";
+
+const execFileP = promisify(execFile);
 
 // --- Shared tail-read utility ---
 
@@ -445,16 +449,11 @@ async function classifyDir(dirPath: string): Promise<"project" | "container"> {
 }
 
 /**
- * Scan SCAN_ROOT for directories and enrich each with session state.
- * Supports two-level hierarchy: direct project folders (have .git) and
- * container directories whose children are project folders (e.g. batterie/).
- *
- * @param activeSessions - Map of folder path → session info for currently
- *   running CC processes (from the bridge's runtime state).
+ * Enumerate launchable repos under SCAN_ROOT: direct project folders (have .git)
+ * plus one level into container dirs (e.g. spm1001/, itv/). Shared by scanFolders
+ * (session-decorated) and listRepos (lean) so the membership logic lives once.
  */
-export async function scanFolders(
-  activeSessions: Map<string, ActiveSessionInfo>,
-): Promise<FolderInfo[]> {
+export async function collectRepoCandidates(): Promise<{ name: string; fullPath: string }[]> {
   let entries: string[];
   try {
     entries = await readdir(SCAN_ROOT);
@@ -462,11 +461,8 @@ export async function scanFolders(
     emit({ type: "folders:scan-error", scanRoot: SCAN_ROOT, error: errorDetail(err) });
     return [];
   }
-
-  // Build flat list of { name, fullPath } candidates, expanding containers.
   const visible = entries.filter((name) => !name.startsWith("."));
   const candidates: { name: string; fullPath: string }[] = [];
-
   await Promise.allSettled(
     visible.map(async (name) => {
       const fullPath = join(SCAN_ROOT, name);
@@ -476,7 +472,6 @@ export async function scanFolders(
       } catch {
         return;
       }
-
       const kind = await classifyDir(fullPath);
       if (kind === "project") {
         candidates.push({ name, fullPath });
@@ -496,9 +491,58 @@ export async function scanFolders(
           }
         } catch { /* skip unreadable containers */ }
       }
-      // kind === "skip" — no .git, no subdirectories → ignore
     }),
   );
+  return candidates;
+}
+
+export interface RepoInfo {
+  name: string;            // "spm1001/gueridon"
+  path: string;            // absolute path
+  lastCommit: number | null; // unix seconds of last git commit (repo recency)
+}
+
+/**
+ * Lean launcher listing (gdn-todidu): repos under SCAN_ROOT, ordered by LAST GIT
+ * COMMIT time — repo recency, not session mtime (Sameer #4, 2026-06-29). Deliberately
+ * skips all the session/handoff/exit-marker enrichment scanFolders does: faster, and
+ * subagent sessions never surface because we never read sessions (Sameer #1). Falls
+ * back to dir mtime when a repo has no commits.
+ */
+export async function listRepos(): Promise<RepoInfo[]> {
+  const candidates = await collectRepoCandidates();
+  const repos = await Promise.all(
+    candidates.map(async ({ name, fullPath }): Promise<RepoInfo> => {
+      let lastCommit: number | null = null;
+      try {
+        const { stdout } = await execFileP(
+          "git", ["-C", fullPath, "log", "-1", "--format=%ct"], { timeout: 4000 },
+        );
+        const ts = parseInt(stdout.trim(), 10);
+        if (!Number.isNaN(ts)) lastCommit = ts;
+      } catch {
+        try { lastCommit = Math.floor((await stat(fullPath)).mtimeMs / 1000); } catch { /* null */ }
+      }
+      return { name, path: fullPath, lastCommit };
+    }),
+  );
+  repos.sort((a, b) => (b.lastCommit ?? 0) - (a.lastCommit ?? 0));
+  return repos;
+}
+
+/**
+ * Scan SCAN_ROOT for directories and enrich each with session state.
+ * Supports two-level hierarchy: direct project folders (have .git) and
+ * container directories whose children are project folders (e.g. batterie/).
+ *
+ * @param activeSessions - Map of folder path → session info for currently
+ *   running CC processes (from the bridge's runtime state).
+ */
+export async function scanFolders(
+  activeSessions: Map<string, ActiveSessionInfo>,
+): Promise<FolderInfo[]> {
+  // Membership logic shared with listRepos (collectRepoCandidates).
+  const candidates = await collectRepoCandidates();
 
   // Process all folders concurrently (gdn-fisimu). Each folder's stat,
   // session lookup, handoff, and exit marker checks run in parallel.

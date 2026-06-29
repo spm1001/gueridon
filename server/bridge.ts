@@ -55,6 +55,7 @@ import {
 
 import {
   scanFolders,
+  listRepos,
   getLatestSession,
   getLatestHandoff,
   hasExitMarker,
@@ -175,6 +176,7 @@ interface RCSession {
 export const rcSessions = new Map<string, RCSession>();   // keyed by folder path
 const RC_BUFFER_CAP = 64 * 1024;                   // keep the last 64 KB of pty output
 const RC_URL_TIMEOUT_MS = 15_000;                  // claude.ai URL prints ~8s after init (gdn-senila)
+const RC_EXIT_GRACE_MS = 8_000;                    // after /exit, force-kill if it hasn't died (gdn-rilope)
 
 // -- State --
 
@@ -442,14 +444,20 @@ function spawnCC(session: Session): void {
  * buffer output. Idempotent per folder: returns the existing live session if one
  * is already running.
  */
-export function spawnRemoteControl(folderPath: string): RCSession {
+export function spawnRemoteControl(folderPath: string, initialPrompt?: string): RCSession {
   const existing = rcSessions.get(folderPath);
   if (existing) return existing;
 
   const folderName = deriveFolderName(folderPath);
 
+  // Optional initial prompt runs autonomously while staying RC-attachable (gdn-lohupa).
+  // The launcher passes "/open" so a launched session arrives oriented (gdn-cumado,
+  // verified 2026-06-29: a slash-command as the first message fires the skill).
+  const args = ["--remote-control", folderName];
+  if (initialPrompt) args.push(initialPrompt);
+
   // Env strip (Vertex → Teams) lives in bridge-logic for unit-testability.
-  const p = ptySpawn("claude", ["--remote-control", folderName], {
+  const p = ptySpawn("claude", args, {
     name: "xterm-color",
     cols: 120,
     rows: 40,
@@ -1136,7 +1144,8 @@ async function autoResumeOnStartup(prior: PriorSessionInfo): Promise<void> {
  */
 export async function handleLaunch(folderPath: string, res: ServerResponse): Promise<void> {
   const existing = rcSessions.get(folderPath);
-  const rc = existing ?? spawnRemoteControl(folderPath);
+  // Auto-/open so the launched session orients itself (gdn-cumado).
+  const rc = existing ?? spawnRemoteControl(folderPath, "/open");
   const url = await waitForRcUrl(rc, RC_URL_TIMEOUT_MS);
   if (!url) emit({ type: "rc:url-timeout", folder: rc.folderName, pid: rc.pid });
   res.writeHead(200, { "Content-Type": "application/json" }).end(
@@ -1147,6 +1156,37 @@ export async function handleLaunch(folderPath: string, res: ServerResponse): Pro
       url,
     }),
   );
+}
+
+/**
+ * Cleanly end a running RC session with SIGTERM (gdn-rilope). `claude` registers a
+ * `process.on("SIGTERM")` GracefulShutdown handler that flushes the session JSONL, prints
+ * the `claude --resume <id>` line, and exits — the same clean outcome as typing `/exit`,
+ * but delivered OUT OF BAND, so it works regardless of TUI state (verified 2026-06-29).
+ * This is why we don't type `/exit` into the pty: that needs the prompt to be idle and can
+ * be swallowed by an in-progress turn or an AskUser menu. The native claude.ai apps can't
+ * end a session cleanly; gueridon holds the process, so it can. Fallback: if it's still
+ * alive after a grace window — pty.kill()'s DEFAULT is SIGHUP, which claude SURVIVES
+ * (gdn-mupito) — force a SIGKILL. We pass SIGTERM/SIGKILL explicitly, never the default.
+ */
+export function handleRcExit(folderPath: string, res: ServerResponse): void {
+  const rc = rcSessions.get(folderPath);
+  if (!rc) {
+    res.writeHead(404, { "Content-Type": "application/json" })
+      .end(JSON.stringify({ error: "No running session for this folder" }));
+    return;
+  }
+  try { rc.pty.kill("SIGTERM"); } catch { /* already gone */ }
+  emit({ type: "rc:exit-requested", folder: rc.folderName, pid: rc.pid });
+  const t = setTimeout(() => {
+    if (rcSessions.get(folderPath) === rc) {
+      try { rc.pty.kill("SIGKILL"); } catch { /* already gone */ }
+      emit({ type: "rc:exit-forced", folder: rc.folderName, pid: rc.pid });
+    }
+  }, RC_EXIT_GRACE_MS);
+  t.unref?.();
+  res.writeHead(200, { "Content-Type": "application/json" })
+    .end(JSON.stringify({ exiting: true, folder: rc.folderName }));
 }
 
 async function handleSession(
@@ -1558,6 +1598,31 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // GET /repos — lean launcher listing (gdn-todidu): repos by git recency, no session data.
+  if (req.method === "GET" && url.pathname === "/repos") {
+    const repos = await listRepos();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ repos }));
+    return;
+  }
+
+  // GET /rc — live RC sessions for the launcher's RUNNING list (gdn-rilope). Gated.
+  if (req.method === "GET" && url.pathname === "/rc") {
+    if (process.env.GUERIDON_ENABLE_RC !== "1") {
+      res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
+      return;
+    }
+    const running = [...rcSessions.values()].map((rc) => ({
+      folder: rc.folderName,
+      url: rc.url,
+      pid: rc.pid,
+      spawnedAt: rc.spawnedAt,
+    }));
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ sessions: running }));
+    return;
+  }
+
   // POST /folders — create a new project folder
   if (req.method === "POST" && url.pathname === "/folders") {
     const CT = { "Content-Type": "application/json" };
@@ -1792,6 +1857,26 @@ const server = createServer((req, res) => {
       await handleLaunch(folderPath, res);
     } catch (err) {
       emit({ type: "request:error", action: "launch", error: errorDetail(err) });
+      if (!res.headersSent) res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
+    }
+    return;
+  }
+
+  // DELETE /launch/:folder — clean /exit of a running RC session via its pty (gdn-rilope). Gated.
+  if (req.method === "DELETE" && launchMatch) {
+    if (process.env.GUERIDON_ENABLE_RC !== "1") {
+      res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
+      return;
+    }
+    const folderPath = resolveFolder(decodeURIComponent(launchMatch[1]));
+    if (!folderPath) {
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid folder" }));
+      return;
+    }
+    try {
+      handleRcExit(folderPath, res);
+    } catch (err) {
+      emit({ type: "request:error", action: "rc-exit", error: errorDetail(err) });
       if (!res.headersSent) res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
     }
     return;

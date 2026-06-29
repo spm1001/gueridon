@@ -42,6 +42,11 @@ export const STATIC_FILES: Record<string, { file: string; mime: string }> = {
   "/mockup": { file: "mockup.html", mime: "text/html; charset=utf-8" },
   "/css-shell": { file: "css-shell.html", mime: "text/html; charset=utf-8" },
   "/css-empty": { file: "css-empty.html", mime: "text/html; charset=utf-8" },
+  // Future B launcher (gdn-todidu) — fresh page, served at both paths. GET only;
+  // distinct from the POST /launch/:folder action route (different method + the route
+  // regex requires a trailing /<folder>, which bare /launch doesn't match).
+  "/launch": { file: "launch.html", mime: "text/html; charset=utf-8" },
+  "/launch.html": { file: "launch.html", mime: "text/html; charset=utf-8" },
   "/render-utils.js": { file: "client/render-utils.cjs", mime: "application/javascript" },
   "/render-chips.js": { file: "client/render-chips.cjs", mime: "application/javascript" },
   "/render-messages.js": { file: "client/render-messages.cjs", mime: "application/javascript" },
