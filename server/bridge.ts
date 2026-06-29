@@ -62,6 +62,8 @@ import {
   writeExitMarker,
   getSessionJSONLPath,
   tailRead,
+  hasBonContext,
+  isRcSessionReady,
   SCAN_ROOT,
 } from "./folders.js";
 
@@ -172,6 +174,9 @@ interface RCSession {
   buffer: string;
   /** claude.ai/code URL once extracted (gdn-senila); null until then. */
   url: string | null;
+  /** True if spawned with an initial prompt (e.g. /open) whose first turn must finish
+   *  before the session is "ready" for the user (gdn-cumado). False = ready immediately. */
+  autoPrompted: boolean;
 }
 export const rcSessions = new Map<string, RCSession>();   // keyed by folder path
 const RC_BUFFER_CAP = 64 * 1024;                   // keep the last 64 KB of pty output
@@ -473,6 +478,7 @@ export function spawnRemoteControl(folderPath: string, initialPrompt?: string): 
     spawnedAt: Date.now(),
     buffer: "",
     url: null,
+    autoPrompted: !!initialPrompt,
   };
 
   p.onData((data) => {
@@ -1144,8 +1150,12 @@ async function autoResumeOnStartup(prior: PriorSessionInfo): Promise<void> {
  */
 export async function handleLaunch(folderPath: string, res: ServerResponse): Promise<void> {
   const existing = rcSessions.get(folderPath);
-  // Auto-/open so the launched session orients itself (gdn-cumado).
-  const rc = existing ?? spawnRemoteControl(folderPath, "/open");
+  // Auto-/open so the launched session orients itself (gdn-cumado) — but ONLY where there's
+  // bon/handoff context to read; a context-less repo makes /open flail endlessly (spike:
+  // empty repo ran 14 tool calls, never finished). Bare-spawn folders are ready immediately.
+  const rc =
+    existing ??
+    spawnRemoteControl(folderPath, (await hasBonContext(folderPath)) ? "/open" : undefined);
   const url = await waitForRcUrl(rc, RC_URL_TIMEOUT_MS);
   if (!url) emit({ type: "rc:url-timeout", folder: rc.folderName, pid: rc.pid });
   res.writeHead(200, { "Content-Type": "application/json" }).end(
@@ -1154,6 +1164,8 @@ export async function handleLaunch(folderPath: string, res: ServerResponse): Pro
       pid: rc.pid,
       folder: rc.folderName,
       url,
+      autoOpened: rc.autoPrompted,
+      ready: rc.autoPrompted ? await isRcSessionReady(rc.folder, rc.spawnedAt) : true,
     }),
   );
 }
@@ -1612,12 +1624,17 @@ const server = createServer((req, res) => {
       res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
       return;
     }
-    const running = [...rcSessions.values()].map((rc) => ({
-      folder: rc.folderName,
-      url: rc.url,
-      pid: rc.pid,
-      spawnedAt: rc.spawnedAt,
-    }));
+    const running = await Promise.all(
+      [...rcSessions.values()].map(async (rc) => ({
+        folder: rc.folderName,
+        url: rc.url,
+        pid: rc.pid,
+        spawnedAt: rc.spawnedAt,
+        // Auto-/open'd sessions are "ready" once their orienting turn completes; bare
+        // spawns are ready immediately (gdn-cumado). Drives the launcher's spinner.
+        ready: rc.autoPrompted ? await isRcSessionReady(rc.folder, rc.spawnedAt) : true,
+      })),
+    );
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions: running }));
     return;

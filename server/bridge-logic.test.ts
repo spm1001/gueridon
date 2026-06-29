@@ -18,6 +18,7 @@ import {
   classifyRestart,
   buildResumeInjection,
   extractLastToolCall,
+  isSessionReadyFromTail,
   formatToolCallSummary,
   shouldSendEvent,
   HANDOFF_STALE_THRESHOLD_MS,
@@ -1639,6 +1640,79 @@ describe("extractLastToolCall", () => {
         input: { file_id: "https://example.com" } },
     ]);
     expect(extractLastToolCall(content)?.name).toBe("mcp__mise__fetch");
+  });
+});
+
+// --- isSessionReadyFromTail (gdn-cumado) ---
+
+describe("isSessionReadyFromTail", () => {
+  function asst(opts: { stop_reason?: string | null; content?: unknown[]; parent?: string | null }): string {
+    return JSON.stringify({
+      type: "assistant",
+      parent_tool_use_id: opts.parent ?? null,
+      message: {
+        id: "msg",
+        role: "assistant",
+        stop_reason: opts.stop_reason ?? null,
+        content: opts.content ?? [{ type: "text", text: "hi" }],
+      },
+    });
+  }
+  const userLine = (txt: string) =>
+    JSON.stringify({ type: "user", message: { role: "user", content: txt } });
+
+  it("ready when the last main-thread assistant is end_turn", () => {
+    expect(isSessionReadyFromTail(asst({ stop_reason: "end_turn" }))).toBe(true);
+  });
+
+  it("not ready when the last main-thread assistant is mid-turn (tool_use)", () => {
+    const line = asst({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "Bash", input: {} }] });
+    expect(isSessionReadyFromTail(line)).toBe(false);
+  });
+
+  it("ready when the turn is parked on an AskUserQuestion", () => {
+    const line = asst({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "AskUserQuestion", input: {} }] });
+    expect(isSessionReadyFromTail(line)).toBe(true);
+  });
+
+  it("not ready while the last assistant is still streaming (null stop_reason)", () => {
+    expect(isSessionReadyFromTail(asst({ stop_reason: null }))).toBe(false);
+  });
+
+  it("ready on any other terminal stop_reason (e.g. max_tokens)", () => {
+    expect(isSessionReadyFromTail(asst({ stop_reason: "max_tokens" }))).toBe(true);
+  });
+
+  it("ignores a finished SUBAGENT turn while the parent is still dispatching it", () => {
+    // Chronology: parent dispatches a Task (tool_use), then the subagent finishes (end_turn,
+    // parent_tool_use_id set). Reading the literal last assistant would falsely signal ready.
+    const content = [
+      asst({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "Task", input: {} }] }),
+      asst({ stop_reason: "end_turn", parent: "toolu_agent_1" }),
+    ].join("\n");
+    expect(isSessionReadyFromTail(content)).toBe(false);
+  });
+
+  it("uses the LAST main-thread assistant, not an earlier completed turn", () => {
+    const content = [
+      asst({ stop_reason: "end_turn" }),   // earlier turn — done
+      userLine("do more"),                 // user drove it again
+      asst({ stop_reason: "tool_use", content: [{ type: "tool_use", name: "Bash", input: {} }] }),
+    ].join("\n");
+    expect(isSessionReadyFromTail(content)).toBe(false);
+  });
+
+  it("returns false for empty content", () => {
+    expect(isSessionReadyFromTail("")).toBe(false);
+  });
+
+  it("returns false when there are no assistant messages", () => {
+    expect(isSessionReadyFromTail(userLine("hello"))).toBe(false);
+  });
+
+  it("tolerates a corrupted partial first line from a mid-line seek", () => {
+    const content = ['{"type":"assist…truncated', asst({ stop_reason: "end_turn" })].join("\n");
+    expect(isSessionReadyFromTail(content)).toBe(true);
   });
 });
 

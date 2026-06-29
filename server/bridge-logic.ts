@@ -764,6 +764,50 @@ export function extractLastToolCall(jsonlContent: string): LastToolCall | null {
 }
 
 /**
+ * Is a launched session done orienting / ready for the user? (gdn-cumado)
+ *
+ * Ready = the latest MAIN-THREAD assistant message has concluded its turn. We ignore
+ * subagent messages (`parent_tool_use_id` non-null) so a finished subagent can't
+ * falsely signal ready while the parent is still mid-turn dispatching it. For the last
+ * main-thread assistant message:
+ *   - stop_reason "tool_use"  → mid-turn (still calling tools) UNLESS the block is an
+ *     AskUserQuestion, which means the turn is parked awaiting the user → ready.
+ *   - any other non-null stop_reason (end_turn, max_tokens, …) → turn concluded → ready.
+ *   - null/absent stop_reason → still streaming → not ready.
+ *
+ * Pure function — caller provides the JSONL tail (via tailRead). Returns false if no
+ * main-thread assistant message is in the tail (session still starting); the launcher's
+ * timeout fallback bounds the wait since /open latency is unbounded (gdn-cumado spike).
+ */
+export function isSessionReadyFromTail(jsonlContent: string): boolean {
+  const lines = jsonlContent.trimEnd().split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue; // partial first line from a mid-line seek, or non-JSON
+    }
+    if (parsed.type !== "assistant" || !parsed.message) continue;
+    if (parsed.parent_tool_use_id != null) continue; // subagent turn — not the main thread
+    const sr = parsed.message.stop_reason;
+    if (sr === "tool_use") {
+      return (
+        Array.isArray(parsed.message.content) &&
+        parsed.message.content.some(
+          (b: { type?: string; name?: string }) =>
+            b.type === "tool_use" && b.name === "AskUserQuestion",
+        )
+      );
+    }
+    return sr != null; // concluded → ready; null/streaming → not ready
+  }
+  return false;
+}
+
+/**
  * Format a tool call into a human-readable one-liner for the resume injection.
  * Returns "ToolName: summary" truncated to TOOL_SUMMARY_MAX_CHARS.
  */

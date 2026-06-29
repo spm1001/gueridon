@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ActiveSessionInfo } from "./bridge-logic.js";
+import { isSessionReadyFromTail } from "./bridge-logic.js";
 import { emit, errorDetail } from "./event-bus.js";
 
 const execFileP = promisify(execFile);
@@ -163,6 +164,66 @@ export async function getLatestSession(
   // Extract UUID from filename: "abc-123.jsonl" → "abc-123"
   const id = basename(latest.name, ".jsonl");
   return { id, lastActive: latest.mtime };
+}
+
+// --- RC launch readiness (gdn-cumado) ---
+
+/**
+ * Does this folder have bon/handoff context worth auto-orienting to?
+ * Auto-/open only makes sense where /open has something to read — a context-less repo
+ * makes /open flail endlessly (gdn-cumado spike: an empty repo ran 14 tool calls and
+ * never finished). The `.bon/` directory is the signal.
+ */
+export async function hasBonContext(folderPath: string): Promise<boolean> {
+  try {
+    await access(join(folderPath, ".bon"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Is a freshly launched RC session done orienting (ready for the user)? (gdn-cumado)
+ *
+ * Finds the JSONL the RC spawn created — the newest `*.jsonl` whose mtime is at/after
+ * `spawnedAt` (minus a small clock skew) so a stale prior session in the same folder
+ * can't read as ready — tails it, and asks isSessionReadyFromTail. Returns false if no
+ * fresh JSONL exists yet (the session is still starting); the launcher's timeout fallback
+ * bounds the wait, since /open latency is unbounded.
+ */
+export async function isRcSessionReady(
+  folderPath: string,
+  spawnedAt: number,
+): Promise<boolean> {
+  const dir = join(CC_PROJECTS_DIR, encodePath(folderPath));
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return false; // project dir not created yet
+  }
+
+  const SKEW_MS = 2000; // spawnedAt is the bridge clock; mtime is the same-host fs clock
+  let newest: { path: string; mtime: number } | null = null;
+  for (const f of entries) {
+    if (!f.endsWith(".jsonl")) continue;
+    try {
+      const p = join(dir, f);
+      const s = await stat(p);
+      if (!s.isFile()) continue;
+      const m = s.mtime.getTime();
+      if (m < spawnedAt - SKEW_MS) continue; // predates this spawn — not our session
+      if (!newest || m > newest.mtime) newest = { path: p, mtime: m };
+    } catch {
+      continue;
+    }
+  }
+  if (!newest) return false;
+
+  const tail = await tailRead(newest.path, 16384);
+  if (!tail) return false;
+  return isSessionReadyFromTail(tail);
 }
 
 // --- Per-folder session list ---

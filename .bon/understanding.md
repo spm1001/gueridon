@@ -164,8 +164,12 @@ is the driving surface; native-attach is gated on Anthropic shipping an entitled
 **Open launcher follow-ups:** `gdn-cumado` (conditional-`/open` + readiness spinner, spike done),
 `gdn-fuzeba` (share-sheet → RC path), `gdn-towiva` (tests for the launcher endpoints — verified
 live-only so far), `gdn-nagepa` (launcher launches triple-notify; gate the push), `gdn-mupito`
-(idle reaping — now LIVE-relevant: the launcher makes lingering sessions easy; `infra` is
-idle-burning Teams quota as of this writing). Everything below is the original plan framing.
+(idle reaping — **process hygiene, NOT a quota-saver**. The 2026-06-29 "infra is idle-burning
+Teams quota" claim was WRONG and is retracted: an idle session burns ZERO tokens — cost tracks
+*turns* only, there is no passive bleed. Verified 2026-06-29: an "idle" launched session sits at
+flat CPU and a static JSONL; its quota cost is just the one-time `/open` turn plus whatever
+driving the user actually does. The real (weaker) case for reaping is orphan PIDs + ~440MB RSS
+per forgotten session). Everything below is the original plan framing.
 
 Shape: replace the `claude -p` + hand-rolled streaming UI with `claude
 --remote-control` spawns whose `claude.ai/code` URL is pushed to the phone —

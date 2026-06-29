@@ -7,9 +7,11 @@
   about index.html / the SSE+render layer (Sameer: "my worry about porting is we bring over
   too much"). Two stacked lists, no streaming:
 
-    RUNNING  — live RC sessions (GET /rc). Open = reopen the claude.ai URL; End = clean /exit
-               (DELETE /launch/:folder writes "/exit" into the session's pty — NOT a kill).
-               This is the moat the native apps lack: they can't /exit a session well.
+    RUNNING  — live RC sessions (GET /rc). Open = reopen the claude.ai URL; End = clean exit
+               (DELETE /launch/:folder SIGTERMs the session — claude's GracefulShutdown fires
+               SessionEnd hooks, flushes the JSONL, stays resumable; NOT a hard kill). A row
+               shows "orienting…" until its auto-/open turn completes (the `ready` flag).
+               This is the moat the native apps lack: they can't end a session cleanly.
     REPOS    — every launchable repo (GET /repos), name-searchable, ordered by last git commit
                (repo recency, not session mtime). Tap → flat Launch button → POST /launch.
 
@@ -62,10 +64,13 @@
     padding: 0.55rem 1.1rem;
   }
   .run-row .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .run-row .dot.orienting { background: var(--text-dim); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
   .run-row .run-name {
     flex: 1 1 auto; min-width: 0; font-weight: 600;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .run-row .run-status { flex: 0 0 auto; font-size: 0.75rem; color: var(--text-dim); }
   .mini {
     flex: 0 0 auto; font-size: 0.82rem; text-decoration: none;
     border: 1px solid var(--border); border-radius: 8px;
@@ -158,21 +163,34 @@
   }
 
   // ---- RUNNING list (live RC sessions) ----
+  // Returns: null = fetch failed (UI left untouched, callers should keep polling),
+  // [] = no sessions, or the sessions array. Each session carries `ready` (gdn-cumado):
+  // false while its auto-/open turn is still running → shown as a pulsing "orienting…" row.
   async function loadRunning() {
-    let sessions = [];
+    let sessions = null;
     try {
       const r = await fetch("/rc");
       if (r.ok) sessions = (await r.json()).sessions || [];
-    } catch (e) { /* RC off or unreachable — hide the section */ }
-    if (!sessions.length) { $running.hidden = true; $runningList.innerHTML = ""; return; }
+    } catch (e) { /* RC off or unreachable */ }
+    if (sessions === null) return null; // leave current UI in place, don't flicker
+    if (!sessions.length) { $running.hidden = true; $runningList.innerHTML = ""; return sessions; }
     $running.hidden = false;
     $runningLabel.textContent = "Running (" + sessions.length + ")";
     $runningList.innerHTML = "";
     for (const s of sessions) {
       const row = document.createElement("div");
       row.className = "run-row";
-      row.innerHTML = '<span class="dot"></span><span class="run-name"></span>';
-      row.querySelector(".run-name").textContent = s.folder;
+      const dot = document.createElement("span");
+      dot.className = s.ready ? "dot" : "dot orienting";
+      row.appendChild(dot);
+      const name = document.createElement("span");
+      name.className = "run-name"; name.textContent = s.folder;
+      row.appendChild(name);
+      if (!s.ready) {
+        const st = document.createElement("span");
+        st.className = "run-status"; st.textContent = "orienting…";
+        row.appendChild(st);
+      }
       if (s.url) {
         const open = document.createElement("a");
         open.className = "mini"; open.textContent = "Open"; open.href = s.url; open.rel = "noopener";
@@ -184,6 +202,7 @@
       row.appendChild(end);
       $runningList.appendChild(row);
     }
+    return sessions;
   }
 
   async function endSession(folder, btn) {
@@ -258,12 +277,18 @@
       const data = await r.json();
       loadRunning(); // the new session now appears in RUNNING (with Open + End)
       if (data && data.url) {
-        // Real <a href>: the tap navigates to claude.ai/code (web driving surface).
-        $launch.className = "launch";
-        $launch.textContent = "Open " + folder + " in Claude →";
-        $launch.onclick = null;
-        $launch.setAttribute("href", data.url);
-        setNote("Session ready — tap to open. Manage it under Running.");
+        if (data.autoOpened && !data.ready) {
+          // /open is running — spin until the session reports ready (with a timeout,
+          // since /open latency is unbounded: a good run is ~1m45s, gdn-cumado).
+          $launch.className = "launch busy";
+          $launch.onclick = null;
+          $launch.removeAttribute("href");
+          $launch.textContent = "Orienting " + folder + "…";
+          setNote("Running /open so the session arrives oriented…");
+          pollReady(folder, data.url);
+        } else {
+          presentOpen(folder, data.url, false);
+        }
       } else {
         resetButton();
         setNote("Session started; link not ready yet — it’ll be pushed to your phone, or see Running.", true);
@@ -272,6 +297,41 @@
       resetButton();
       setNote("Launch failed — is the bridge up?", true);
     }
+  }
+
+  // Flip the launch button into a real <a href>: the tap navigates to claude.ai/code
+  // (the web driving surface). tookAWhile = orientation hit the timeout, open anyway.
+  function presentOpen(folder, url, tookAWhile) {
+    $launch.className = "launch";
+    $launch.textContent = "Open " + folder + " in Claude →";
+    $launch.onclick = null;
+    $launch.setAttribute("href", url);
+    setNote(
+      tookAWhile
+        ? "Still orienting — open anyway, /open will catch up."
+        : "Oriented & ready — tap to open. Manage it under Running.",
+      tookAWhile,
+    );
+  }
+
+  // Poll /rc until this folder's session reports ready (or it ends, or we time out).
+  // Reuses loadRunning() so the RUNNING list stays live and we make one fetch per tick.
+  function pollReady(folder, url) {
+    const startedAt = Date.now();
+    const TIMEOUT_MS = 240000; // bound the wait; /open latency is unbounded (gdn-cumado)
+    const iv = setInterval(async () => {
+      const sessions = await loadRunning();
+      if (sessions === null) return; // transient fetch error — keep polling, don't reset
+      const s = sessions.find((x) => x.folder === folder);
+      if (!s) {
+        clearInterval(iv); resetButton();
+        setNote("Session ended before it finished orienting.", true);
+      } else if (s.ready) {
+        clearInterval(iv); presentOpen(folder, url, false);
+      } else if (Date.now() - startedAt > TIMEOUT_MS) {
+        clearInterval(iv); presentOpen(folder, url, true);
+      }
+    }, 2500);
   }
 
   $filter.addEventListener("input", renderRepos);
