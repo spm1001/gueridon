@@ -1,10 +1,106 @@
 # Gueridon — Understanding
 
-## Portfolio status (2026-06-09 audit)
+## What this is
 
-Parked-but-useful per Sameer; deployed and healthy on hezza (systemd service +
-5-min health-check cron). Open items: gdn-cabicu (permission-denied surfacing),
-gdn-howibu (mockup snapshots, child fadeti), gdn-muluwo (askuser context -
-standalone after parent wobaku closed with criteria met). Note: muluwo was
-briefly invisible in bon list due to the orphan bug filed as bon-kegewe in the
-bon repo. Backlog grooming deferred to the batterie reshape (bds-hifusu).
+Mobile web UI for Claude Code: phone → Node bridge (SSE+POST) → `claude -p`
+stream-json, one CC process per folder. Born 2026-02-08 in a 278-commit
+February sprint (lineage: claude-go → tmux scraping rejected → `claude -p`),
+matured through March, parked healthy since April. The bridge protocol is
+deliberately client-agnostic — no client-type negotiation, rendering is the
+client's problem (see docs/kube-brain-mac-body.md).
+
+## Portfolio status (2026-06-29 audit)
+
+Parked-but-useful per Sameer; deployed and healthy on hezza (systemd service,
+6+ days uptime, NRestarts=0, ~4 warn-lines in 6 days). The kube-era Tailscale
+actions (popucu, kikowe) were closed in the 2026-06-17 review. Open items:
+gdn-cabicu (permission-denied surfacing) + gdn-vigifo (its UI card, blocked on
+CC #20264 subagent-permission propagation), gdn-howibu (mockup snapshots, child
+fadeti), gdn-muluwo (askuser context, standalone), gdn-jevico (bridge restart
+vs other sessions' subagents), gdn-gafode (iOS Shortcut), gdn-rosara (Vertex
+contamination — see Substrate watch). **Filed 2026-06-29 from the audit:**
+gdn-kuciku (ask_user event missing folder key → cross-session leak), gdn-mupito
+(idle clientless sessions never reaped without a restart — the root cause of
+the 3.7-day vivid-vale orphan, since reaped via /exit), gdn-hodoco (live gauge
+still cold-starts 200k for [1m] models — half of the 06-11 gauge fix),
+gdn-higido (refresh CLAUDE.md), gdn-hocede (the /rc strategic spike).
+
+**AskUserQuestion crash fixed 2026-06-29.** The overlay crashed on mobile
+(`questions.forEach is not a function`) when the model emitted the tool input
+with a non-array `questions`; `state-builder.ts`'s `args.questions || []` only
+caught falsy. Guarded with `Array.isArray` at both the source
+(`state-builder.ts:528`) and the render site (`render-overlays.cjs`), + the
+`q.options` non-array case; regression tests added. The **client** guard
+deployed hot (content-hash watcher, no restart — mary-bujournal was live); the
+**server** guard is on disk in `/opt` and takes effect on the next bridge
+restart.
+
+**Deploy gap (06-10) is CLOSED:** `/opt/gueridon` == dev at the latest code
+commit (b03c28f); only the un-deployed dev commit is a handoff `.md`. Deploying
+remains the three-step in CLAUDE.md; mind gdn-jevico (a restart kills any live
+bridge sessions). Note CLAUDE.md drift the audit found (→ gdn-higido): dev repo
+is `~/repos/spm1001/gueridon` (not `~/Repos/`); the unit sources a 2nd
+EnvironmentFile `/etc/claude-code/vertex.env` (Vertex ON — `CLAUDE_CODE_USE_VERTEX=1`,
+`CC_MODEL=opus[1m]`); "bridge sessions have zero MCP" is **false** — mise loads
+via the **batterie plugin's** `mcpServers` block while `settings.json` is still
+`{}`; live CC is v2.1.195 (doc says v2.1.89). `npm audit`'s 11 alerts are all
+dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime path.
+
+## Structural lessons (from session contributions)
+
+- **folderName is a routing contract, not a display label.** SSE events carry
+  it as a key and the client silently discards events whose folder field
+  doesn't match local state. Any code that assigns folderName must produce
+  exactly what scanFolders returns — the coupling is invisible in the type
+  system because both are plain strings. When scanFolders went hierarchical
+  ("batterie/gueridon"), session creation still used basename() and events
+  vanished. Regression gate: integration test creating a nested folder,
+  connecting a session, asserting the SSE event's folder field.
+
+- **KillMode=control-group makes shutdown a race.** systemd SIGTERMs every
+  process in the cgroup simultaneously — CC children may exit and fire their
+  exit handlers (clearing process/turnInProgress) before the bridge's own
+  shutdown handler runs. Anything you need to persist about child state must
+  be snapshotted as the *first line* of shutdown(), then passed to the persist
+  function — never read from the (racing) session objects. Applies to any
+  future "what was CC doing when we died" feature.
+
+## Substrate watch (2026-06-10 read, Fable first-look session)
+
+Gueridon hand-rolled, in February, what Anthropic's stack now provides natively
+piece by piece: the Agent SDK (typed stream events, session management, and
+`canUseTool` — the exact affordance gdn-cabicu/gdn-vigifo are blocked on),
+the `claude agents` roster/supervisor (daemonized bg sessions, respawn,
+survives disconnects — overlaps orphan.ts + sse-sessions.json + idle guards),
+and /rc remote control (mobile steering of existing sessions). What none of
+them do: *launch* — from a phone, point a full-freedom session at any folder,
+create folders, share-sheet into a fresh session, push-notify on completion.
+That launcher front-half is the moat; the process-plumbing back-half should be
+allowed to commoditize. Implication: prefer a substrate evaluation (SDK swap /
+roster integration, in the mold of cornichon's bon-nenagu flip) over building
+new features — especially permission features — on the hand-rolled stream-json
+layer. Cornichon is the architectural sibling (UI shell ↔ dumb pipe ↔
+folder-scoped agent host speaking NDJSON over stdio); its 10:1 deletion when
+the SDK ate the parsing layer is the precedent.
+
+**The /rc question, settled 2026-06-29 (claude-code-guide agent + the running
+`~/.claude/remote/srv` daemon).** `/rc` (Remote Control) is **attach-only, and
+only to *interactive TTY* sessions** — it explicitly cannot attach to a headless
+`claude -p` process (open feature requests, nothing shipped), and there is **no
+remote-LAUNCH capability anywhere** in Anthropic's stack. So the launcher
+front-half is *more* durable than "shrink to launcher" implies: `/rc` can't
+take a handoff from Guéridon's `claude -p` sessions at all. Two coherent futures,
+forked by gdn-hocede:
+- **A — stays the full mobile client (status quo).** Launches *and* drives,
+  because `/rc` can't pick up the headless session. Works today; cost is
+  maintaining the hand-rolled stream-json layer (already ~100 CC versions adrift).
+- **B — pivots to a true launcher that hands off to /rc.** Requires Guéridon to
+  spawn an *interactive* `claude` (pty/tmux), script `/rc` onto it, surface the
+  pairing to mobile. Preconditions: (1) the spawn must be **non-Vertex** —
+  Sameer's empirical "Vertex sessions can't be attached" (architecturally
+  plausible: Vertex=GCP creds, /rc relay=Anthropic account; not doc-confirmed),
+  which is exactly gdn-rosara's de-Vertex fix; (2) **unknown** — can `/rc` be
+  enabled non-interactively on a freshly-spawned session? gdn-hocede is the
+  ~30-min spike that resolves A-vs-B. De-Vertexing the spawns is worth doing on
+  its own merits (closes gdn-rosara's contamination vector) and is the
+  precondition for *any* Desktop-attach future.
