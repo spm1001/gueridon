@@ -95,6 +95,10 @@ export type BridgeEvent =
   // Content hash
   | { type: "content:changed"; contentHash: string }
 
+  // Remote control — Future B launcher (gdn-difoto)
+  | { type: "rc:spawn"; folder: string; pid: number }
+  | { type: "rc:exit"; folder: string; pid: number; exitCode: number }
+
   // Server lifecycle
   | { type: "server:start"; port: number; scanRoot: string }
   | { type: "server:shutdown"; signal: string }
@@ -157,6 +161,8 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "request:rejected": "warn",
   "request:error": "error",
   "content:changed": "info",
+  "rc:spawn": "info",
+  "rc:exit": "info",
   "server:start": "info",
   "server:shutdown": "info",
   "server:shutdown-complete": "info",

@@ -134,17 +134,46 @@ function buildBaseFlags(): string[] {
 }
 const CC_BASE_FLAGS = buildBaseFlags();
 
-// Vertex AI env vars to forward from bridge environment to CC spawn.
-// Set these in .env (loaded by systemd EnvironmentFile) to route CC
-// through VertexAI billing instead of Anthropic API directly.
+// The Vertex AI env var set (the vars set in /etc/claude-code/vertex.env that CC
+// consumes). Two complementary uses: a Vertex `-p` spawn inherits them (→ ITV billing);
+// a `claude --remote-control` spawn STRIPS them via buildRemoteControlEnv (→ Teams/
+// claude.ai billing, which the claude.ai relay attaches to — folds in gdn-rosara's
+// contamination guard). ANTHROPIC_MODEL is in the live vertex.env, so it belongs here.
 export const VERTEX_ENV_VARS = [
   "CLAUDE_CODE_USE_VERTEX",
   "CLOUD_ML_REGION",
   "ANTHROPIC_VERTEX_PROJECT_ID",
+  "ANTHROPIC_MODEL",
   "ANTHROPIC_DEFAULT_OPUS_MODEL",
   "ANTHROPIC_DEFAULT_SONNET_MODEL",
   "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 ];
+
+/**
+ * Build the environment for a `claude --remote-control` spawn (Future B, gdn-difoto).
+ *
+ * Strips CC-internal markers (so the child isn't treated as a nested CC invocation)
+ * and the full Vertex set (so the session comes up on Teams — the billing the claude.ai
+ * relay attaches to; this is gdn-rosara's contamination guard). Sets folder-pinning +
+ * survey suppression, but deliberately NOT CLAUDE_CODE_DISABLE_BACKGROUND_TASKS (RC has
+ * a real TTY) or CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC (Teams needs feature flags).
+ */
+export function buildRemoteControlEnv(
+  source: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(source)) {
+    if (v === undefined) continue;
+    if (k === "CLAUDECODE" || k === "CLAUDE_CODE_ENTRYPOINT") continue;
+    if (VERTEX_ENV_VARS.includes(k)) continue;
+    env[k] = v;
+  }
+  env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR = "1";
+  env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY = "1";
+  env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE = "1";
+  env.CLAUDE_CODE_HIDE_ACCOUNT_INFO = "1";
+  return env;
+}
 
 /** Build the --append-system-prompt value with machine context. */
 export function buildSystemPrompt(folder?: string): string {

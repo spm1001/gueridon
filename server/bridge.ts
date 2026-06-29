@@ -15,12 +15,15 @@ import { createInterface } from "node:readline";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
+import { spawn as ptySpawn, type IPty } from "node-pty";
+
 import {
   buildCCArgs,
+  buildRemoteControlEnv,
   KILL_ESCALATION_MS,
   CONFLATION_INTERVAL_MS,
   isUserTextEcho,
@@ -149,6 +152,26 @@ interface Session {
   /** Bytes saved by version-counter skip — counterfactual measurement. */
   turnSkippedBytes: number;
 }
+
+// -- Remote-control sessions (Future B, gdn-difoto) --
+// A claude.ai-attachable session spawned via `claude --remote-control`, driven
+// from claude.ai's native UI rather than the stream-json back-half. We run it in
+// a pty (it's an interactive TUI needing a controlling terminal) and read the pty
+// ONLY to buffer output for URL extraction (gdn-senila) and lifecycle — never to
+// render. Tracked in its own lightweight map, separate from the `-p` sessions.
+interface RCSession {
+  folder: string;          // absolute path (map key)
+  folderName: string;      // routing-key name (deriveFolderName)
+  pty: IPty;
+  pid: number;
+  spawnedAt: number;
+  /** Rolling tail of pty output, capped — source for URL/lifecycle extraction. */
+  buffer: string;
+  /** claude.ai/code URL once extracted (gdn-senila); null until then. */
+  url: string | null;
+}
+export const rcSessions = new Map<string, RCSession>();   // keyed by folder path
+const RC_BUFFER_CAP = 64 * 1024;                   // keep the last 64 KB of pty output
 
 // -- State --
 
@@ -404,6 +427,56 @@ function spawnCC(session: Session): void {
       killWithEscalation(session.process, { folder: session.folderName, reason: "init-timeout" });
     }
   }, INIT_TIMEOUT_MS);
+}
+
+/**
+ * Spawn a `claude --remote-control` session in a pty (Future B, gdn-difoto).
+ *
+ * Unlike spawnCC (stream-json over pipes), this is an interactive RC session the
+ * user drives from claude.ai. We strip the Vertex env so it comes up on Teams —
+ * the billing mode the claude.ai relay attaches to — and read the pty only to
+ * buffer output. Idempotent per folder: returns the existing live session if one
+ * is already running.
+ */
+export function spawnRemoteControl(folderPath: string): RCSession {
+  const existing = rcSessions.get(folderPath);
+  if (existing) return existing;
+
+  const folderName = deriveFolderName(folderPath);
+
+  // Env strip (Vertex → Teams) lives in bridge-logic for unit-testability.
+  const p = ptySpawn("claude", ["--remote-control", folderName], {
+    name: "xterm-color",
+    cols: 120,
+    rows: 40,
+    cwd: folderPath,
+    env: buildRemoteControlEnv(process.env),
+  });
+
+  const rc: RCSession = {
+    folder: folderPath,
+    folderName,
+    pty: p,
+    pid: p.pid,
+    spawnedAt: Date.now(),
+    buffer: "",
+    url: null,
+  };
+
+  p.onData((data) => {
+    rc.buffer += data;
+    if (rc.buffer.length > RC_BUFFER_CAP) rc.buffer = rc.buffer.slice(-RC_BUFFER_CAP);
+    // URL extraction + lifecycle parsing land in gdn-senila — here we only buffer.
+  });
+
+  p.onExit(({ exitCode }) => {
+    emit({ type: "rc:exit", folder: folderName, pid: rc.pid, exitCode });
+    rcSessions.delete(folderPath);
+  });
+
+  rcSessions.set(folderPath, rc);
+  emit({ type: "rc:spawn", folder: folderName, pid: rc.pid });
+  return rc;
 }
 
 function wireProcess(session: Session): void {
@@ -1018,6 +1091,23 @@ async function autoResumeOnStartup(prior: PriorSessionInfo): Promise<void> {
 }
 
 // -- Route handlers --
+
+/**
+ * POST /launch/:folder — spawn a claude.ai-attachable RC session (Future B, gdn-difoto).
+ * Idempotent per folder. Responds with the pid + folderName; URL delivery is gdn-senila.
+ */
+async function handleLaunch(folderPath: string, res: ServerResponse): Promise<void> {
+  const existing = rcSessions.get(folderPath);
+  const rc = existing ?? spawnRemoteControl(folderPath);
+  res.writeHead(200, { "Content-Type": "application/json" }).end(
+    JSON.stringify({
+      status: existing ? "already-running" : "launched",
+      pid: rc.pid,
+      folder: rc.folderName,
+      url: rc.url,
+    }),
+  );
+}
 
 async function handleSession(
   folderPath: string,
@@ -1643,6 +1733,30 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // POST /launch/:folder — Future B: spawn a claude.ai-attachable RC session (gdn-difoto).
+  // Gated by GUERIDON_ENABLE_RC=1 so the path is inert in production until it proves out.
+  const launchMatch = url.pathname.match(/^\/launch\/(.+)$/);
+  if (req.method === "POST" && launchMatch) {
+    if (process.env.GUERIDON_ENABLE_RC !== "1") {
+      emit({ type: "request:rejected", reason: "rc-launch-disabled", method: "POST", url: url.pathname });
+      res.writeHead(404).end(JSON.stringify({ error: "RC launch not enabled" }));
+      return;
+    }
+    const folderPath = resolveFolder(decodeURIComponent(launchMatch[1]));
+    if (!folderPath) {
+      emit({ type: "request:rejected", reason: "launch-invalid-folder", method: "POST", url: url.pathname });
+      res.writeHead(400).end(JSON.stringify({ error: "Invalid folder" }));
+      return;
+    }
+    try {
+      await handleLaunch(folderPath, res);
+    } catch (err) {
+      emit({ type: "request:error", action: "launch", error: errorDetail(err) });
+      if (!res.headersSent) res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
+    }
+    return;
+  }
+
   // Static files — index.html, sw.js, manifest.json, icons
   if (req.method === "GET" && serveStatic(url.pathname, res)) return;
 
@@ -1714,6 +1828,13 @@ function shutdown(signal: string): void {
     }
   }
 
+  // Kill all RC pty sessions (Future B, gdn-difoto). Full idle-reaping is gdn-mupito.
+  for (const rc of rcSessions.values()) {
+    emit({ type: "process:kill", folder: rc.folderName, pid: rc.pid, reason: "shutdown" });
+    try { rc.pty.kill(); } catch { /* already dead */ }
+  }
+  rcSessions.clear();
+
   // Close all SSE connections
   for (const client of allClients) {
     client.res.end();
@@ -1745,31 +1866,48 @@ process.on("unhandledRejection", (reason) => {
 });
 
 // -- Start --
+//
+// Guarded so the bridge boots ONLY when run as the entrypoint (`tsx server/bridge.ts`).
+// When imported (tests, the gdn-difoto launch harness), none of the imperative startup
+// runs — critically not reapOrphans(), which mutates the SHARED ~/.config/gueridon
+// state the live bridge owns. Detection compares this module's URL to argv[1].
+const IS_ENTRYPOINT = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(entry).href
+      || fileURLToPath(import.meta.url) === entry;
+  } catch {
+    return false;
+  }
+})();
 
-initLogger();
-initStatusBuffer();
-priorSessions = reapOrphans();
-if (priorSessions.length > 0) {
-  emit({ type: "server:prior-sessions", sessions: priorSessions.map(p => ({ folder: basename(p.folder), sessionId: p.sessionId, turnInProgress: p.turnInProgress })) });
+if (IS_ENTRYPOINT) {
+  initLogger();
+  initStatusBuffer();
+  priorSessions = reapOrphans();
+  if (priorSessions.length > 0) {
+    emit({ type: "server:prior-sessions", sessions: priorSessions.map(p => ({ folder: basename(p.folder), sessionId: p.sessionId, turnInProgress: p.turnInProgress })) });
+  }
+
+  // Watch client files for changes — push stale notification to connected clients
+  startWatcher(PROJECT_ROOT, (newHash) => {
+    emit({ type: "content:changed", contentHash: newHash });
+    for (const client of allClients) {
+      sendSSE(client, "content-updated", { contentHash: newHash });
+    }
+  });
+
+  server.listen(PORT, () => {
+    emit({ type: "server:start", port: PORT, scanRoot: SCAN_ROOT });
+
+    // Auto-resume mid-turn sessions from the previous bridge (gdn-kuhuga).
+    // No client needed — CC runs headless, push notification fires on turn complete.
+    for (const prior of priorSessions) {
+      if (!prior.turnInProgress) continue;
+      autoResumeOnStartup(prior).catch((err) =>
+        emit({ type: "session:auto-resume-fail", folder: basename(prior.folder), error: errorDetail(err) }),
+      );
+    }
+  });
 }
-
-// Watch client files for changes — push stale notification to connected clients
-startWatcher(PROJECT_ROOT, (newHash) => {
-  emit({ type: "content:changed", contentHash: newHash });
-  for (const client of allClients) {
-    sendSSE(client, "content-updated", { contentHash: newHash });
-  }
-});
-
-server.listen(PORT, () => {
-  emit({ type: "server:start", port: PORT, scanRoot: SCAN_ROOT });
-
-  // Auto-resume mid-turn sessions from the previous bridge (gdn-kuhuga).
-  // No client needed — CC runs headless, push notification fires on turn complete.
-  for (const prior of priorSessions) {
-    if (!prior.turnInProgress) continue;
-    autoResumeOnStartup(prior).catch((err) =>
-      emit({ type: "session:auto-resume-fail", folder: basename(prior.folder), error: errorDetail(err) }),
-    );
-  }
-});

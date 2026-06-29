@@ -32,6 +32,8 @@ import {
   type ShutdownContext,
   type LastToolCall,
   isSubagentEvent,
+  buildRemoteControlEnv,
+  VERTEX_ENV_VARS,
 } from "./bridge-logic.js";
 
 // --- resolveSessionForFolder ---
@@ -2088,5 +2090,70 @@ describe("isSubagentEvent + StateBuilder integration", () => {
     const assistantMsg2 = msgs2.find(m => m.role === "assistant");
     // Without filter, streaming text was wiped — falls back to content array
     expect(assistantMsg2?.content).toBe("fallback");
+  });
+});
+
+// --- buildRemoteControlEnv (Future B, gdn-difoto) ---
+// The contamination guard (gdn-rosara): a `claude --remote-control` spawn must carry
+// ZERO Vertex env so it comes up on Teams, the billing the claude.ai relay attaches to.
+describe("buildRemoteControlEnv", () => {
+  // A representative bridge env: the full Vertex set (as systemd's vertex.env injects it),
+  // CC-internal markers, and ordinary vars that must survive.
+  const vertexBridgeEnv: Record<string, string> = {
+    CLAUDE_CODE_USE_VERTEX: "1",
+    CLOUD_ML_REGION: "europe-west1",
+    ANTHROPIC_VERTEX_PROJECT_ID: "mit-dev-362409",
+    ANTHROPIC_MODEL: "claude-opus-4-8",
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-8",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-4-6",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5",
+    CLAUDECODE: "1",
+    CLAUDE_CODE_ENTRYPOINT: "cli",
+    PATH: "/usr/bin:/bin",
+    HOME: "/home/modha",
+    TAILSCALE_HOSTNAME: "hezza",
+  };
+
+  it("strips every Vertex var so the child comes up on Teams (gdn-rosara guard)", () => {
+    const env = buildRemoteControlEnv(vertexBridgeEnv);
+    for (const v of VERTEX_ENV_VARS) {
+      expect(env[v], `${v} must be stripped`).toBeUndefined();
+    }
+  });
+
+  it("includes ANTHROPIC_MODEL in the stripped set (it's in the live vertex.env)", () => {
+    expect(VERTEX_ENV_VARS).toContain("ANTHROPIC_MODEL");
+    expect(buildRemoteControlEnv(vertexBridgeEnv).ANTHROPIC_MODEL).toBeUndefined();
+  });
+
+  it("strips CC-internal markers so the child isn't treated as a nested CC run", () => {
+    const env = buildRemoteControlEnv(vertexBridgeEnv);
+    expect(env.CLAUDECODE).toBeUndefined();
+    expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+  });
+
+  it("preserves ordinary inherited vars (PATH, HOME — auth/lookup depend on them)", () => {
+    const env = buildRemoteControlEnv(vertexBridgeEnv);
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.HOME).toBe("/home/modha");
+    expect(env.TAILSCALE_HOSTNAME).toBe("hezza");
+  });
+
+  it("pins the folder and suppresses the survey TUI", () => {
+    const env = buildRemoteControlEnv(vertexBridgeEnv);
+    expect(env.CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR).toBe("1");
+    expect(env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY).toBe("1");
+  });
+
+  it("does NOT disable background tasks or nonessential traffic (RC has a TTY; Teams needs flags)", () => {
+    const env = buildRemoteControlEnv(vertexBridgeEnv);
+    expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBeUndefined();
+    expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
+  });
+
+  it("drops undefined values rather than emitting empty strings", () => {
+    const env = buildRemoteControlEnv({ FOO: undefined, BAR: "baz" });
+    expect("FOO" in env).toBe(false);
+    expect(env.BAR).toBe("baz");
   });
 });
