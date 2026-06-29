@@ -27,14 +27,19 @@ const { esc } = window.Gdn;
 function showAskUserOverlay(questions, toolCallId, opts) {
   const { els, onAnswer } = opts;
 
+  // The model can emit AskUserQuestion `questions` as a non-array (a single
+  // object, a string, null) — degrade to an empty overlay rather than crash
+  // the render. See state-builder.ts for the matching server-side guard.
+  if (!Array.isArray(questions)) questions = [];
+
   let html = '';
-  const isSingleImmediate = questions.length === 1 && !questions[0].multiSelect;
+  const isSingleImmediate = questions.length === 1 && questions[0] && !questions[0].multiSelect;
 
   questions.forEach((q, qi) => {
     html += `<div class="ask-header">${esc(q.header)}</div>`;
     html += `<div class="ask-question">${esc(q.question)}</div>`;
     html += `<div class="ask-options" data-qi="${qi}" data-multi="${q.multiSelect}">`;
-    q.options.forEach((opt, oi) => {
+    (Array.isArray(q.options) ? q.options : []).forEach((opt, oi) => {
       html += `<div class="ask-option" data-qi="${qi}" data-oi="${oi}" data-label="${esc(opt.label)}">`;
       if (q.multiSelect) {
         html += `<span class="ask-option-check">&#x2713;</span>`;

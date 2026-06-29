@@ -47,6 +47,23 @@ describe("showAskUserOverlay", () => {
     expect(els.content.querySelectorAll(".ask-option")).toHaveLength(2);
   });
 
+  it("does not throw when questions is a non-array (malformed tool input)", () => {
+    const els = makeAskEls();
+    const onAnswer = vi.fn();
+    // Regression: the model emitted `questions` as a truthy non-array and the
+    // overlay crashed with "questions.forEach is not a function" (prod, 2026-06-29).
+    expect(() => showAskUserOverlay({ header: "x" } as any, "tc-obj", { els, onAnswer })).not.toThrow();
+    expect(() => showAskUserOverlay(null as any, "tc-null", { els, onAnswer })).not.toThrow();
+    expect(() => showAskUserOverlay("oops" as any, "tc-str", { els, onAnswer })).not.toThrow();
+  });
+
+  it("does not throw when a question has non-array options", () => {
+    const els = makeAskEls();
+    const onAnswer = vi.fn();
+    const questions = [{ header: "H", question: "Q?", multiSelect: false, options: undefined }];
+    expect(() => showAskUserOverlay(questions as any, "tc-noopts", { els, onAnswer })).not.toThrow();
+  });
+
   it("single-select immediate mode fires onAnswer on tap", () => {
     const els = makeAskEls();
     const onAnswer = vi.fn();

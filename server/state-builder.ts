@@ -525,7 +525,10 @@ export class StateBuilder {
       if (!rawJson) return;
       try {
         const args = JSON.parse(rawJson);
-        const questions = (args.questions || []) as AskUserQuestion[];
+        // Guard against a non-array `questions` (a truthy non-array passes
+        // `|| []`); the client's showAskUserOverlay does `questions.forEach`
+        // and would crash. Array.isArray is the only safe runtime check.
+        const questions = (Array.isArray(args.questions) ? args.questions : []) as AskUserQuestion[];
         const toolId = this.askUserBlockToolId.get(index) || "";
         this.lastSignal = { signal: "ask_user", questions, toolCallId: toolId };
       } catch {
