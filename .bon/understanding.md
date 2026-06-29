@@ -118,3 +118,48 @@ favour of B being viable:**
     non-Vertex for the claude.ai relay to attach (confirmed — the spike was Teams
     and attached fine). De-Vertexing the Guéridon spawns is the gating change for
     any Future-B build.
+
+## Future B — build framing (planned 2026-06-29, post-gdn-hocede)
+
+Shape: replace the `claude -p` + hand-rolled streaming UI with `claude
+--remote-control` spawns whose `claude.ai/code` URL is pushed to the phone —
+claude.ai's native UI does the driving; Guéridon keeps only the launch/notify
+moat. This supersedes the substrate-watch "SDK swap" idea above as the *more
+radical* commoditization: it offloads the **UI**, not just the parsing layer.
+Cross-cutting decisions:
+
+- **Spawn with a pty, not pipes.** `claude --remote-control` is an interactive
+  TUI needing a controlling terminal; today's `spawnCC` (bridge.ts) pipes stdio
+  for stream-json. Use node-pty. Read the pty only to extract the claude.ai URL
+  and detect lifecycle — never to render.
+- **Non-Vertex per spawn = the billing flip (gdn-rosara).** Strip the Vertex
+  trio from the spawn env (`env -u CLAUDE_CODE_USE_VERTEX ANTHROPIC_VERTEX_PROJECT_ID
+  ANTHROPIC_MODEL CLOUD_ML_REGION ANTHROPIC_DEFAULT_*_MODEL`) — confirmed in the
+  spike to yield Teams, which is what the claude.ai relay attaches to. **Tradeoff,
+  Sameer's call:** RC sessions bill to Teams/MAX (its rate limits), not Vertex.
+  Side effect: satisfies gdn-rosara's contamination concern.
+- **Pre-seed folder trust, don't send-keys.** The spike hit "trust this folder?"
+  and accepted via send-keys (fragile). Production should pre-write the folder to
+  CC's trusted list before spawn. SPIKE: find the trust-store (likely
+  `~/.claude.json`) and confirm pre-seeding suppresses the prompt.
+- **Initial-prompt injection — OPEN.** Autonomous/share-sheet launches must start
+  on the deposit immediately. SPIKE: can `claude --remote-control <name> "<prompt>"`
+  take an initial prompt, or must we type it into the pty?
+- **One spawn mode or two — THE central fork.** (a) ALL launches become
+  `--remote-control`, claude.ai is the universal driver/viewer, full render-layer
+  deletion — depends on initial-prompt injection. (b) keep `claude -p` for
+  autonomous share-sheet (push result, no URL), add `--remote-control` for
+  interactive. Lean (a) if the injection spike passes.
+- **What dies vs survives.** DIES (driving moves to claude.ai): SSE transport,
+  state-builder.ts, delta conflation, the whole client render layer (render-*.cjs
+  + streaming index.html), content-hash watcher, the AskUser overlay, the context
+  gauge — which RETIRES several just-filed items (gdn-kuciku, gdn-hodoco, the
+  AskUser fix's reason-to-exist). SURVIVES (the moat claude.ai lacks): folder
+  picker (scanFolders/`/folders`), share-sheet ingest (deposit.ts/`/upload`),
+  push (push.ts), spawn lifecycle + orphan reaping (gdn-mupito still applies — RC
+  sessions are processes too).
+- **Migrate, don't big-bang.** Build the `--remote-control` path alongside the
+  live bridge (parallel endpoint/flag); the deletion lands LAST, only after the
+  RC path proves out in daily use. Risk to accept: Guéridon becomes a thin shim
+  Anthropic could obviate if they ship remote-launch — fine; thin shims are cheap
+  to keep, easy to retire.
