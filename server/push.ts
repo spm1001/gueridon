@@ -171,6 +171,8 @@ export async function sendPush(payload: {
   tag: string;
   folder: string;
   vibrate: number[];
+  /** Optional deep-link the notification opens on tap (gdn-dofuza: the claude.ai URL). */
+  url?: string;
 }): Promise<void> {
   if (!vapidReady || subscriptions.size === 0) return;
 
@@ -223,6 +225,21 @@ export function pushTurnComplete(folder: string, shareContext?: { filename: stri
     tag: `gueridon-done-${name}`,
     folder,
     vibrate: [200],
+  });
+}
+
+/** Send "RC session ready" push carrying the claude.ai attach URL (gdn-dofuza).
+ *  Tapping the notification opens the URL directly (sw.js), closing the
+ *  launch-from-mobile loop: spawn on hezza, attach from the phone. */
+export function pushLaunchReady(folder: string, url: string): Promise<void> {
+  const name = folder.split("/").pop() || folder;
+  return sendPush({
+    title: "Guéridon",
+    body: `${name} is ready — tap to open in claude.ai`,
+    tag: `gueridon-launch-${name}`,
+    folder,
+    url,
+    vibrate: [200, 100],
   });
 }
 

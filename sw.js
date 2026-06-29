@@ -83,7 +83,7 @@ self.addEventListener("push", (event) => {
     badge: "/icon-192.svg",
     tag: data.tag || "gueridon-default",
     renotify: true,
-    data: { folder: data.folder || "" },
+    data: { folder: data.folder || "", url: data.url || "" },
     vibrate: data.vibrate || [200],
   };
   event.waitUntil(self.registration.showNotification(title, options));
@@ -92,6 +92,13 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const folder = event.notification.data?.folder || "";
+  const url = event.notification.data?.url || "";
+
+  // Launch-ready notification (gdn-dofuza): open the claude.ai attach URL directly.
+  if (url) {
+    event.waitUntil(self.clients.openWindow(url));
+    return;
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {

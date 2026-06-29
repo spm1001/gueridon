@@ -65,7 +65,7 @@ import {
 } from "./folders.js";
 
 import { StateBuilder, type StateSignal } from "./state-builder.js";
-import { getVapidPublicKey, pushTurnComplete, pushAskUser, addSubscription, removeSubscription } from "./push.js";
+import { getVapidPublicKey, pushTurnComplete, pushAskUser, pushLaunchReady, addSubscription, removeSubscription } from "./push.js";
 import { emit, errorDetail } from "./event-bus.js";
 import { initLogger } from "./logger.js";
 import { initStatusBuffer, getRecent } from "./status-buffer.js";
@@ -477,6 +477,14 @@ export function spawnRemoteControl(folderPath: string): RCSession {
       if (url) {
         rc.url = url;
         emit({ type: "rc:url", folder: folderName, pid: rc.pid, url });
+        // Push the attach link to the phone — but only when no gueridon client is
+        // watching (the in-page /launch response delivers it otherwise). This is the
+        // share-sheet / phone-in-pocket path (gdn-dofuza); mirrors push.ts's philosophy.
+        if (allClients.size === 0) {
+          pushLaunchReady(folderName, url).catch((err) =>
+            emit({ type: "request:error", action: "push-launch-ready", error: errorDetail(err) }),
+          );
+        }
       }
     }
   });

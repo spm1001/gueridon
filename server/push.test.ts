@@ -25,6 +25,7 @@ import {
   addSubscription,
   removeSubscription,
   sendPush,
+  pushLaunchReady,
   _testing,
 } from "./push.js";
 
@@ -338,6 +339,35 @@ describe("sendPush", () => {
     // Actually _testing.reset sets vapidReady=true, so we need to test the
     // real init path. Instead, test with no subscriptions.
     await sendPush(payload);
+    expect(webpush.sendNotification).not.toHaveBeenCalled();
+  });
+});
+
+describe("pushLaunchReady (gdn-dofuza)", () => {
+  beforeEach(() => {
+    _testing.reset();
+    vi.mocked(webpush.sendNotification).mockReset();
+  });
+
+  const URL = "https://claude.ai/code/session_01Cn6v8HbrMdcau5VJpqeF7r";
+
+  it("carries the claude.ai URL and a per-folder launch tag", async () => {
+    _testing.reset(new Map([[makeSub(1).endpoint, makeSub(1)]]));
+    vi.mocked(webpush.sendNotification).mockResolvedValue({} as any);
+
+    await pushLaunchReady("/home/modha/repos/spm1001/gueridon", URL);
+
+    expect(webpush.sendNotification).toHaveBeenCalledTimes(1);
+    const data = JSON.parse(vi.mocked(webpush.sendNotification).mock.calls[0][1] as string);
+    expect(data.url).toBe(URL);
+    expect(data.tag).toBe("gueridon-launch-gueridon");
+    expect(data.folder).toBe("/home/modha/repos/spm1001/gueridon");
+    expect(data.body).toContain("claude.ai");
+  });
+
+  it("no-ops with no subscriptions", async () => {
+    _testing.reset(); // empty
+    await pushLaunchReady("/x/proj", URL);
     expect(webpush.sendNotification).not.toHaveBeenCalled();
   });
 });
