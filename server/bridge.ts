@@ -24,6 +24,7 @@ import { spawn as ptySpawn, type IPty } from "node-pty";
 import {
   buildCCArgs,
   buildRemoteControlEnv,
+  VERTEX_ENV_VARS,
   KILL_ESCALATION_MS,
   CONFLATION_INTERVAL_MS,
   isUserTextEcho,
@@ -380,11 +381,12 @@ function spawnCC(session: Session): void {
     ),
   );
 
-  // For max billing: remove Vertex env vars so CC falls through to claude.ai auth
+  // The Vertex billing OPTION stays: default/"vertex" inherits the full Vertex env
+  // (ITV pays) — kept deliberately in case Vertex ever supports WebSearch + /remote-control.
+  // "max" opts out: strip the ENTIRE Vertex set so CC falls through to claude.ai auth.
+  // (Previously stripped only 3 of the 7 vars, leaving the model pins — completed here.)
   if (billingMode === "max") {
-    delete baseEnv.CLAUDE_CODE_USE_VERTEX;
-    delete baseEnv.CLOUD_ML_REGION;
-    delete baseEnv.ANTHROPIC_VERTEX_PROJECT_ID;
+    for (const v of VERTEX_ENV_VARS) delete baseEnv[v];
   }
 
   const env = {
