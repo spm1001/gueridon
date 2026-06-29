@@ -121,6 +121,20 @@ favour of B being viable:**
 
 ## Future B — build framing (planned 2026-06-29, post-gdn-hocede)
 
+**Build progress (2026-06-29 — the loop works end-to-end):** `gdn-difoto` (node-pty
+`--remote-control` spawn, Vertex-stripped→Teams, `POST /launch` gated on `GUERIDON_ENABLE_RC`,
++ a main-guard so `bridge.ts` imports without booting), `gdn-senila` (URL captured from the
+pty via `extractClaudeAiUrl`), and `gdn-dofuza` (push the URL to the phone via
+`pushLaunchReady`/sw.js) are SHIPPED. `gdn-tetepu` (trust) is MOOT — trust cascades from
+`~/repos` (see the trust bullet above). Outcomes `gdn-pijuti`/`gdn-maroke`/`gdn-bekegu` are
+DONE. The spawn→URL→phone loop is verified at the real layer (Teams session, /proc shows zero
+Vertex, push fires with the url). REMAINS: `gdn-todidu` (strip the launcher UI to
+folder-list+launch+URL — this is where dofuza's in-page tap-through lands; `/launch` already
+returns the url), `gdn-fuzeba` (re-point share-sheet at the RC path, passing the deposit as
+the initial prompt — mode (a)), then `gdn-deloce`/`gdn-wimera` (delete the streaming back-half
++ rewrite CLAUDE.md) LAST, only after the RC path proves out in daily use. Everything below is
+the original plan framing.
+
 Shape: replace the `claude -p` + hand-rolled streaming UI with `claude
 --remote-control` spawns whose `claude.ai/code` URL is pushed to the phone —
 claude.ai's native UI does the driving; Guéridon keeps only the launch/notify

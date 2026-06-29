@@ -10,12 +10,14 @@ Phone browser → HTTP → Node.js bridge → claude -p (stream-json) → MAX su
 
 One HTML file (`index.html`) served by the bridge. SSE for live events, POST for commands. Process-per-session with `--session-id <uuid>`, resume via `--resume` after process kill.
 
+**Future B (in progress, flag-gated `GUERIDON_ENABLE_RC=1`, dormant in prod):** a second, additive spawn path that runs `claude --remote-control` in a pty and hands the *driving* to claude.ai's native UI — the phone gets a `claude.ai/code/session_…` link instead of the hand-rolled streaming back-half. The `-p` stream-json path above is unchanged and still primary. See **Bridge Server → Future B** below and `.bon/understanding.md` for the full framing. (When the RC path proves out in daily use, `gdn-deloce`/`gdn-wimera` will delete the streaming back-half and rewrite this file for the launcher.)
+
 ## Running
 
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~576 tests, ~8s)
+npm test                     # Run all tests (~712 tests, ~6s)
 npm run test:watch           # Watch mode
 ```
 
@@ -103,6 +105,7 @@ The bridge is split across several modules in `server/`:
 | POST | `/client-error` | Mobile error reporting (rate-limited) |
 | POST | `/upload` | Share-sheet new-session upload (auto-injects prompt) |
 | POST | `/upload/:folder` | Multipart file upload (`?stage=true` for client staging, default auto-injects) |
+| POST | `/launch/:folder` | **Future B (gated on `GUERIDON_ENABLE_RC=1`, else 404):** spawn a `claude --remote-control` RC session; returns `{status, pid, folder, url}` (the claude.ai attach URL, awaited up to 15s) |
 
 **Key design:**
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
@@ -119,6 +122,26 @@ The bridge is split across several modules in `server/`:
 - **`[guéridon:*]` prefix convention:** Bridge-injected messages use `[guéridon:system]`, `[guéridon:upload]` etc. StateBuilder detects these and marks as `synthetic: true` (rendered as system chips, prefix stripped). **Exception:** staged uploads contain a deposit note followed by user text — StateBuilder checks for text after the deposit suffix and keeps these as real user messages. The client's `renderUserBubble()` parses deposit notes into `📎 filename` references.
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
 - **`processAlive` field:** All `state` broadcasts include `processAlive: boolean`. The client uses `processAlive: false` to detect CC process exit (as opposed to idle between turns) — clears messages, opens switcher, same as the deliberate `/exit` path. Without this, stale messages lingered behind the switcher after natural CC exit.
+
+### Future B — `--remote-control` launch path (flag-gated, dormant)
+
+Additive path (gated on `GUERIDON_ENABLE_RC=1`; inert in prod) that spawns a
+claude.ai-attachable session instead of a `claude -p` pipe. Driving moves to claude.ai's
+native UI; gueridon keeps only the launch/notify front-half. Lives **alongside** the `-p`
+path — `spawnCC` and its billing modes are untouched. Full framing + the 5-outcome plan
+are in `.bon/understanding.md`. Built so far: the spawn path, URL capture, and push delivery.
+
+| Piece | Where | What |
+|------|-------|------|
+| `spawnRemoteControl(folder)` | `bridge.ts` | Spawns `claude --remote-control <folder>` in a **node-pty** (interactive TUI needs a real terminal). Reads the pty only to buffer output — never to render. |
+| `buildRemoteControlEnv()` | `bridge-logic.ts` | Strips the full `VERTEX_ENV_VARS` set + CC-internal markers → the session comes up on **Teams** (which the claude.ai relay attaches to; the `-p` path's `max` mode reuses this var list). Unit-tested. |
+| `extractClaudeAiUrl(buffer)` | `bridge-logic.ts` | ANSI-strips + matches the `claude.ai/code/session_…` URL (last occurrence). Unit-tested. |
+| `rcSessions` map + `handleLaunch` | `bridge.ts` | Lightweight registry (separate from the `-p` `sessions` map); `POST /launch` awaits the URL (≤15s) and returns it. |
+| `pushLaunchReady(folder, url)` | `push.ts` | Pushes the attach URL to the phone (sw.js opens it on tap); fires only when `allClients.size===0` (phone-in-pocket). |
+
+- **Main-guard (load-bearing — do not remove):** `bridge.ts`'s `// -- Start --` block (reapOrphans, watcher, `server.listen`) runs only when `IS_ENTRYPOINT` (i.e. `tsx server/bridge.ts`). This lets tests/harnesses **import** `bridge.ts` without booting the server — critically without `reapOrphans()` clobbering the SHARED `~/.config/gueridon` state the live bridge owns. Removing the guard re-breaks import-safety.
+- **Folder trust:** *no seeding needed.* CC trust **cascades from the nearest trusted ancestor dir** (empirically verified); `~/repos` is trusted and `SCAN_ROOT=~/repos`, so every launch inherits trust. Precondition for a fresh machine: trust `~/repos` once (a rebuild/setup step, not gueridon's job).
+- **Billing tradeoff:** RC sessions are non-Vertex → bill to Teams/MAX (its rate limits).
 
 ## CC Process Flags (verified against CC v2.1.195, 2026-06-29; `bridge-logic.ts` is the source of truth)
 
