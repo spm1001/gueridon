@@ -7,9 +7,9 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { createServer, type AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -83,6 +83,7 @@ describe("bridge HTTP smoke tests", () => {
         BRIDGE_PORT: String(port),
         SCAN_ROOT: tempDir,
         HOME: tempDir,
+        GUERIDON_ENABLE_RC: "", // explicit OFF so the gating tests are deterministic (gdn-towiva)
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -141,6 +142,24 @@ describe("bridge HTTP smoke tests", () => {
   it("GET /nonexistent returns 404", async () => {
     const res = await fetch(`${baseUrl}/nonexistent`);
     expect(res.status).toBe(404);
+  });
+
+  // --- Future-B RC gating (this subprocess has GUERIDON_ENABLE_RC="") (gdn-towiva) ---
+
+  it("GET /rc returns 404 when RC is disabled", async () => {
+    const res = await fetch(`${baseUrl}/rc`);
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /launch returns 404 when RC is disabled", async () => {
+    const res = await fetch(`${baseUrl}/launch/anything`, { method: "POST" });
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /repos serves even when RC is disabled (ungated read-only)", async () => {
+    const res = await fetch(`${baseUrl}/repos`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toHaveProperty("repos");
   });
 
   it("CORS: same-origin request has no ACAO header, cross-origin allowed origin gets reflected", async () => {
@@ -717,5 +736,103 @@ describe("bridge HTTP smoke tests", () => {
         expect(res.headers.get("cache-control")).toBe("no-cache");
       }
     });
+  });
+});
+
+// === Future-B launcher endpoints, RC ENABLED (gdn-towiva) ===
+// A second subprocess with GUERIDON_ENABLE_RC=1 and a SCAN_ROOT of two real git repos with
+// distinct commit dates — so /repos exercises the real git-recency sort. We never POST a valid
+// /launch here (that would spawn a real `claude`); we test the read/gating/validation paths.
+
+/** Create a git repo at `dir` with a single commit dated `isoDate` (controls git log %ct). */
+function makeGitRepo(dir: string, isoDate: string): void {
+  mkdirSync(dir, { recursive: true });
+  const opts = { cwd: dir, stdio: "ignore" as const };
+  execFileSync("git", ["init", "-q"], opts);
+  execFileSync("git", ["config", "user.email", "t@example.com"], opts);
+  execFileSync("git", ["config", "user.name", "Tester"], opts);
+  writeFileSync(join(dir, "README.md"), "x");
+  execFileSync("git", ["add", "."], opts);
+  execFileSync("git", ["commit", "-q", "-m", "init"], {
+    ...opts,
+    env: { ...process.env, GIT_AUTHOR_DATE: isoDate, GIT_COMMITTER_DATE: isoDate },
+  });
+}
+
+describe("launcher endpoints (RC enabled)", () => {
+  let child: ChildProcess;
+  let baseUrl: string;
+  let port: number;
+  let tempDir: string;
+  const stderrLines: string[] = [];
+  const cleanup = () => { try { child?.kill("SIGKILL"); } catch {} };
+
+  beforeAll(async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "gdn-rc-int-"));
+    mkdirSync(join(tempDir, ".config", "gueridon"), { recursive: true });
+    // Two repos; "newer" committed later than "older" → must sort first in /repos.
+    makeGitRepo(join(tempDir, "older"), "2020-01-01T00:00:00");
+    makeGitRepo(join(tempDir, "newer"), "2024-06-01T00:00:00");
+
+    port = await findFreePort();
+    baseUrl = `http://127.0.0.1:${port}`;
+    const tsxBin = join(PROJECT_ROOT, "node_modules", ".bin", "tsx");
+    child = spawn(tsxBin, ["server/bridge.ts"], {
+      cwd: PROJECT_ROOT,
+      env: {
+        ...process.env,
+        BRIDGE_PORT: String(port),
+        SCAN_ROOT: tempDir,
+        HOME: tempDir,
+        GUERIDON_ENABLE_RC: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stderr!.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) if (line) stderrLines.push(line);
+    });
+    process.on("exit", cleanup);
+    await waitForReady(baseUrl, 30_000, stderrLines);
+  }, 35_000);
+
+  afterAll(async () => {
+    process.removeListener("exit", cleanup);
+    if (child && child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} resolve(); }, 3_000);
+        child.on("exit", () => { clearTimeout(timer); resolve(); });
+      });
+    }
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch {}
+  });
+
+  it("GET /repos lists repos ordered by git-commit recency, with path + lastCommit", async () => {
+    const res = await fetch(`${baseUrl}/repos`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const names = body.repos.map((r: { name: string }) => r.name);
+    expect(names).toContain("newer");
+    expect(names).toContain("older");
+    expect(names.indexOf("newer")).toBeLessThan(names.indexOf("older")); // recency desc
+    const newer = body.repos.find((r: { name: string }) => r.name === "newer");
+    expect(typeof newer.lastCommit).toBe("number");
+    expect(newer).toHaveProperty("path");
+  });
+
+  it("GET /rc returns an empty sessions list when none are running", async () => {
+    const res = await fetch(`${baseUrl}/rc`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sessions: [] });
+  });
+
+  it("DELETE /launch for a valid folder with no running session returns 404", async () => {
+    const res = await fetch(`${baseUrl}/launch/${encodeURIComponent("newer")}`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /launch with a path-traversal folder returns 400 (rejected before any spawn)", async () => {
+    const res = await fetch(`${baseUrl}/launch/${encodeURIComponent("../../etc")}`, { method: "POST" });
+    expect(res.status).toBe(400);
   });
 });
