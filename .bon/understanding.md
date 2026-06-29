@@ -89,18 +89,32 @@ only to *interactive TTY* sessions** — it explicitly cannot attach to a headle
 `claude -p` process (open feature requests, nothing shipped), and there is **no
 remote-LAUNCH capability anywhere** in Anthropic's stack. So the launcher
 front-half is *more* durable than "shrink to launcher" implies: `/rc` can't
-take a handoff from Guéridon's `claude -p` sessions at all. Two coherent futures,
-forked by gdn-hocede:
-- **A — stays the full mobile client (status quo).** Launches *and* drives,
-  because `/rc` can't pick up the headless session. Works today; cost is
-  maintaining the hand-rolled stream-json layer (already ~100 CC versions adrift).
-- **B — pivots to a true launcher that hands off to /rc.** Requires Guéridon to
-  spawn an *interactive* `claude` (pty/tmux), script `/rc` onto it, surface the
-  pairing to mobile. Preconditions: (1) the spawn must be **non-Vertex** —
-  Sameer's empirical "Vertex sessions can't be attached" (architecturally
-  plausible: Vertex=GCP creds, /rc relay=Anthropic account; not doc-confirmed),
-  which is exactly gdn-rosara's de-Vertex fix; (2) **unknown** — can `/rc` be
-  enabled non-interactively on a freshly-spawned session? gdn-hocede is the
-  ~30-min spike that resolves A-vs-B. De-Vertexing the spawns is worth doing on
-  its own merits (closes gdn-rosara's contamination vector) and is the
-  precondition for *any* Desktop-attach future.
+take a handoff from Guéridon's `claude -p` sessions at all. Two coherent futures, forked by gdn-hocede — **spiked & RESOLVED 2026-06-29 in
+favour of B being viable:**
+- **A — stays the full mobile client (status quo).** Launches *and* drives.
+  Works today; cost is maintaining the hand-rolled stream-json layer (already
+  ~100 CC versions adrift).
+- **B — launcher that hands off to claude.ai remote control. VALIDATED.**
+  `claude --remote-control <name>` is a launch FLAG (CC v2.1.195) that starts an
+  interactive session with RC already active — no `/rc` send-keys gymnastics.
+  The spike: spawned it headlessly in a detached tmux with Vertex vars stripped
+  (`env -u CLAUDE_CODE_USE_VERTEX …`), accepted the folder-trust prompt via
+  send-keys; it came up **Teams (non-Vertex)** and printed `/remote-control is
+  active · … https://claude.ai/code/session_<id>`. Sameer drove that session
+  from his phone via the URL, with no terminal of his own — i.e. *launch from
+  mobile*, the exact gap. So Future B = spawn `claude --remote-control`
+  (non-Vertex, in a pty) + push the claude.ai URL to the phone; claude.ai's
+  native UI replaces the entire back-half (SSE, state-builder, delta conflation,
+  render layer).
+  - **Not yet spiked (the build's open work):** spawn from node with a real pty
+    (tmux proved the mechanism; prod wants node-pty); auto-handle the per-folder
+    trust prompt; the URL-push to the phone.
+  - **Shrink ≠ delete — UX-parity caveat:** Guéridon does more than *drive* —
+    the iOS share-sheet→new-session flow, push-on-turn-complete, and
+    deposit/upload are launch/notify features claude.ai's remote UI does NOT
+    provide. Future B is a thin launch+share-sheet+push front-end that hands the
+    *driving* to claude.ai, not a deletion of Guéridon.
+  - **Precondition, now on the critical path (gdn-rosara):** the spawn must be
+    non-Vertex for the claude.ai relay to attach (confirmed — the spike was Teams
+    and attached fine). De-Vertexing the Guéridon spawns is the gating change for
+    any Future-B build.
