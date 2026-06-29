@@ -177,6 +177,10 @@ interface RCSession {
   /** True if spawned with an initial prompt (e.g. /open) whose first turn must finish
    *  before the session is "ready" for the user (gdn-cumado). False = ready immediately. */
   autoPrompted: boolean;
+  /** Push the claude.ai URL to the phone on capture (gdn-nagepa). FALSE for launcher
+   *  launches — they deliver the URL in-page (and via the RUNNING list), so a push would
+   *  be redundant (triple-notify). TRUE only for phone-in-pocket paths (share-sheet). */
+  pushOnReady: boolean;
 }
 export const rcSessions = new Map<string, RCSession>();   // keyed by folder path
 const RC_BUFFER_CAP = 64 * 1024;                   // keep the last 64 KB of pty output
@@ -449,7 +453,11 @@ function spawnCC(session: Session): void {
  * buffer output. Idempotent per folder: returns the existing live session if one
  * is already running.
  */
-export function spawnRemoteControl(folderPath: string, initialPrompt?: string): RCSession {
+export function spawnRemoteControl(
+  folderPath: string,
+  initialPrompt?: string,
+  pushOnReady = false,
+): RCSession {
   const existing = rcSessions.get(folderPath);
   if (existing) return existing;
 
@@ -479,6 +487,7 @@ export function spawnRemoteControl(folderPath: string, initialPrompt?: string): 
     buffer: "",
     url: null,
     autoPrompted: !!initialPrompt,
+    pushOnReady,
   };
 
   p.onData((data) => {
@@ -491,10 +500,11 @@ export function spawnRemoteControl(folderPath: string, initialPrompt?: string): 
       if (url) {
         rc.url = url;
         emit({ type: "rc:url", folder: folderName, pid: rc.pid, url });
-        // Push the attach link to the phone — but only when no gueridon client is
-        // watching (the in-page /launch response delivers it otherwise). This is the
-        // share-sheet / phone-in-pocket path (gdn-dofuza); mirrors push.ts's philosophy.
-        if (allClients.size === 0) {
+        // Push the attach link to the phone — only for phone-in-pocket paths that opted in
+        // (pushOnReady, e.g. share-sheet) AND when no gueridon client is watching. Launcher
+        // launches set pushOnReady=false: they deliver the URL in-page + via the RUNNING list,
+        // so a push here would be the redundant third ping (gdn-nagepa; gdn-dofuza originally).
+        if (rc.pushOnReady && allClients.size === 0) {
           pushLaunchReady(folderName, url).catch((err) =>
             emit({ type: "request:error", action: "push-launch-ready", error: errorDetail(err) }),
           );

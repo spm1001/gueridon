@@ -60,6 +60,7 @@ import {
   handleRcExit,
   rcSessions,
 } from "./bridge.ts";
+import { pushLaunchReady } from "./push.js"; // the vi.mock above replaces this
 
 // Minimal ServerResponse stand-in: captures status + body, supports writeHead().end() chaining.
 function makeRes() {
@@ -96,6 +97,7 @@ function tmpRepo(withBon: boolean): string {
 beforeEach(() => {
   rcSessions.clear();
   ptyMock.spawn.mockClear();
+  vi.mocked(pushLaunchReady).mockClear();
 });
 
 afterEach(() => {
@@ -225,5 +227,25 @@ describe("handleRcExit (gdn-rilope/gdn-mupito)", () => {
     rcSessions.delete(dir); // simulate onExit cleanup before the grace timer fires
     vi.advanceTimersByTime(8000);
     expect(rc.pty.kill).not.toHaveBeenCalledWith("SIGKILL");
+  });
+});
+
+describe("launch-push gating (gdn-nagepa)", () => {
+  it("does NOT push for a launcher launch (pushOnReady defaults false), despite no SSE client", () => {
+    const dir = tmpRepo(false);
+    spawnRemoteControl(dir, "/open"); // URL is auto-captured by the pty mock
+    expect(vi.mocked(pushLaunchReady)).not.toHaveBeenCalled();
+  });
+
+  it("DOES push the captured URL for a phone-in-pocket launch (pushOnReady true, no SSE client)", () => {
+    const dir = tmpRepo(false);
+    const rc = spawnRemoteControl(dir, "/open", true);
+    expect(vi.mocked(pushLaunchReady)).toHaveBeenCalledWith(basename(dir), rc.url);
+  });
+
+  it("handleLaunch (launcher) never pushes", async () => {
+    const dir = tmpRepo(true);
+    await handleLaunch(dir, asRes(makeRes()));
+    expect(vi.mocked(pushLaunchReady)).not.toHaveBeenCalled();
   });
 });
