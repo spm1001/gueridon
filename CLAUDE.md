@@ -27,7 +27,7 @@ Runs on a Debian Linux server via Tailscale. Single systemd service.
 
 **Two directories:**
 - **`/opt/gueridon`** — production checkout. The systemd service runs from here.
-- **`~/Repos/gueridon`** — development. Edit, test, commit, push here.
+- **`~/repos/spm1001/gueridon`** — development. Edit, test, commit, push here.
 
 **Deploy workflow (all three steps, in order):**
 ```bash
@@ -40,7 +40,7 @@ cd /opt/gueridon && git pull && npm install && sudo systemctl restart gueridon
 
 **GitHub merge strategy:** Rebase merge only (squash and merge commit disabled). After PR merge, `git pull` syncs local — no `git reset --hard` needed.
 
-Production serves from `/opt/gueridon`, not `~/Repos/gueridon`. Changes that aren't committed and pushed won't appear in production — `git pull` in `/opt` has nothing to pull.
+Production serves from `/opt/gueridon`, not `~/repos/spm1001/gueridon`. Changes that aren't committed and pushed won't appear in production — `git pull` in `/opt` has nothing to pull.
 
 **Service management:**
 ```bash
@@ -49,7 +49,7 @@ sudo systemctl status gueridon     # Check health
 journalctl -u gueridon -f          # Tail logs
 ```
 
-- **`EnvironmentFile=/opt/gueridon/.env`** — `TAILSCALE_HOSTNAME`, `VAPID_SUBJECT`, `ENABLE_CLAUDEAI_MCP_SERVERS`, VertexAI vars, and `CC_MODEL` live here (not in the unit file). `.env.example` in the repo has placeholders. `.env` is gitignored.
+- **Two `EnvironmentFile`s.** `/opt/gueridon/.env` holds `TAILSCALE_HOSTNAME`, `VAPID_SUBJECT`, `ENABLE_CLAUDEAI_MCP_SERVERS`, and `CC_MODEL` (not in the unit file; `.env.example` has placeholders; `.env` is gitignored). The unit **also** sources `/etc/claude-code/vertex.env` — the shared dotfiles Vertex config (`CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, model IDs) — which is what puts bridge spawns on Vertex billing. (`gdn-rosara`/Future B would strip these per-spawn.)
 - **`KillMode=control-group`** — on restart, systemd kills everything in the cgroup: tsx launcher, node server, CC processes, and anything CC spawned (chrome via Passe, python http.server, etc.). This frees port 3001 cleanly and prevents orphan accumulation. **CC resume still works** — session state lives in JSONL on disk, not in the process. The previous `KillMode=process` caused `EADDRINUSE` crash loops (orphan node server held the port) and cgroup bloat (1.2GB of chrome renderer trees from past Passe invocations). Note: processes spawned by CC during normal operation still accumulate between restarts; a periodic restart (or any crash) cleans them up.
 - **HTTPS terminated by `tailscale serve`** — bridge listens on HTTP :3001.
 - **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
@@ -120,7 +120,7 @@ The bridge is split across several modules in `server/`:
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
 - **`processAlive` field:** All `state` broadcasts include `processAlive: boolean`. The client uses `processAlive: false` to detect CC process exit (as opposed to idle between turns) — clears messages, opens switcher, same as the deliberate `/exit` path. Without this, stale messages lingered behind the switcher after natural CC exit.
 
-## CC Process Flags (verified CC v2.1.89, 2026-04-01)
+## CC Process Flags (verified against CC v2.1.195, 2026-06-29; `bridge-logic.ts` is the source of truth)
 
 ```bash
 claude -p --verbose \
@@ -128,11 +128,11 @@ claude -p --verbose \
   --output-format stream-json \
   --include-partial-messages \
   --replay-user-messages \
-  --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,WebSearch,Task,TaskOutput,TaskStop,Skill,AskUserQuestion,EnterPlanMode,ExitPlanMode,EnterWorktree,ToolSearch,mcp__*" \
+  --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,WebSearch,Task,TaskOutput,TaskStop,Skill,AskUserQuestion,EnterPlanMode,ExitPlanMode,EnterWorktree,ExitWorktree,ToolSearch,mcp__*" \
   --disallowedTools "WebFetch,TodoWrite,NotebookEdit" \
   --permission-mode default \
   --mcp-config ~/.claude/settings.json \
-  --model opus \                          # optional, from CC_MODEL env var
+  --model opus[1m] \                      # optional, from CC_MODEL env var
   --session-id <uuid> \
   --append-system-prompt "The user is on a mobile device using Guéridon. ..."
 ```
@@ -141,10 +141,10 @@ claude -p --verbose \
 - `--allowed-tools` lists all tools permissively, including `mcp__*` for all MCP tools. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
 - **VertexAI tool restrictions:** When `CLAUDE_CODE_USE_VERTEX` is set, `WebSearch` is automatically moved from `--allowed-tools` to `--disallowedTools`. Vertex blocks WebSearch server-side; hiding it prevents wasted tool calls. The toggle is in `buildBaseFlags()` in `bridge-logic.ts`.
 - `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`. **The JSON file MUST contain a `"mcpServers"` key** (even `"mcpServers": {}` is fine). If the key is missing, CC v2.1.87 hangs silently during init; CC v2.1.89+ exits with code 1 and `"Does not adhere to MCP server configuration schema"` on stderr.
-- **MCP gap:** `settings.json` has `"mcpServers": {}` — bridge-spawned CC has zero MCP servers. Interactive CC discovers MCP via project-level `.mcp.json` files (e.g., mise in `~/Repos/mise-en-space/.mcp.json`), but `-p` mode with `--mcp-config` does not auto-discover these. To enable MCP in bridge sessions, add servers to `settings.json`'s `mcpServers`.
+- **MCP via plugins (corrected 2026-06-29):** `settings.json`'s `mcpServers` is still `{}`, but bridge-spawned CC is **not** MCP-less — installed **plugins** register their own servers regardless of `--mcp-config`. The live session ran **mise** (the batterie plugin's `.claude-plugin/plugin.json` declares `mcpServers.mise`; its `server.py` shows in the process tree). So `-p` sessions get every enabled plugin's MCP servers. (`--mcp-config`'s file still MUST contain a `mcpServers` key or CC hangs/exits — see the bullet above — but that's separate from plugin-provided servers.) `ENABLE_CLAUDEAI_MCP_SERVERS` in `.env` gates the claude.ai-provided servers.
 - `--disallowedTools` hides tools from the model entirely: WebFetch (returns AI summaries, use curl instead), TodoWrite (use bon), NotebookEdit (no notebooks).
 - `--permission-mode default` respects settings.json allow/deny lists.
-- `--model` is optional, set via `CC_MODEL` env var in `.env`. Used for VertexAI billing (`CC_MODEL=opus`).
+- `--model` is optional, set via `CC_MODEL` env var in `.env`. Used for VertexAI billing (live: `CC_MODEL=opus[1m]`).
 - `--append-system-prompt` is built dynamically by `buildSystemPrompt()` in `bridge-logic.ts`. Includes: machine context (hostname, "this IS the production server, do not SSH here"), working directory, AskUserQuestion coaching (tool returns error on mobile, user sees tappable buttons), and `~/.claude/` write protection warning (use Bash heredoc, not Write/Edit).
 - `--session-id <uuid>` for fresh sessions; `--resume <uuid>` for resuming after process kill. Decided by `resolveSessionForFolder()` in `bridge-logic.ts`.
 - **Local commands (`/context`, `/cost`, `/compact`) produce NO stdout.** Bridge reads JSONL tail on empty-result turns to recover output.
