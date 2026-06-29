@@ -19,6 +19,9 @@ import {
   buildResumeInjection,
   extractLastToolCall,
   isSessionReadyFromTail,
+  buildSessionRoster,
+  sessionDisplayName,
+  type RcRosterInfo,
   formatToolCallSummary,
   shouldSendEvent,
   HANDOFF_STALE_THRESHOLD_MS,
@@ -1713,6 +1716,75 @@ describe("isSessionReadyFromTail", () => {
   it("tolerates a corrupted partial first line from a mid-line seek", () => {
     const content = ['{"type":"assist…truncated', asst({ stop_reason: "end_turn" })].join("\n");
     expect(isSessionReadyFromTail(content)).toBe(true);
+  });
+});
+
+// --- live-sessions roster (gdn-batogo) ---
+
+describe("sessionDisplayName", () => {
+  const ROOT = "/home/modha/repos";
+  const HOME = "/home/modha";
+  it("returns the path relative to SCAN_ROOT for a repo", () => {
+    expect(sessionDisplayName("/home/modha/repos/spm1001/gueridon", ROOT, HOME)).toBe("spm1001/gueridon");
+  });
+  it("returns SCAN_ROOT itself when cwd IS the root", () => {
+    expect(sessionDisplayName(ROOT, ROOT, HOME)).toBe(ROOT);
+  });
+  it("returns ~ for the home directory", () => {
+    expect(sessionDisplayName(HOME, ROOT, HOME)).toBe("~");
+  });
+  it("returns ~/sub for a home subdirectory outside the repos tree", () => {
+    expect(sessionDisplayName("/home/modha/scratch", ROOT, HOME)).toBe("~/scratch");
+  });
+  it("returns the absolute path for anywhere else", () => {
+    expect(sessionDisplayName("/tmp/whatever", ROOT, HOME)).toBe("/tmp/whatever");
+  });
+});
+
+describe("buildSessionRoster", () => {
+  const ROOT = "/home/modha/repos";
+  const HOME = "/home/modha";
+
+  it("marks an RC session attachable with its url/ready/folderName", () => {
+    const rcByPid = new Map<number, RcRosterInfo>([
+      [100, { folderName: "spm1001/glaneur", url: "https://claude.ai/code/session_X", ready: false }],
+    ]);
+    const [e] = buildSessionRoster(
+      [{ pid: 100, cwd: "/home/modha/repos/spm1001/glaneur", ageSec: 5 }], rcByPid, ROOT, HOME);
+    expect(e).toMatchObject({
+      pid: 100, name: "spm1001/glaneur", kind: "rc", attachable: true,
+      url: "https://claude.ai/code/session_X", ready: false,
+    });
+  });
+
+  it("marks a hand-started session local, read-only, named from its cwd", () => {
+    const [e] = buildSessionRoster(
+      [{ pid: 200, cwd: "/home/modha", ageSec: 9 }], new Map(), ROOT, HOME);
+    expect(e).toMatchObject({
+      pid: 200, name: "~", kind: "local", attachable: false, url: null, ready: true,
+    });
+  });
+
+  it("sorts newest first (smallest ageSec)", () => {
+    const roster = buildSessionRoster([
+      { pid: 1, cwd: "/home/modha/a", ageSec: 300 },
+      { pid: 2, cwd: "/home/modha/b", ageSec: 10 },
+      { pid: 3, cwd: "/home/modha/c", ageSec: 120 },
+    ], new Map(), ROOT, HOME);
+    expect(roster.map((r) => r.pid)).toEqual([2, 3, 1]);
+  });
+
+  it("classifies a mixed roster (RC + foreign) correctly", () => {
+    const rcByPid = new Map<number, RcRosterInfo>([
+      [2, { folderName: "spm1001/gueridon", url: "https://claude.ai/code/session_Y", ready: true }],
+    ]);
+    const roster = buildSessionRoster([
+      { pid: 1, cwd: "/home/modha", ageSec: 50 },
+      { pid: 2, cwd: "/home/modha/repos/spm1001/gueridon", ageSec: 5 },
+    ], rcByPid, ROOT, HOME);
+    expect(roster.find((r) => r.pid === 1)?.kind).toBe("local");
+    expect(roster.find((r) => r.pid === 2)?.kind).toBe("rc");
+    expect(roster.find((r) => r.pid === 2)?.attachable).toBe(true);
   });
 });
 

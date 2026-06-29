@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { spawn as ptySpawn, type IPty } from "node-pty";
+import { scanClaudeSessions } from "./sessions.js";
 
 import {
   buildCCArgs,
@@ -41,6 +42,8 @@ import {
   classifyRestart,
   buildResumeInjection,
   extractLastToolCall,
+  buildSessionRoster,
+  type RcRosterInfo,
   shouldSendEvent,
   STATIC_FILES,
   CSP,
@@ -1647,6 +1650,29 @@ const server = createServer((req, res) => {
     );
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions: running }));
+    return;
+  }
+
+  // GET /sessions — roster of EVERY live claude session, not just RC ones (gdn-batogo).
+  // Read-only: RC sessions Guéridon spawned are attachable (url/ready); hand-started/foreign
+  // sessions are shown "local" for awareness, never attachable. Gated like /rc.
+  if (req.method === "GET" && url.pathname === "/sessions") {
+    if (process.env.GUERIDON_ENABLE_RC !== "1") {
+      res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
+      return;
+    }
+    const procs = await scanClaudeSessions();
+    const rcByPid = new Map<number, RcRosterInfo>();
+    for (const rc of rcSessions.values()) {
+      rcByPid.set(rc.pid, {
+        folderName: rc.folderName,
+        url: rc.url,
+        ready: rc.autoPrompted ? await isRcSessionReady(rc.folder, rc.spawnedAt) : true,
+      });
+    }
+    const sessions = buildSessionRoster(procs, rcByPid, SCAN_ROOT, homedir());
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ sessions }));
     return;
   }
 

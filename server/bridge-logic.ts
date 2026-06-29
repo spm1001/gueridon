@@ -807,6 +807,69 @@ export function isSessionReadyFromTail(jsonlContent: string): boolean {
   return false;
 }
 
+// --- Live-sessions roster (gdn-batogo) ---
+
+export interface RosterEntry {
+  pid: number;
+  name: string;        // display name (folderName for RC, cwd-derived for foreign)
+  cwd: string;
+  ageSec: number;
+  kind: "rc" | "local";
+  attachable: boolean; // true only for Guéridon-spawned RC sessions (have a claude.ai URL)
+  url: string | null;
+  ready: boolean;
+}
+
+/** What the roster needs to know about an RC session, keyed by pid. */
+export interface RcRosterInfo {
+  folderName: string;
+  url: string | null;
+  ready: boolean;
+}
+
+/**
+ * Human-readable name for a session's working directory: relative to SCAN_ROOT for repos
+ * (e.g. "spm1001/gueridon"), "~" / "~/sub" for the home tree, else the absolute path.
+ */
+export function sessionDisplayName(cwd: string, scanRoot: string, homeDir: string): string {
+  if (cwd === scanRoot) return scanRoot;
+  if (cwd.startsWith(scanRoot + "/")) return cwd.slice(scanRoot.length + 1);
+  if (cwd === homeDir) return "~";
+  if (cwd.startsWith(homeDir + "/")) return "~/" + cwd.slice(homeDir.length + 1);
+  return cwd;
+}
+
+/**
+ * Build the launcher's live-sessions roster from a /proc scan + the RC registry (gdn-batogo).
+ *
+ * A process whose pid is in `rcByPid` is a Guéridon-spawned RC session — attachable, carrying
+ * its claude.ai URL and ready flag, shown under its routing folderName. Every other live
+ * `claude` process is a hand-started / foreign session: read-only ("local"), never attachable
+ * (Guéridon has no pty handle to drive it). Sorted newest-first (smallest ageSec).
+ */
+export function buildSessionRoster(
+  procs: { pid: number; cwd: string; ageSec: number }[],
+  rcByPid: Map<number, RcRosterInfo>,
+  scanRoot: string,
+  homeDir: string,
+): RosterEntry[] {
+  const roster: RosterEntry[] = procs.map((p) => {
+    const rc = rcByPid.get(p.pid);
+    if (rc) {
+      return {
+        pid: p.pid, name: rc.folderName, cwd: p.cwd, ageSec: p.ageSec,
+        kind: "rc", attachable: true, url: rc.url, ready: rc.ready,
+      };
+    }
+    return {
+      pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir), cwd: p.cwd,
+      ageSec: p.ageSec, kind: "local", attachable: false, url: null, ready: true,
+    };
+  });
+  roster.sort((a, b) => a.ageSec - b.ageSec); // newest first
+  return roster;
+}
+
 /**
  * Format a tool call into a human-readable one-liner for the resume injection.
  * Returns "ToolName: summary" truncated to TOOL_SUMMARY_MAX_CHARS.

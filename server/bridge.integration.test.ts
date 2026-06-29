@@ -156,6 +156,11 @@ describe("bridge HTTP smoke tests", () => {
     expect(res.status).toBe(404);
   });
 
+  it("GET /sessions returns 404 when RC is disabled", async () => {
+    const res = await fetch(`${baseUrl}/sessions`);
+    expect(res.status).toBe(404);
+  });
+
   it("GET /repos serves even when RC is disabled (ungated read-only)", async () => {
     const res = await fetch(`${baseUrl}/repos`);
     expect(res.status).toBe(200);
@@ -824,6 +829,14 @@ describe("launcher endpoints (RC enabled)", () => {
     const res = await fetch(`${baseUrl}/rc`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ sessions: [] });
+  });
+
+  it("GET /sessions returns a roster array (gdn-batogo; content is host-global)", async () => {
+    // /sessions scans the host's /proc, so contents are non-deterministic — assert shape only.
+    const res = await fetch(`${baseUrl}/sessions`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.sessions)).toBe(true);
   });
 
   it("DELETE /launch for a valid folder with no running session returns 404", async () => {
