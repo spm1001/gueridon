@@ -10,7 +10,7 @@ Phone browser → HTTP → Node.js bridge → claude -p (stream-json) → MAX su
 
 One HTML file (`index.html`) served by the bridge. SSE for live events, POST for commands. Process-per-session with `--session-id <uuid>`, resume via `--resume` after process kill.
 
-**Future B (flag-gated `GUERIDON_ENABLE_RC=1`, LIVE in prod since 2026-06-29):** a second, additive spawn path that runs `claude --remote-control` in a pty and hands the *driving* to claude.ai's native UI — the phone gets a `claude.ai/code/session_…` link instead of the hand-rolled streaming back-half. The `-p` stream-json path above is unchanged and still primary. See **Bridge Server → Future B** below and `.bon/understanding.md` for the full framing. (When the RC path proves out in daily use, `gdn-deloce`/`gdn-wimera` will delete the streaming back-half and rewrite this file for the launcher.)
+**Future B (flag-gated `GUERIDON_ENABLE_RC=1`, LIVE in prod since 2026-06-29):** a second, additive spawn path that runs `claude --remote-control` in a pty and hands the *driving* to claude.ai's native UI — the phone gets a `claude.ai/code/session_…` link instead of the hand-rolled streaming back-half. The `-p` stream-json path above is unchanged and still primary. See **Bridge Server → Future B** below and `.bon/understanding.md` for the full framing. (Decision 2026-06-30: the streaming back-half is NOT deleted — it's the **Vertex billing lane**, because RC can only bill to Teams; see `.bon/understanding.md` → Billing lanes. `gdn-deloce` adds a Launch-with-Vertex / Launch-with-Teams chooser; `gdn-wimera` rewrites this file for the two-lane model.)
 
 ## Running
 
@@ -143,8 +143,9 @@ spinner (`gdn-cumado`), the **live-sessions roster** (`gdn-batogo`), launch-noti
 of EVERY live `claude` session (`GET /sessions`) — RC sessions Guéridon spawned are attachable
 (Open/End/orienting); hand-started/foreign sessions show read-only ("local · 44m"). Remaining:
 share-sheet→RC (`gdn-fuzeba`, paused — it'll pass the deposit as the initial prompt with
-`pushOnReady=true`). The old streaming UI still serves at `/` until `gdn-deloce`/`gdn-wimera`
-retire it (last).
+`pushOnReady=true`). The streaming UI still serves at `/` and STAYS — it's the **Vertex lane**
+(two-lane decision 2026-06-30); `gdn-deloce` adds the Vertex/Teams chooser and `gdn-wimera`
+rewrites this file for two-lane (not deletion).
 
 | Piece | Where | What |
 |------|-------|------|
