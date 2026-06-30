@@ -65,6 +65,25 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   function — never read from the (racing) session objects. Applies to any
   future "what was CC doing when we died" feature.
 
+- **Observe CC from outside via structured substrate, never the TUI.** When the
+  bridge needs to know what a `claude` session is doing without driving it, read
+  a structured signal, not the rendered view. Three primitives the launcher rests
+  on, each reliable and testable where view-scraping is fragile:
+  1. **SIGTERM = a faithful `/exit`** for a `claude` process — fires its
+     `process.on("SIGTERM")` GracefulShutdown (SessionEnd hooks run, JSONL
+     flushes, session stays `--resume`-able). NOT SIGHUP (survived), NOT typing
+     `/exit` into the pty (swallowed by menus / mid-turn).
+  2. **`stop_reason:"end_turn"` on the latest MAIN-thread assistant message**
+     (filter `parent_tool_use_id` null so a finished subagent can't false-signal)
+     = "turn done / ready for input". Read from the session JSONL tail; the bridge
+     locates the JSONL from the folder alone (newest `*.jsonl` with
+     `mtime ≥ spawnedAt`). Caveat: `/open` latency is UNBOUNDED — always pair with
+     a timeout.
+  3. **`/proc` `comm=="claude"`** = discover every live session, even ones Guéridon
+     didn't spawn. But discovery ≠ control: with no pty handle we can *see* a
+     foreign/terminal session, not drive or kill it (why the roster is read-only
+     for `kind:"local"`).
+
 ## Substrate watch (2026-06-10 read, Fable first-look session)
 
 Gueridon hand-rolled, in February, what Anthropic's stack now provides natively
@@ -115,9 +134,54 @@ favour of B being viable:**
     provide. Future B is a thin launch+share-sheet+push front-end that hands the
     *driving* to claude.ai, not a deletion of Guéridon.
   - **Precondition, now on the critical path (gdn-rosara):** the spawn must be
-    non-Vertex for the claude.ai relay to attach (confirmed — the spike was Teams
-    and attached fine). De-Vertexing the Guéridon spawns is the gating change for
-    any Future-B build.
+    non-Vertex for the claude.ai relay to attach — CONFIRMED both directions
+    2026-06-30 (matched-pair spike, see Billing lanes below): Teams attaches,
+    Vertex is silently inert. De-Vertexing the Guéridon spawns is the gating
+    change for the *Teams* lane.
+
+## Billing lanes — Vertex vs Teams (verified 2026-06-30)
+
+**Vertex and RC are mutually exclusive, and that makes the streaming back-half
+permanently valuable — not dead weight.** A matched-pair spike (two identical
+`claude --remote-control .` spawns differing only in the Vertex env vars):
+
+- **Vertex on** → banner `Google Vertex AI`, footer `Vertex`, **no
+  `/remote-control is active`, no `claude.ai/code/session_…` URL, no `/rc`
+  affordance.** RC comes up *inert*.
+- **Vertex stripped (→ Teams)** → footer `Teams … /rc`, and
+  `/remote-control is active · … https://claude.ai/code/session_…` prints.
+
+**Mechanism:** claude.ai's relay binds a web/Desktop UI to a *claude.ai
+first-party identity*. A Vertex session authenticates to GCP and has no claude.ai
+identity, so the relay has nothing to register — there is no remote session for
+the phone to attach to. This is structural, not a config we haven't found.
+
+**Critical build rule — it degrades SILENTLY, it does not error.** A Vertex
+`--remote-control` spawn just sits at a normal prompt with no URL. So you can
+NEVER do "spawn RC, fall back if it doesn't attach" — a Vertex RC spawn would
+hang any URL await to its timeout. **Route by billing intent BEFORE the spawn.**
+(`buildRemoteControlEnv` already strips Vertex, so today's Teams lane is correct;
+a two-lane launcher must *route*, never *detect-and-fallback*.)
+
+**Two lanes, both LIVE today, decision 2026-06-30 (Sameer's call):**
+
+| Lane | Path | UI | Billing |
+|------|------|-----|---------|
+| **Vertex** | `claude -p` streaming | Guéridon's own UI at `/` | Vertex (estate daily-driver) |
+| **Teams** | `claude --remote-control` | claude.ai native | Teams/MAX quota |
+
+So the streaming `-p`+render stack is the **only** path to a Vertex-billed mobile
+session — it IS the Vertex lane. **gdn-mezofu/gdn-deloce/gdn-wimera reframed from
+"retire the back-half" to a two-lane model:**
+- **Keep the streaming lane in MAINTENANCE mode** — nips and tucks fine (so
+  **gdn-kuciku and gdn-hodoco are NOT moot** — they're live Vertex-lane fixes),
+  but no major new feature-building on the drift-prone stream-json layer.
+- **Retire the Vertex lane ONLY on felt pain** — a future CC version breaks the
+  stream-json parser, or Vertex-on-mobile stops mattering. "~100 CC versions
+  adrift" = "haven't adopted new features," not "broken" (works at v2.1.196).
+- **End state (gdn-deloce):** the launcher is the single entry point and offers
+  **"Launch with Vertex"** (→ streaming lane) and **"Launch with Teams"** (→ RC
+  lane) buttons; the user picks billing per launch.
 
 ## Future B — build framing (planned 2026-06-29, post-gdn-hocede)
 
@@ -165,9 +229,10 @@ the loop POST `/launch` → real Teams session + claude.ai URL → RUNNING → E
 all verified end-to-end through `/opt`. Native surface: launched sessions appear in Claude
 **Desktop** (account sync) and open on **iOS** (the Open link worked); web-vs-native is parked
 (the native apps notify session-alive, so it doesn't matter — and the AASA/Universal-Link
-route can't be forced from JS anyway; see below). The **old streaming UI still serves at `/`**
-— additive, migrate-don't-big-bang; `gdn-deloce`/`gdn-wimera` (delete back-half + rewrite
-CLAUDE.md) stay LAST.
+route can't be forced from JS anyway; see below). The **streaming UI still serves at `/`**
+— and per the 2026-06-30 two-lane decision (see Billing lanes above) it STAYS, as the
+**Vertex lane**; `gdn-deloce` is now "build the Vertex/Teams chooser" and `gdn-wimera`
+"rewrite CLAUDE.md for two-lane" (not deletion).
 
 **Native-app deep-link — investigated + closed (2026-06-29):** you CANNOT force a hezza RC
 session into a native Claude app from a web page. Universal Links (`claude.ai/code/session_*`)
@@ -189,9 +254,10 @@ is the driving surface; native-attach is gated on Anthropic shipping an entitled
   is covered by the RUNNING list / roster (gdn-rilope/gdn-batogo), and relaunch-collision can't
   happen for RC (spawnRemoteControl is idempotent per folder). Residual case = orphan PIDs +
   ~440MB RSS per forgotten `-p` session, and that path retires with gdn-deloce. Low priority.
-- `gdn-deloce`/`gdn-wimera` — delete the streaming back-half + rewrite CLAUDE.md, LAST, once the
-  RC path has proven in daily use. (gdn-towiva's tests guard `/repos`,`/rc`,`/sessions`,`/launch`
-  against the deletion breaking them silently.)
+- `gdn-deloce`/`gdn-wimera` — **REFRAMED 2026-06-30 (two-lane, see Billing lanes above).** NOT
+  deletion: gdn-deloce builds the launcher's Vertex/Teams chooser; gdn-wimera rewrites CLAUDE.md
+  for the two-lane model (and drops its old close-moot step — gdn-kuciku/gdn-hodoco are revived as
+  live Vertex-lane fixes). gdn-towiva's tests still guard `/repos`,`/rc`,`/sessions`,`/launch`.
 
 Everything below is the original plan framing.
 
@@ -230,19 +296,22 @@ Cross-cutting decisions:
   `claude --remote-control <name> "<prompt>"` runs the prompt autonomously AND stays
   remote-control-attachable (spiked: it executed the prompt, printed the result, and
   held the claude.ai URL).
-- **One spawn mode or two — RESOLVED → mode (a).** Because injection works, ALL
-  launches unify under `--remote-control`: interactive AND autonomous/share-sheet
-  (pass the deposit as the initial prompt; the user can still attach via the URL to
-  watch/continue). So the full render-layer deletion (O5) is on — no separate
-  `claude -p` path needed.
-- **What dies vs survives.** DIES (driving moves to claude.ai): SSE transport,
-  state-builder.ts, delta conflation, the whole client render layer (render-*.cjs
-  + streaming index.html), content-hash watcher, the AskUser overlay, the context
-  gauge — which RETIRES several just-filed items (gdn-kuciku, gdn-hodoco, the
-  AskUser fix's reason-to-exist). SURVIVES (the moat claude.ai lacks): folder
-  picker (scanFolders/`/folders`), share-sheet ingest (deposit.ts/`/upload`),
-  push (push.ts), spawn lifecycle + orphan reaping (gdn-mupito still applies — RC
-  sessions are processes too).
+- **One spawn mode or two — SUPERSEDED 2026-06-30: there ARE two (see Billing
+  lanes above).** Original resolution (mode (a)): because injection works, ALL
+  launches unify under `--remote-control` and the `claude -p` path dies. The
+  two-lane decision REVERSES this — the Vertex lane needs the `claude -p` streaming
+  path (RC can't bill to Vertex), so both spawn modes survive and the launcher
+  routes by billing intent. (The injection finding itself still holds: an RC spawn
+  CAN take an initial prompt — used by the Teams lane's share-sheet path.)
+- **What dies vs survives — SUPERSEDED 2026-06-30 by the two-lane decision (see
+  Billing lanes above).** The original plan had the whole streaming stack DIE (SSE
+  transport, state-builder.ts, delta conflation, client render layer, content-hash
+  watcher, AskUser overlay, context gauge) once driving moved to claude.ai. That is
+  now OFF: the streaming stack is the **Vertex lane** and STAYS (maintenance mode),
+  so gdn-kuciku/gdn-hodoco are NOT retired — they're live Vertex-lane fixes.
+  Teams-lane launches still hand driving to claude.ai; the moat claude.ai lacks
+  (folder picker `/folders`, share-sheet ingest `/upload`, push, spawn lifecycle +
+  orphan reaping) is unchanged across both lanes.
 - **Migrate, don't big-bang.** Build the `--remote-control` path alongside the
   live bridge (parallel endpoint/flag); the deletion lands LAST, only after the
   RC path proves out in daily use. Risk to accept: Guéridon becomes a thin shim
