@@ -11,6 +11,7 @@ const {
   buildDepositNoteClient,
   timeAgo,
   shortModel,
+  matchFolderFromHash,
   THINKING_TRUNCATE,
 } = require("./render-utils.cjs");
 
@@ -232,5 +233,45 @@ describe("shortModel", () => {
   it("strips trailing digit segment from non-claude models too", () => {
     // No claude- prefix but regex still strips /-\d+$/
     expect(shortModel("gpt-4")).toBe("gpt");
+  });
+});
+
+// ============================================================
+// matchFolderFromHash — the launcher → conversation routing contract
+// ============================================================
+describe("matchFolderFromHash", () => {
+  const folders = [
+    { name: "spm1001/mary-bujournal", path: "/home/u/repos/spm1001/mary-bujournal" },
+    { name: "spm1001/gueridon", path: "/home/u/repos/spm1001/gueridon" },
+  ];
+
+  it("matches a raw owner/repo hash (the convention — slash intact)", () => {
+    expect(matchFolderFromHash("spm1001/mary-bujournal", folders)).toBe(folders[0]);
+  });
+
+  it("ALSO matches a percent-encoded hash (regression: the Vertex-button %2F bounce)", () => {
+    // The launcher writes raw, but the matcher tolerates %2F so an accidental
+    // encodeURIComponent can never bounce a launch back home (gdn-deloce, 2026-06-30).
+    expect(matchFolderFromHash("spm1001%2Fmary-bujournal", folders)).toBe(folders[0]);
+  });
+
+  it("matches by path as well as name", () => {
+    expect(matchFolderFromHash("/home/u/repos/spm1001/gueridon", folders)).toBe(folders[1]);
+  });
+
+  it("returns null for an empty hash (bare / → go home)", () => {
+    expect(matchFolderFromHash("", folders)).toBeNull();
+  });
+
+  it("returns null for an unknown folder", () => {
+    expect(matchFolderFromHash("spm1001/nope", folders)).toBeNull();
+  });
+
+  it("returns null (not throw) on a malformed % sequence", () => {
+    expect(matchFolderFromHash("%E0%A4%A", folders)).toBeNull();
+  });
+
+  it("returns null when folders is not an array", () => {
+    expect(matchFolderFromHash("x", null)).toBeNull();
   });
 });

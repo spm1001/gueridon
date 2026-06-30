@@ -418,11 +418,10 @@ function goHome() {
 
 function handleSSEFolders(folders) {
   if (sseCurrentFolder) return; // already in a session — nothing to route
-  if (location.hash.length > 1) {
-    const hashName = location.hash.slice(1);
-    const target = folders.find(f => f.name === hashName || f.path === hashName);
-    if (target) { sseConnectFolder(target); return; }
-  }
+  // matchFolderFromHash is tolerant of raw OR percent-encoded hashes (render-utils.cjs) —
+  // the slash in owner/repo must survive the launcher→conversation hop; see understanding.md.
+  const target = matchFolderFromHash(location.hash.slice(1), folders);
+  if (target) { sseConnectFolder(target); return; }
   goHome();
 }
 
@@ -655,7 +654,7 @@ if (bridgeUrl) {
 // === Rendering helpers ===
 
 // Render functions from client/*.js modules (window.Gdn namespace)
-const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, THINKING_TRUNCATE,
+const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, matchFolderFromHash, THINKING_TRUNCATE,
         renderChip, renderThinkingChip, renderLocalCommand, attachCopyButton,
         addCopyButtons, renderUserBubble, renderMessages,
         renderStatusBar, updatePlaceholder, updateSendButton,

@@ -41,7 +41,7 @@ const Gdn = (window as any).Gdn;
 const EXPECTED_EXPORTS: Record<string, string[]> = {
   "render-utils": [
     "esc", "trimText", "trimToolOutput", "truncateThinking",
-    "buildDepositNoteClient", "timeAgo", "shortModel", "THINKING_TRUNCATE",
+    "buildDepositNoteClient", "timeAgo", "shortModel", "matchFolderFromHash", "THINKING_TRUNCATE",
   ],
   "render-chips": [
     "renderChip", "renderThinkingChip", "renderLocalCommand", "attachCopyButton",

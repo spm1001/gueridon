@@ -74,10 +74,31 @@ function shortModel(model) {
   return model.replace('claude-', '').replace(/-\d+$/, '');
 }
 
+// Resolve a location.hash (sans '#') to a folder from the SSE folders list.
+// The hash is the folder routing key — the launcher's Vertex button navigates to
+// /#<owner/repo> (gdn-deloce). Tolerant of BOTH the raw name (the convention — slash
+// intact) AND a percent-encoded form (e.g. "owner%2Frepo"), so an accidental
+// encodeURIComponent on the write side can't strand a launch on the wrong page and
+// bounce it home (the bug that shipped + was fixed 2026-06-30). Matches name or path;
+// null on no hash / no match. See understanding.md "folderName is a routing contract".
+function matchFolderFromHash(rawHash, folders) {
+  if (!rawHash || !Array.isArray(folders)) return null;
+  const candidates = [rawHash];
+  try {
+    const decoded = decodeURIComponent(rawHash);
+    if (decoded !== rawHash) candidates.push(decoded);
+  } catch (_e) { /* malformed % sequence — just use the raw form */ }
+  for (const h of candidates) {
+    const f = folders.find((x) => x.name === h || x.path === h);
+    if (f) return f;
+  }
+  return null;
+}
+
 // --- Exports ---
 // Browser: classic <script> sets window.Gdn
 // Node/vitest: module.exports (file must be treated as CJS — see package.json "exports" or vitest config)
-const mod = { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, timeAgo, shortModel, THINKING_TRUNCATE };
+const mod = { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, timeAgo, shortModel, matchFolderFromHash, THINKING_TRUNCATE };
 if (typeof window !== 'undefined') window.Gdn = { ...window.Gdn, ...mod };
 if (typeof module !== 'undefined') module.exports = mod;
 })();
