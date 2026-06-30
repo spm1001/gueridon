@@ -739,6 +739,13 @@ function emitSignal(session: Session, signal: StateSignal): void {
       session.lastSentTextLength = 0;
       break;
     case "ask_user":
+      // `folder` is NOT named here on purpose — broadcastToSession() prepends
+      // `folder: session.folderName` to EVERY event payload (since 3d47282).
+      // That central injection is what lets the client's ask_user listener
+      // filter on data.folder (index.html:~393), so a question for folder A
+      // never renders in a client viewing folder B. Do not "fix" this call by
+      // adding folder, and do not drop the central injection — the nested-folder
+      // integration test (bridge.integration.test.ts:~444) guards it.
       broadcastToSession(session, "ask_user", {
         questions: signal.questions,
         toolCallId: signal.toolCallId,
