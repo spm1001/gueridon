@@ -285,11 +285,15 @@
   }
 
   // Vertex lane: drop straight into Guéridon's streaming conversation for this folder.
-  // The conversation page auto-connects from location.hash on load.
+  // The conversation page auto-connects from location.hash on load. Use the RAW name
+  // (NOT encodeURIComponent) — folder names are "owner/repo" and the conversation page
+  // matches the hash against folder.name with the slash intact (same convention as
+  // sseConnectFolder's `location.hash = name`). Encoding the slash to %2F makes the
+  // match fail and bounces straight back to the launcher.
   function launchVertex(e) {
     if (e) e.preventDefault();
     if (!selected) return;
-    location.href = "/#" + encodeURIComponent(selected);
+    location.href = "/#" + selected;
   }
 
   async function loadRepos() {
