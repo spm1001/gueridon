@@ -56,6 +56,17 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   ("batterie/gueridon"), session creation still used basename() and events
   vanished. Regression gate: integration test creating a nested folder,
   connecting a session, asserting the SSE event's folder field.
+  - **Second instance (gdn-deloce, 2026-06-30) — the hash is part of the contract,
+    and it's RAW.** The launcher's Vertex button navigates to `/#<owner/repo>`; the
+    conversation page matches `location.hash.slice(1)` directly against `folder.name`
+    (and `sseConnectFolder` sets `location.hash = name` raw, slash intact). The button
+    shipped with `encodeURIComponent(selected)`, turning the `/` into `%2F`; raw-vs-encoded
+    failed to match → `handleSSEFolders` `goHome()`'d, bouncing EVERY Vertex launch straight
+    back to the launcher (a glimpse of the conversation, then a bounce). Every repo is
+    `owner/repo` (always a slash), so it hit 100% of launches. Fix: `"/#" + selected` (raw).
+    Lesson: anything that writes `location.hash` must use the raw folder name — the slash is
+    load-bearing, do not `encodeURIComponent` it. Caught by Sameer's live test, not by the
+    suite (the launcher's inline JS isn't unit-tested).
 
 - **KillMode=control-group makes shutdown a race.** systemd SIGTERMs every
   process in the cgroup simultaneously — CC children may exit and fire their
@@ -179,9 +190,12 @@ session — it IS the Vertex lane. **gdn-mezofu/gdn-deloce/gdn-wimera reframed f
 - **Retire the Vertex lane ONLY on felt pain** — a future CC version breaks the
   stream-json parser, or Vertex-on-mobile stops mattering. "~100 CC versions
   adrift" = "haven't adopted new features," not "broken" (works at v2.1.196).
-- **End state (gdn-deloce):** the launcher is the single entry point and offers
-  **"Launch with Vertex"** (→ streaming lane) and **"Launch with Teams"** (→ RC
-  lane) buttons; the user picks billing per launch.
+- **End state (gdn-deloce — SHIPPED + deployed 2026-06-30):** the launcher is the single
+  entry point and offers **"Vertex"** (→ streaming lane, navigates `/#<owner/repo>`) and
+  **"Teams"** (→ RC lane, `POST /launch`) buttons; the user picks billing per launch. The
+  same change RETIRED the in-conversation session switcher — the launcher is now the only
+  chooser; leaving a session (folder-lozenge tap, `/exit`, session end, bare `/`) returns
+  to it. Net −1008/+72 (mostly deletion). CLAUDE.md rewritten for two-lane (gdn-wimera).
 
 ## Future B — build framing (planned 2026-06-29, post-gdn-hocede)
 
@@ -231,8 +245,8 @@ all verified end-to-end through `/opt`. Native surface: launched sessions appear
 (the native apps notify session-alive, so it doesn't matter — and the AASA/Universal-Link
 route can't be forced from JS anyway; see below). The **streaming UI still serves at `/`**
 — and per the 2026-06-30 two-lane decision (see Billing lanes above) it STAYS, as the
-**Vertex lane**; `gdn-deloce` is now "build the Vertex/Teams chooser" and `gdn-wimera`
-"rewrite CLAUDE.md for two-lane" (not deletion).
+**Vertex lane**. `gdn-deloce` (the Vertex/Teams chooser + switcher retirement) SHIPPED +
+deployed 2026-06-30; `gdn-wimera` (the CLAUDE.md two-lane rewrite) followed.
 
 **Native-app deep-link — investigated + closed (2026-06-29):** you CANNOT force a hezza RC
 session into a native Claude app from a web page. Universal Links (`claude.ai/code/session_*`)
@@ -254,10 +268,14 @@ is the driving surface; native-attach is gated on Anthropic shipping an entitled
   is covered by the RUNNING list / roster (gdn-rilope/gdn-batogo), and relaunch-collision can't
   happen for RC (spawnRemoteControl is idempotent per folder). Residual case = orphan PIDs +
   ~440MB RSS per forgotten `-p` session, and that path retires with gdn-deloce. Low priority.
-- `gdn-deloce`/`gdn-wimera` — **REFRAMED 2026-06-30 (two-lane, see Billing lanes above).** NOT
-  deletion: gdn-deloce builds the launcher's Vertex/Teams chooser; gdn-wimera rewrites CLAUDE.md
-  for the two-lane model (and drops its old close-moot step — gdn-kuciku/gdn-hodoco are revived as
-  live Vertex-lane fixes). gdn-towiva's tests still guard `/repos`,`/rc`,`/sessions`,`/launch`.
+- `gdn-deloce` — **SHIPPED + deployed 2026-06-30.** The launcher's Vertex/Teams chooser; the
+  same change RETIRED the in-conversation switcher (launcher is the sole chooser; −1008/+72 net).
+  One post-ship fix: the Vertex button must write the RAW hash, not `encodeURIComponent` — the
+  `%2F` broke the hash↔folder-name match and bounced every Vertex launch home (structural lesson
+  #1, second instance). `gdn-wimera` — CLAUDE.md two-lane rewrite, DONE. `gdn-kuciku` — CLOSED
+  (phantom: the ask_user folder key was already injected centrally by `broadcastToSession` since
+  Feb; the 06-29 audit misread the call site). gdn-towiva's tests still guard
+  `/repos`,`/rc`,`/sessions`,`/launch`.
 
 Everything below is the original plan framing.
 

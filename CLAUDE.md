@@ -1,27 +1,34 @@
 # Guéridon
 
-Mobile web UI for Claude Code. No framework, no build step.
+Mobile web UI for Claude Code — a phone **launcher** that points a full-freedom session at any repo. No framework, no build step.
 
-## Architecture
+## Architecture — two billing lanes
+
+The launcher (`launch.html`) is the front door. Bare `/` redirects to it. Pick a repo, then pick a **billing lane** (two buttons, `gdn-deloce`):
 
 ```
-Phone browser → HTTP → Node.js bridge → claude -p (stream-json) → MAX subscription
+                       ┌─ Vertex → claude -p (stream-json)       → Guéridon's own UI at /#<repo>
+phone → launcher (/) ──┤
+                       └─ Teams  → claude --remote-control (pty) → claude.ai native UI
 ```
 
-One HTML file (`index.html`) served by the bridge. SSE for live events, POST for commands. Process-per-session with `--session-id <uuid>`, resume via `--resume` after process kill.
+- **Vertex lane** — the streaming path: one `claude -p` process per repo (`--session-id` per session, `--resume` after a process kill), SSE for live events, POST for commands, rendered by Guéridon's own conversation page (`index.html`). Billed to **Vertex** (estate daily-driver) because the systemd unit sources `vertex.env`. This is the *only* route to a Vertex-billed mobile session — which is why it stays.
+- **Teams lane** — `claude --remote-control` in a pty; the phone gets a `claude.ai/code/session_…` link and claude.ai's native UI does the driving. Billed to **Teams/MAX**. Gated on `GUERIDON_ENABLE_RC=1` (LIVE in prod since 2026-06-29).
 
-**Future B (flag-gated `GUERIDON_ENABLE_RC=1`, LIVE in prod since 2026-06-29):** a second, additive spawn path that runs `claude --remote-control` in a pty and hands the *driving* to claude.ai's native UI — the phone gets a `claude.ai/code/session_…` link instead of the hand-rolled streaming back-half. The `-p` stream-json path above is unchanged and still primary. See **Bridge Server → Future B** below and `.bon/understanding.md` for the full framing. (Decision 2026-06-30: the streaming back-half is NOT deleted — it's the **Vertex billing lane**, because RC can only bill to Teams; see `.bon/understanding.md` → Billing lanes. `gdn-deloce` adds a Launch-with-Vertex / Launch-with-Teams chooser; `gdn-wimera` rewrites this file for the two-lane model.)
+**Route by billing intent BEFORE spawning — never detect-and-fallback.** A Vertex `--remote-control` spawn comes up *silently inert* (no attach URL, no error), so "spawn RC, fall back to streaming" would only ever hang. The launcher's two buttons make the choice explicit per launch. Mechanism + the matched-pair spike that proved it: `.bon/understanding.md` → **Billing lanes**.
+
+The Vertex/streaming lane is in **maintenance mode** — nips and tucks fine (e.g. `gdn-hodoco`, `gdn-muluwo`), but no major new feature-building on the drift-prone stream-json layer; retire it only on felt pain (a CC version breaks the parser, or Vertex-on-mobile stops mattering). The bridge protocol is deliberately client-agnostic — rendering is the client's problem (see `docs/kube-brain-mac-body.md`).
 
 ## Running
 
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~712 tests, ~6s)
+npm test                     # Run all tests (~741 tests, ~6s)
 npm run test:watch           # Watch mode
 ```
 
-Phone URL: `https://<your-tailscale-hostname>/` (Tailscale HTTPS termination). Set `TAILSCALE_HOSTNAME` env var.
+Phone URL: `https://<your-tailscale-hostname>/` (Tailscale HTTPS termination). Set `TAILSCALE_HOSTNAME` env var. Bare `/` redirects to the launcher (`launch.html`); a deep-link `/#<owner/repo>` (raw, slash intact) opens that repo's Vertex/streaming session directly.
 
 ## Deployment
 
@@ -51,7 +58,7 @@ sudo systemctl status gueridon     # Check health
 journalctl -u gueridon -f          # Tail logs
 ```
 
-- **Two `EnvironmentFile`s.** `/opt/gueridon/.env` holds `TAILSCALE_HOSTNAME`, `VAPID_SUBJECT`, `ENABLE_CLAUDEAI_MCP_SERVERS`, and `CC_MODEL` (not in the unit file; `.env.example` has placeholders; `.env` is gitignored). The unit **also** sources `/etc/claude-code/vertex.env` — the shared dotfiles Vertex config (`CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, model IDs) — which is what puts bridge spawns on Vertex billing. (`gdn-rosara`/Future B would strip these per-spawn.)
+- **Two `EnvironmentFile`s.** `/opt/gueridon/.env` holds `TAILSCALE_HOSTNAME`, `VAPID_SUBJECT`, `ENABLE_CLAUDEAI_MCP_SERVERS`, and `CC_MODEL` (not in the unit file; `.env.example` has placeholders; `.env` is gitignored). The unit **also** sources `/etc/claude-code/vertex.env` — the shared dotfiles Vertex config (`CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, model IDs) — which is what puts the **Vertex lane** (`claude -p`) on Vertex billing. The **Teams lane** spawns strip this set per-spawn (`buildRemoteControlEnv`) so RC comes up on Teams, which is the only billing the claude.ai relay attaches to.
 - **`KillMode=control-group`** — on restart, systemd kills everything in the cgroup: tsx launcher, node server, CC processes, and anything CC spawned (chrome via Passe, python http.server, etc.). This frees port 3001 cleanly and prevents orphan accumulation. **CC resume still works** — session state lives in JSONL on disk, not in the process. The previous `KillMode=process` caused `EADDRINUSE` crash loops (orphan node server held the port) and cgroup bloat (1.2GB of chrome renderer trees from past Passe invocations). Note: processes spawned by CC during normal operation still accumulate between restarts; a periodic restart (or any crash) cleans them up.
 - **HTTPS terminated by `tailscale serve`** — bridge listens on HTTP :3001.
 - **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
@@ -76,7 +83,7 @@ The bridge is split across several modules in `server/`:
 | `bridge-logic.ts` | Pure functions — session resolution, CC arg construction, delta conflation, path validation |
 | `state-builder.ts` | Pure state machine translating CC stdout events into the frontend state shape. `handleEventSignal()` → StateSignal (text/structure/status/ask_user). `getCurrentMessage()` exposes in-flight streaming message. |
 | `folders.ts` | Folder scanning (two-level: projects + containers), session discovery, handoff reading, RC readiness (`isRcSessionReady`, `hasBonContext`) |
-| `sessions.ts` | **Future B:** `/proc`-scan for live `claude` sessions (`comm=="claude"`) — feeds the launcher's `GET /sessions` roster (gdn-batogo) |
+| `sessions.ts` | **Launcher:** `/proc`-scan for live `claude` sessions (`comm=="claude"`) — feeds the launcher's `GET /sessions` roster (gdn-batogo) |
 | `deposit.ts` | Multipart/binary upload parsing, file validation, mise-style deposit to disk |
 | `orphan.ts` | Orphan CC process reaping, debounced session persistence |
 | `push.ts` | Web Push (VAPID) notification delivery, device-based dedup, subscribe-time stale endpoint pruning (MAX_SUBSCRIPTIONS=3) |
@@ -106,11 +113,11 @@ The bridge is split across several modules in `server/`:
 | POST | `/client-error` | Mobile error reporting (rate-limited) |
 | POST | `/upload` | Share-sheet new-session upload (auto-injects prompt) |
 | POST | `/upload/:folder` | Multipart file upload (`?stage=true` for client staging, default auto-injects) |
-| GET | `/repos` | **Future B (ungated, read-only):** lean launcher repo list — `listRepos`, git-commit-recency order, reads no sessions. `{repos:[{name,path,lastCommit}]}` |
-| POST | `/launch/:folder` | **Future B (gated on `GUERIDON_ENABLE_RC=1`, else 404):** spawn a `claude --remote-control` RC session; returns `{status, pid, folder, url, autoOpened, ready}` (the claude.ai attach URL, awaited up to 15s). `handleLaunch` passes `/open` as the initial prompt **only when the repo has `.bon`** (gdn-cumado conditional-`/open` — a context-less repo makes `/open` flail); `autoOpened` reflects that, `ready` is the JSONL-derived orientation status |
-| GET | `/rc` | **Future B (gated):** live RC sessions Guéridon spawned — `{sessions:[{folder,url,pid,spawnedAt,ready}]}`. `ready` (gdn-cumado) = false while the auto-`/open` turn runs. (The launcher now reads `/sessions`, not this; `/rc` stays for the RC-only contract + tests.) |
-| GET | `/sessions` | **Future B (gated):** the launcher roster — EVERY live `claude` session (gdn-batogo), not just RC ones. `{sessions:[{pid,name,cwd,ageSec,kind,attachable,url,ready}]}`, newest first. `kind:"rc"` = Guéridon-spawned (attachable, Open+End); `kind:"local"` = hand-started/foreign (read-only, e.g. a terminal session in `~`). `/proc`-scans `comm=="claude"`, cross-refs `rcSessions` by pid |
-| DELETE | `/launch/:folder` | **Future B (gated):** cleanly end an RC session — `handleRcExit` SIGTERMs it (claude's GracefulShutdown: SessionEnd hooks fire, JSONL flushed, resumable), SIGKILL fallback @ 8s. NOT a literal `/exit` keystroke |
+| GET | `/repos` | **Launcher (ungated, read-only):** lean launcher repo list — `listRepos`, git-commit-recency order, reads no sessions. `{repos:[{name,path,lastCommit}]}` |
+| POST | `/launch/:folder` | **Teams lane (gated on `GUERIDON_ENABLE_RC=1`, else 404):** spawn a `claude --remote-control` RC session; returns `{status, pid, folder, url, autoOpened, ready}` (the claude.ai attach URL, awaited up to 15s). `handleLaunch` passes `/open` as the initial prompt **only when the repo has `.bon`** (gdn-cumado conditional-`/open` — a context-less repo makes `/open` flail); `autoOpened` reflects that, `ready` is the JSONL-derived orientation status |
+| GET | `/rc` | **Teams lane (gated):** live RC sessions Guéridon spawned — `{sessions:[{folder,url,pid,spawnedAt,ready}]}`. `ready` (gdn-cumado) = false while the auto-`/open` turn runs. (The launcher now reads `/sessions`, not this; `/rc` stays for the RC-only contract + tests.) |
+| GET | `/sessions` | **Launcher (gated):** the launcher roster — EVERY live `claude` session (gdn-batogo), not just RC ones. `{sessions:[{pid,name,cwd,ageSec,kind,attachable,url,ready}]}`, newest first. `kind:"rc"` = Guéridon-spawned (attachable, Open+End); `kind:"local"` = hand-started/foreign (read-only, e.g. a terminal session in `~`). `/proc`-scans `comm=="claude"`, cross-refs `rcSessions` by pid |
+| DELETE | `/launch/:folder` | **Teams lane (gated):** cleanly end an RC session — `handleRcExit` SIGTERMs it (claude's GracefulShutdown: SessionEnd hooks fire, JSONL flushed, resumable), SIGKILL fallback @ 8s. NOT a literal `/exit` keystroke |
 
 **Key design:**
 - **SSE + POST:** EventSource for server→client events, fetch POST for client→server commands. Auto-reconnects, stateless transport.
@@ -126,26 +133,26 @@ The bridge is split across several modules in `server/`:
 - **Upload staging:** `POST /upload/:folder?stage=true` deposits files on disk and returns the manifest without injecting a prompt. The client stages deposits as pills below the textarea; on send, `buildDepositNoteClient()` composes deposit notes + user text as one prompt. Without `?stage=true` (share-sheet flow), upload auto-injects as before.
 - **`[guéridon:*]` prefix convention:** Bridge-injected messages use `[guéridon:system]`, `[guéridon:upload]` etc. StateBuilder detects these and marks as `synthetic: true` (rendered as system chips, prefix stripped). **Exception:** staged uploads contain a deposit note followed by user text — StateBuilder checks for text after the deposit suffix and keeps these as real user messages. The client's `renderUserBubble()` parses deposit notes into `📎 filename` references.
 - **Deposit note parity:** `buildDepositNoteClient()` in `client/render-utils.cjs` (single source of truth) must exactly match `buildDepositNote()` in `server/upload.ts`. The parity gate test in `upload.test.ts` imports the real client function. `renderUserBubble()` also parses this format — three places coupled to one template.
-- **`processAlive` field:** All `state` broadcasts include `processAlive: boolean`. The client uses `processAlive: false` to detect CC process exit (as opposed to idle between turns) — clears messages, opens switcher, same as the deliberate `/exit` path. Without this, stale messages lingered behind the switcher after natural CC exit.
+- **`processAlive` field:** All `state` broadcasts include `processAlive: boolean`. The client uses `processAlive: false` to detect CC process exit (as opposed to idle between turns) — clears messages and returns to the launcher, same as the deliberate `/exit` path. Without this, stale messages lingered after natural CC exit.
 
-### Future B — `--remote-control` launch path (flag-gated, LIVE in prod)
+### Teams lane — `claude --remote-control` (flag-gated, LIVE in prod)
 
-Additive path (gated on `GUERIDON_ENABLE_RC=1`; **LIVE in prod** — flag set in
-`/opt/.env` 2026-06-29) that spawns a claude.ai-attachable session instead of a `claude -p`
-pipe. Driving moves to claude.ai's native UI (Desktop via account-sync / iOS / web); gueridon
-keeps only the launch/notify/lifecycle front-half. Lives **alongside** the `-p` path —
-`spawnCC` and its billing modes are untouched. Full framing + the plan are in
-`.bon/understanding.md`. **Built + deployed + proven end-to-end:** the spawn path, URL capture,
-push, the **launcher UI** (`launch.html` at `/launch.html`), **clean End** (`DELETE /launch` →
+The **Teams lane** (gated on `GUERIDON_ENABLE_RC=1`; **LIVE in prod** — flag set in
+`/opt/.env` 2026-06-29) spawns a claude.ai-attachable session instead of a `claude -p`
+pipe. Driving moves to claude.ai's native UI (Desktop via account-sync / iOS / web); Guéridon
+keeps only the launch/notify/lifecycle front-half. It lives **alongside** the Vertex/`-p` lane —
+both are first-class, chosen at the launcher's two buttons (`gdn-deloce`); `spawnCC` and its
+billing modes are untouched. Full framing: `.bon/understanding.md` → **Billing lanes**.
+**Built + deployed + proven end-to-end:** the spawn path, URL capture,
+push, the **launcher UI** (`launch.html` at `/launch.html`; bare `/` redirects here), the
+**two-lane chooser** (`gdn-deloce` — Vertex | Teams buttons), **clean End** (`DELETE /launch` →
 SIGTERM graceful shutdown, SessionEnd hooks fire), **conditional auto-`/open`** + readiness
 spinner (`gdn-cumado`), the **live-sessions roster** (`gdn-batogo`), launch-notify gating
 (`gdn-nagepa`), and **endpoint tests** (`gdn-towiva`). The launcher's top section is a roster
 of EVERY live `claude` session (`GET /sessions`) — RC sessions Guéridon spawned are attachable
 (Open/End/orienting); hand-started/foreign sessions show read-only ("local · 44m"). Remaining:
 share-sheet→RC (`gdn-fuzeba`, paused — it'll pass the deposit as the initial prompt with
-`pushOnReady=true`). The streaming UI still serves at `/` and STAYS — it's the **Vertex lane**
-(two-lane decision 2026-06-30); `gdn-deloce` adds the Vertex/Teams chooser and `gdn-wimera`
-rewrites this file for two-lane (not deletion).
+`pushOnReady=true`).
 
 | Piece | Where | What |
 |------|-------|------|
@@ -269,18 +276,18 @@ Dynamic `import()` doesn't work with `.cjs` in an ESM project. `createRequire` i
 
 **Browser export:** Each file sets `window.Gdn = { ...window.Gdn, ...mod }`. The inline script destructures what it needs: `const { esc, trimText } = Gdn;`
 
-**Orchestrator wrappers:** The inline script defines thin wrappers (`refreshSendButton`, `refreshPlaceholder`, `refreshSwitcher`) that read mutable state (e.g., `liveState`, `sseCurrentFolder`, `stagedDeposits`) and pass it as explicit arguments to the extracted module functions. This avoids 5+ callers each computing the same state. Do NOT inline the module calls at each call site — use the wrappers.
+**Orchestrator wrappers:** The inline script defines thin wrappers (`refreshSendButton`, `refreshPlaceholder`) that read mutable state (e.g., `liveState`, `sseCurrentFolder`, `stagedDeposits`) and pass it as explicit arguments to the extracted module functions. This avoids 5+ callers each computing the same state. Do NOT inline the module calls at each call site — use the wrappers.
 
 | File | Exports |
 |------|---------|
 | `render-utils.cjs` | `esc`, `trimText`, `trimToolOutput`, `truncateThinking`, `buildDepositNoteClient`, `timeAgo`, `shortModel` |
 | `render-chips.cjs` | `renderChip`, `renderThinkingChip`, `renderLocalCommand`, `attachCopyButton` |
 | `render-messages.cjs` | `renderUserBubble`, `addCopyButtons`, `renderMessages` |
-| `render-chrome.cjs` | `renderStatusBar`, `renderSwitcher`, `updatePlaceholder`, `updateSendButton` |
+| `render-chrome.cjs` | `renderStatusBar`, `updatePlaceholder`, `updateSendButton` |
 | `render-overlays.cjs` | `showAskUserOverlay`, `hideAskUserOverlay`, `getSlashCommands`, `renderSlashList`, `openSlashSheet`, `showStagedError`, `renderStagedDeposits` |
 | `state-handlers.cjs` | `applyStateEvent`, `applyTextEvent`, `applyCurrentEvent` |
 
-**`state-handlers.cjs` — updates + effects pattern:** Unlike render modules (which receive state and write to DOM), state handlers are pure functions that return `{ updates, effects }`. `updates` are partial liveState fields to merge; `effects` are side-effect flags (`clearStreaming`, `openSwitcher`, `fetchFolders`, `pushNotify`, etc.) that the inline script acts on. This separation keeps the branching logic testable while leaving IO (DOM mutation, fetch, location.hash) in the inline script. `handleSSEState`, the `text` listener, and the `current` listener all follow this pattern. `exitSession` reuses `handleSSEState` with a synthetic `{ sessionEnded: true }` event.
+**`state-handlers.cjs` — updates + effects pattern:** Unlike render modules (which receive state and write to DOM), state handlers are pure functions that return `{ updates, effects }`. `updates` are partial liveState fields to merge; `effects` are side-effect flags (`clearStreaming`, `goHome`, `fetchFolders`, `pushNotify`, etc.) that the inline script acts on (`goHome` → navigate to the launcher; it replaced the old `openSwitcher` when the in-conversation switcher was retired, gdn-deloce). This separation keeps the branching logic testable while leaving IO (DOM mutation, fetch, location.hash) in the inline script. `handleSSEState`, the `text` listener, and the `current` listener all follow this pattern. `exitSession` reuses `handleSSEState` with a synthetic `{ sessionEnded: true }` event.
 
 ### Layout model — body-scroll
 
@@ -307,7 +314,7 @@ The document body scrolls (not a container element). This enables Safari Full Pa
 - Collapsible tool calls (consecutive successful calls coalesce)
 - Enter never submits (mobile newlines), submit is the button
 - Chunk-level updates (not token-level)
-- Session switcher: Now (active+paused) / Previous (closed with history) groups, fresh folders hidden unless searching. Per-folder session list with "+ New Session" at top. Swipe-down or tap handle to dismiss.
+- No in-conversation session switcher (retired in gdn-deloce). The launcher (`launch.html`) is the home/chooser: repo list by git-recency + a live roster of every `claude` session; pick a repo → two lane buttons (Vertex | Teams). The conversation page is single-session; leaving it (folder-lozenge tap, `/exit`, session end, or bare `/`) returns to the launcher.
 - Push notifications via service worker
 - Push-to-talk: long-press anywhere on the `.btn-bar` (folder + context lozenges) activates `SpeechRecognition`. Release stops and auto-sends with `[dictated]` prefix. Send button is tap-only. Folder lozenge pulses orange (accent) during dictation. iOS system mic sounds are not suppressible.
 - Turn-complete chime: 350Hz sine wave, gain 0.06, 300ms decay. Plays when `data-busy` transitions false. Uses shared `AudioContext` (created on first user gesture for Safari).
