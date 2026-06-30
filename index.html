@@ -17,16 +17,7 @@
 </head>
 <body>
 
-  <div class="switcher-backdrop" id="switcherBackdrop"></div>
-  <div class="switcher" id="switcher">
-    <div class="switcher-handle"></div>
-    <div class="switcher-header">
-      <span class="status-connection" id="switcherConnectionDot"></span>
-      <input class="switcher-search" id="switcherSearch" type="text" placeholder="Filter sessions…">
-      <button class="switcher-close" id="switcherClose" aria-label="Close">&#x2715;</button>
-    </div>
-    <div class="switcher-list" id="switcherList"></div>
-  </div>
+  <!-- session switcher retired (gdn-deloce) — the launcher (/launch.html) is the home/chooser -->
 
   <div class="ask-backdrop" id="askBackdrop"></div>
   <div class="ask-sheet" id="askSheet">
@@ -115,9 +106,6 @@ window.addEventListener('error', function(e) {
   window.addEventListener('unhandledrejection', (e) => reportError(String(e.reason), e.reason?.stack));
 }
 
-let cachedState = null;
-let switcherOpen = false;
-let switcherExpandedFolder = null; // folder name currently expanded in switcher
 
 // === Mode detection ===
 const params = new URLSearchParams(location.search);
@@ -262,7 +250,6 @@ let liveState = {
   messages: [],
   connection: 'disconnected',
   status: 'idle',
-  switcher: null,
   _activity: null,
 };
 
@@ -329,7 +316,7 @@ function sseConnect() {
       liveState.connection = 'loading';
       ssePostSession(location.hash.slice(1));
     } else {
-      liveState.connection = 'connected';
+      goHome();
     }
     sseRender();
   });
@@ -423,42 +410,20 @@ function sseResetWatchdog() {
   }, SSE_WATCHDOG_MS);
 }
 
-function mapFolderState(state) {
-  if (state === 'active' || state === 'paused') return 'now';
-  if (state === 'closed') return 'previous';
-  return 'fresh';
+// The launcher (/launch.html) is the home/chooser now (gdn-deloce). This only does
+// entry routing: resolve the folder named in the hash and connect; with no folder, go home.
+function goHome() {
+  location.href = '/launch.html';
 }
 
 function handleSSEFolders(folders) {
-  liveState.switcher = {
-    sessions: folders.map(f => ({
-      id: f.path || f.name,
-      project: f.name,
-      status: mapFolderState(f.state),
-      backendState: f.state,
-      humanSessionCount: f.humanSessionCount || 0,
-      updated: f.lastActive,
-      last_message: f.handoffPurpose || '',
-      context_pct: f.contextPct || 0,
-      sessions: f.sessions || [],
-    })),
-  };
-
-  // Auto-connect: hash, first active, or open switcher
-  if (!sseCurrentFolder) {
-    let target = null;
-    if (location.hash.length > 1) {
-      const hashName = location.hash.slice(1);
-      target = folders.find(f => f.name === hashName || f.path === hashName);
-    }
-    if (!target) target = folders.find(f => f.state === 'active');
-    if (target) {
-      sseConnectFolder(target);
-    } else {
-      switcherOpen = true;
-    }
+  if (sseCurrentFolder) return; // already in a session — nothing to route
+  if (location.hash.length > 1) {
+    const hashName = location.hash.slice(1);
+    const target = folders.find(f => f.name === hashName || f.path === hashName);
+    if (target) { sseConnectFolder(target); return; }
   }
-  sseRender();
+  goHome();
 }
 
 function handleSSEState(data) {
@@ -484,7 +449,7 @@ function handleSSEState(data) {
   if (effects.pushNotify) pushNotify(effects.pushNotify.title, effects.pushNotify.opts);
   if (effects.clearFolder) sseCurrentFolder = null;
   if (effects.clearHash) location.hash = '';
-  if (effects.openSwitcher) switcherOpen = true;
+  if (effects.goHome) goHome();
   if (effects.fetchFolders) {
     fetch(bridgeUrl + '/folders')
       .then(r => r.json())
@@ -616,7 +581,6 @@ function sseRender() {
   sseRenderQueued = true;
   requestAnimationFrame(() => {
     sseRenderQueued = false;
-    cachedState = liveState;
     renderStatusBar(liveState, chromeEls);
     // Auto-scroll if user is near the bottom (within 150px).
     // Replaces scroll-snap which fought iOS keyboard animation.
@@ -644,7 +608,6 @@ function sseRender() {
     if (wasNearBottom) {
       window.scrollTo({ top: document.body.scrollHeight });
     }
-    refreshSwitcher();
     refreshSendButton();
     // Show action buttons when any folder is connected (local commands always available)
     const hasFolder = !!sseCurrentFolder;
@@ -695,7 +658,7 @@ if (bridgeUrl) {
 const { esc, trimText, trimToolOutput, truncateThinking, buildDepositNoteClient, THINKING_TRUNCATE,
         renderChip, renderThinkingChip, renderLocalCommand, attachCopyButton,
         addCopyButtons, renderUserBubble, renderMessages,
-        renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton,
+        renderStatusBar, updatePlaceholder, updateSendButton,
         showAskUserOverlay, hideAskUserOverlay,
         getSlashCommands, renderSlashList, openSlashSheet,
         showStagedError: _showStagedError, renderStagedDeposits: _renderStagedDeposits,
@@ -706,13 +669,6 @@ const chromeEls = {
   project: document.getElementById('project'),
   contextPct: document.getElementById('contextPct'),
   contextBtn: document.getElementById('contextBtn'),
-  connectionDot: document.getElementById('switcherConnectionDot'),
-  body: document.body,
-};
-const switcherEls = {
-  switcher: document.getElementById('switcher'),
-  list: document.getElementById('switcherList'),
-  backdrop: document.getElementById('switcherBackdrop'),
   body: document.body,
 };
 const askEls = {
@@ -756,119 +712,10 @@ marked.use({ gfm: true, breaks: false, renderer: {
 }});
 
 
-// renderStatusBar, renderSwitcher, updatePlaceholder, updateSendButton now in /render-chrome.js
+// renderStatusBar, updatePlaceholder, updateSendButton now in /render-chrome.js
 
-function refreshSwitcher() {
-  renderSwitcher(cachedState || liveState, {
-    switcherOpen,
-    currentFolder: sseCurrentFolder,
-    expandedFolder: switcherExpandedFolder,
-    filter: document.getElementById('switcherSearch').value.trim().toLowerCase(),
-    els: switcherEls,
-    onConnect: (folder, sessionId) => {
-      if (!bridgeUrl) return;
-      sseConnectFolder(folder, sessionId);
-      closeSwitcher();
-    },
-    onExpand: (folder) => {
-      switcherExpandedFolder = folder;
-      refreshSwitcher();
-    },
-    onCreate: (name) => {
-      if (!bridgeUrl) return;
-      fetch(bridgeUrl + '/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(name ? { name } : {}),
-      })
-        .then(r => { if (!r.ok) return r.json().then(e => Promise.reject(e)); return r.json(); })
-        .then(d => {
-          sseConnectFolder({ name: d.name, path: d.path });
-          closeSwitcher();
-        })
-        .catch(e => alert(e.error || 'Failed to create folder'));
-    },
-  });
-}
-
-// Bridge mode renders via its own event handlers — no render() call needed.
-
-function closeSwitcher() {
-  switcherOpen = false;
-  document.getElementById('switcher').dataset.open = 'false';
-  document.getElementById('switcherBackdrop').dataset.open = 'false';
-  document.getElementById('switcherSearch').value = '';
-  delete document.body.dataset.switcherOpen;
-}
-
-// Switcher: open/close uses client-side state, search re-filters without refetching
-document.getElementById('switcherClose').addEventListener('click', closeSwitcher);
-document.getElementById('switcherBackdrop').addEventListener('click', closeSwitcher);
-
-// Swipe-down-to-dismiss on switcher (handle + header area)
-{
-  const switcherEl = document.getElementById('switcher');
-  let swipeStartY = null;
-  let swipeStartTranslate = 0;
-  const handleEl = switcherEl.querySelector('.switcher-handle');
-  const headerEl = switcherEl.querySelector('.switcher-header');
-
-  // Tap handle to dismiss
-  handleEl.addEventListener('click', closeSwitcher);
-
-  // Swipe from handle or header area
-  for (const el of [handleEl, headerEl]) {
-    el.addEventListener('touchstart', (e) => {
-      swipeStartY = e.touches[0].clientY;
-      swipeStartTranslate = 0;
-      switcherEl.style.transition = 'none';
-    }, { passive: true });
-
-    el.addEventListener('touchmove', (e) => {
-      if (swipeStartY === null) return;
-      const dy = e.touches[0].clientY - swipeStartY;
-      if (dy > 0) {
-        swipeStartTranslate = dy;
-        switcherEl.style.transform = `translateY(${dy}px)`;
-      }
-    }, { passive: true });
-
-    el.addEventListener('touchend', () => {
-      switcherEl.style.transition = '';
-      if (swipeStartTranslate > 80) {
-        // Animate to bottom, then close state after transition
-        switcherEl.style.transform = 'translateY(100%)';
-        closeSwitcher();
-        setTimeout(() => { switcherEl.style.transform = ''; }, 300);
-      } else {
-        switcherEl.style.transform = '';
-      }
-      swipeStartY = null;
-    });
-  }
-
-  // Tap empty space below list items dismisses (the switcher itself, not just backdrop)
-  document.getElementById('switcherList').addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) closeSwitcher();
-  });
-}
-
-document.getElementById('switcherSearch').addEventListener('input', () => {
-  if (cachedState) refreshSwitcher();
-});
-
-// Folder lozenge: tap opens session switcher
-document.getElementById('folderBtn').addEventListener('click', () => {
-  switcherOpen = true;
-  switcherExpandedFolder = null;
-  if (bridgeUrl) {
-    fetch(bridgeUrl + '/folders')
-      .then(r => r.json())
-      .then(d => { if (d.folders) handleSSEFolders(d.folders); })
-      .catch(() => {});
-  }
-  if (cachedState) refreshSwitcher();
-});
+// Folder lozenge: tap returns to the launcher (home).
+document.getElementById('folderBtn').addEventListener('click', goHome);
 
 // Context lozenge: tap when amber/red offers exit, long-press always offers exit
 // PTT excludes context lozenge, so no conflict.
@@ -1217,7 +1064,7 @@ function ensureAudioCtx() {
 // === Voice input — hold btn-bar to dictate ===
 // Hold anywhere on the bar (folder/context lozenges) = dictate, release = stop + auto-send.
 // Send button is tap-only (no hold overload). Individual button taps still work
-// (folder opens switcher, context shows exit) because PTT only activates after 300ms.
+// (folder returns to the launcher, context shows exit) because PTT only activates after 300ms.
 //
 // Key insight: recognition.stop() is async. After calling it, onresult
 // keeps firing with final results. We must wait for onend before sending,

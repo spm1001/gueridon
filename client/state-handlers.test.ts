@@ -103,7 +103,7 @@ describe("applyStateEvent — normal snapshot", () => {
 
   it("does not trigger side effects on normal snapshot", () => {
     const { effects } = applyStateEvent({ status: "working", messages: [] }, ctx());
-    expect(effects.openSwitcher).toBe(false);
+    expect(effects.goHome).toBe(false);
     expect(effects.clearFolder).toBe(false);
     expect(effects.clearHash).toBe(false);
     expect(effects.fetchFolders).toBe(false);
@@ -135,9 +135,9 @@ describe("applyStateEvent — processAlive=false", () => {
     expect(effects.clearFolder).toBe(false);
   });
 
-  it("does NOT open switcher", () => {
+  it("does NOT go home", () => {
     const { effects } = applyStateEvent({ processAlive: false }, ctx());
-    expect(effects.openSwitcher).toBe(false);
+    expect(effects.goHome).toBe(false);
   });
 
   it("does NOT clear hash", () => {
@@ -167,7 +167,7 @@ describe("applyStateEvent — processAlive=false", () => {
     // sessionEnded takes precedence — processAlive guard checks !data.sessionEnded
     const { effects } = applyStateEvent({ processAlive: false, sessionEnded: true }, ctx());
     // sessionEnded branch fires instead
-    expect(effects.openSwitcher).toBe(true);
+    expect(effects.goHome).toBe(true);
     expect(effects.clearFolder).toBe(true);
   });
 });
@@ -216,9 +216,9 @@ describe("applyStateEvent — sessionEnded", () => {
     expect(effects.clearHash).toBe(true);
   });
 
-  it("opens switcher", () => {
+  it("goes home", () => {
     const { effects } = applyStateEvent({ sessionEnded: true }, ctx());
-    expect(effects.openSwitcher).toBe(true);
+    expect(effects.goHome).toBe(true);
   });
 
   it("fetches folders", () => {
@@ -228,7 +228,7 @@ describe("applyStateEvent — sessionEnded", () => {
 
   it("is a no-op when no currentFolder", () => {
     const { effects } = applyStateEvent({ sessionEnded: true }, ctx({ currentFolder: null }));
-    expect(effects.openSwitcher).toBe(false);
+    expect(effects.goHome).toBe(false);
     expect(effects.clearFolder).toBe(false);
     expect(effects.fetchFolders).toBe(false);
   });
@@ -244,7 +244,7 @@ describe("applyStateEvent — sessionEnded", () => {
     const { effects } = applyStateEvent({ sessionEnded: true, status: "idle" }, ctx());
     // Idle notification fires (before sessionEnded nuke), matching original ordering
     expect(effects.pushNotify).not.toBeNull();
-    expect(effects.openSwitcher).toBe(true);
+    expect(effects.goHome).toBe(true);
   });
 });
 

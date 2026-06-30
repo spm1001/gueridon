@@ -119,75 +119,6 @@
     { name: "/close", description: "End-of-session ritual", local: false },
   ];
 
-  // --- Switcher sessions ---
-
-  const SWITCHER_SESSIONS = [
-    {
-      project: "gueridon",
-      id: "/home/user/Repos/gueridon",
-      status: "now",
-      backendState: "active",
-      context_pct: 45,
-      humanSessionCount: 1,
-      updated: new Date(Date.now() - 5 * 60_000).toISOString(),
-      last_message: "CSS-first layout migration",
-      sessions: [
-        { id: "c5c1fbfa-6608-4f73-a437-23a13b4217a5", lastActive: new Date(Date.now() - 5 * 60_000).toISOString(), contextPct: 45, model: "claude-opus-4-6", closed: false, humanInteraction: true },
-      ],
-    },
-    {
-      project: "bon",
-      id: "/home/user/Repos/bon",
-      status: "now",
-      backendState: "paused",
-      context_pct: 72,
-      humanSessionCount: 2,
-      updated: new Date(Date.now() - 25 * 60_000).toISOString(),
-      last_message: "Tactical step persistence",
-      sessions: [
-        { id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", lastActive: new Date(Date.now() - 25 * 60_000).toISOString(), contextPct: 72, model: "claude-opus-4-6", closed: false, humanInteraction: true },
-        { id: "f9e8d7c6-b5a4-3210-fedc-ba0987654321", lastActive: new Date(Date.now() - 3_600_000).toISOString(), contextPct: 95, model: "claude-sonnet-4-5-20250514", closed: true, humanInteraction: true },
-      ],
-    },
-    {
-      project: "trousse",
-      id: "/home/user/Repos/trousse",
-      status: "previous",
-      backendState: "closed",
-      context_pct: 88,
-      humanSessionCount: 1,
-      updated: new Date(Date.now() - 7_200_000).toISOString(),
-      last_message: "Skill-forge validation",
-      sessions: [
-        { id: "11223344-5566-7788-99aa-bbccddeeff00", lastActive: new Date(Date.now() - 7_200_000).toISOString(), contextPct: 88, model: "claude-opus-4-6", closed: true, humanInteraction: true },
-      ],
-    },
-    {
-      project: "passe",
-      id: "/home/user/Repos/passe",
-      status: "previous",
-      backendState: "closed",
-      context_pct: 30,
-      humanSessionCount: 1,
-      updated: new Date(Date.now() - 86_400_000).toISOString(),
-      last_message: "CDP screenshot pipeline",
-      sessions: [
-        { id: "aabbccdd-eeff-0011-2233-445566778899", lastActive: new Date(Date.now() - 86_400_000).toISOString(), contextPct: 30, model: "claude-sonnet-4-5-20250514", closed: true, humanInteraction: true },
-      ],
-    },
-    {
-      project: "dotfiles",
-      id: "/home/user/Repos/dotfiles",
-      status: "fresh",
-      backendState: "fresh",
-      context_pct: 0,
-      humanSessionCount: 0,
-      updated: null,
-      last_message: null,
-      sessions: [],
-    },
-  ];
-
   // --- Session state (for renderStatusBar) ---
 
   const SESSION_IDLE = {
@@ -337,9 +268,6 @@
 
     // Slash commands
     SLASH_COMMANDS,
-
-    // Switcher
-    SWITCHER_SESSIONS,
 
     // Session states
     SESSION_IDLE,

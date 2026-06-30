@@ -113,6 +113,9 @@
   }
   .launch.idle { background: var(--text-dim); color: var(--bg); pointer-events: none; }
   .launch.busy { background: var(--text-dim); color: var(--bg); pointer-events: none; }
+  /* Two lane buttons side by side — Vertex (Guéridon UI) | Teams (claude.ai). */
+  .lanes { display: flex; gap: 0.6rem; }
+  .lane { flex: 1; }
   .note { color: var(--text-dim); font-size: 0.78rem; text-align: center; margin-top: 0.5rem; min-height: 1.1em; }
   .note.warn { color: var(--amber, #fbbf24); }
 </style>
@@ -132,8 +135,11 @@
 <div class="repos" id="repos"><div class="empty">Loading repos…</div></div>
 
 <footer>
-  <a class="launch idle" id="launch" role="button">Pick a repo</a>
-  <div class="note" id="note">Drive it in the Claude app or the web.</div>
+  <div class="lanes">
+    <a class="launch lane idle" id="launchVertex" role="button">Vertex</a>
+    <a class="launch lane idle" id="launchTeams" role="button">Teams</a>
+  </div>
+  <div class="note" id="note">Pick a repo.</div>
 </footer>
 
 <script>
@@ -142,7 +148,8 @@
 
   const $repos = document.getElementById("repos");
   const $filter = document.getElementById("filter");
-  const $launch = document.getElementById("launch");
+  const $launchVertex = document.getElementById("launchVertex");
+  const $launchTeams = document.getElementById("launchTeams");
   const $note = document.getElementById("note");
   const $running = document.getElementById("running");
   const $runningList = document.getElementById("running-list");
@@ -264,12 +271,25 @@
     renderRepos();
   }
 
+  function setLane(btn, label, handler) {
+    btn.className = handler ? "launch lane" : "launch lane idle";
+    btn.textContent = label;
+    btn.removeAttribute("href");
+    btn.onclick = handler;
+  }
+
   function resetButton() {
-    $launch.className = selected ? "launch" : "launch idle";
-    $launch.textContent = selected ? "Launch " + selected : "Pick a repo";
-    $launch.removeAttribute("href");
-    $launch.onclick = selected ? launch : null;
-    setNote("Drive it in the Claude app or the web.");
+    setLane($launchVertex, "Vertex", selected ? launchVertex : null);
+    setLane($launchTeams, "Teams", selected ? launch : null);
+    setNote(selected ? "Vertex → Guéridon UI · Teams → Claude app" : "Pick a repo.");
+  }
+
+  // Vertex lane: drop straight into Guéridon's streaming conversation for this folder.
+  // The conversation page auto-connects from location.hash on load.
+  function launchVertex(e) {
+    if (e) e.preventDefault();
+    if (!selected) return;
+    location.href = "/#" + encodeURIComponent(selected);
   }
 
   async function loadRepos() {
@@ -286,9 +306,10 @@
     if (e) e.preventDefault();
     if (!selected) return;
     const folder = selected;
-    $launch.className = "launch busy";
-    $launch.onclick = null;
-    $launch.textContent = "Starting " + folder + "…";
+    $launchVertex.className = "launch lane idle"; $launchVertex.onclick = null; // dim Vertex during a Teams launch
+    $launchTeams.className = "launch lane busy";
+    $launchTeams.onclick = null;
+    $launchTeams.textContent = "Starting " + folder + "…";
     setNote("Spawning a session…");
     try {
       const r = await fetch("/launch/" + encodeURIComponent(folder), { method: "POST" });
@@ -303,10 +324,10 @@
         if (data.autoOpened && !data.ready) {
           // /open is running — spin until the session reports ready (with a timeout,
           // since /open latency is unbounded: a good run is ~1m45s, gdn-cumado).
-          $launch.className = "launch busy";
-          $launch.onclick = null;
-          $launch.removeAttribute("href");
-          $launch.textContent = "Orienting " + folder + "…";
+          $launchTeams.className = "launch lane busy";
+          $launchTeams.onclick = null;
+          $launchTeams.removeAttribute("href");
+          $launchTeams.textContent = "Orienting " + folder + "…";
           setNote("Running /open so the session arrives oriented…");
           pollReady(folder, data.url);
         } else {
@@ -325,10 +346,10 @@
   // Flip the launch button into a real <a href>: the tap navigates to claude.ai/code
   // (the web driving surface). tookAWhile = orientation hit the timeout, open anyway.
   function presentOpen(folder, url, tookAWhile) {
-    $launch.className = "launch";
-    $launch.textContent = "Open " + folder + " in Claude →";
-    $launch.onclick = null;
-    $launch.setAttribute("href", url);
+    $launchTeams.className = "launch lane";
+    $launchTeams.textContent = "Open " + folder + " in Claude →";
+    $launchTeams.onclick = null;
+    $launchTeams.setAttribute("href", url);
     setNote(
       tookAWhile
         ? "Still orienting — open anyway, /open will catch up."

@@ -50,7 +50,7 @@ const EXPECTED_EXPORTS: Record<string, string[]> = {
     "renderUserBubble", "addCopyButtons", "renderMessages", "truncateAutolinks",
   ],
   "render-chrome": [
-    "renderStatusBar", "renderSwitcher", "updatePlaceholder", "updateSendButton",
+    "renderStatusBar", "updatePlaceholder", "updateSendButton",
   ],
   "render-overlays": [
     "showAskUserOverlay", "hideAskUserOverlay", "getSlashCommands",

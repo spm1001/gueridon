@@ -28,7 +28,7 @@ function applyStateEvent(data, ctx) {
   };
   const effects = {
     clearStreaming: true,
-    openSwitcher: false,
+    goHome: false,
     clearFolder: false,
     clearHash: false,
     fetchFolders: false,
@@ -70,7 +70,7 @@ function applyStateEvent(data, ctx) {
     updates.slashCommands = null;
     effects.clearFolder = true;
     effects.clearHash = true;
-    effects.openSwitcher = true;
+    effects.goHome = true;
     effects.fetchFolders = true;
   }
 
