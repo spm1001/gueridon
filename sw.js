@@ -82,11 +82,20 @@ self.addEventListener("push", (event) => {
     icon: "/icon-192.svg",
     badge: "/icon-192.svg",
     tag: data.tag || "gueridon-default",
-    renotify: true,
+    // No renotify: a same-tag notification replaces silently instead of
+    // re-buzzing — the "same notification again" annoyance (2026-07-06).
     data: { folder: data.folder || "", url: data.url || "" },
     vibrate: data.vibrate || [200],
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    // If the user is LOOKING at gueridon in this context, skip the banner.
+    // iOS holds a push banner for a focused web app and re-delivers it on
+    // backgrounding — which reads as a phantom repeat notification. The SSE
+    // stream already shows them everything while the app is visible.
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (wins.some((c) => c.visibilityState === "visible")) return;
+    await self.registration.showNotification(title, options);
+  })());
 });
 
 self.addEventListener("notificationclick", (event) => {
