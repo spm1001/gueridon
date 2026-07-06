@@ -64,7 +64,7 @@
 // a broken module chain produces a silently dead page (gdn-lemega).
 window.__gdnErrors = [];
 window.addEventListener('error', function(e) {
-  window.__gdnErrors.push(e.message + (e.filename ? ' @ ' + e.filename + ':' + e.lineno : ''));
+  window.__gdnErrors.push(e.message + (e.filename ? ' @ ' + e.filename + ':' + e.lineno + ':' + (e.colno || 0) : '') + (e.error && e.error.stack ? '\n  stack: ' + String(e.error.stack).slice(0, 500) : '') + ' [ua: ' + navigator.userAgent.slice(-60) + ']');
   var d = document.getElementById('__gdnErrorBanner');
   if (!d) {
     d = document.createElement('pre');
