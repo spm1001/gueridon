@@ -11,19 +11,38 @@ client's problem (see docs/kube-brain-mac-body.md).
 
 ## Portfolio status (2026-06-29 audit)
 
-Parked-but-useful per Sameer; deployed and healthy on hezza (systemd service,
-6+ days uptime, NRestarts=0, ~4 warn-lines in 6 days). The kube-era Tailscale
-actions (popucu, kikowe) were closed in the 2026-06-17 review. Open items:
-gdn-cabicu (permission-denied surfacing) + gdn-vigifo (its UI card, blocked on
-CC #20264 subagent-permission propagation), gdn-howibu (mockup snapshots, child
-fadeti), gdn-muluwo (askuser context, standalone), gdn-jevico (bridge restart
-vs other sessions' subagents), gdn-gafode (iOS Shortcut), gdn-rosara (Vertex
-contamination — see Substrate watch). **Filed 2026-06-29 from the audit:**
-gdn-kuciku (ask_user event missing folder key → cross-session leak), gdn-mupito
-(idle clientless sessions never reaped without a restart — the root cause of
-the 3.7-day vivid-vale orphan, since reaped via /exit), gdn-hodoco (live gauge
-still cold-starts 200k for [1m] models — half of the 06-11 gauge fix),
-gdn-higido (refresh CLAUDE.md), gdn-hocede (the /rc strategic spike).
+Parked-but-useful per Sameer; deployed and healthy — **moved hezza → tube
+2026-07-06** (iw-numeho estate migration; phone URL now
+`https://tube.atlas-cloud.ts.net`). **Deploy wrinkle found 2026-07-07:**
+`/opt/gueridon` on tube is a plain rsync'd copy, NOT a git checkout — content
+matches dev @ 1097d3e, but CLAUDE.md's deploy step 2 (`git pull` in /opt)
+cannot work until /opt is re-cloned. The 07-06 cutover restart also killed a
+live phone session (KillMode=control-group) → gdn-bumido filed. **2026-07-07 board triage (Sameer + Claude, full-brief re-read): 13 open → 9,
+all bite.** CUT with recorded close-notes (read them before re-filing anything
+similar): gdn-vigifo (permission card — lockdown posture abandoned), gdn-jevico
+(warn-before-deploy — folded into deploy discipline + bumido note), gdn-mupito
+(idle reaping — motivations self-eroded), the whole share-sheet cluster
+gdn-gafode/gdn-fuzeba/gdn-sureje (revealed preference: Shortcut broken since
+Feb, unmissed; Sameer's own page→markdown iOS Shortcut covers the need),
+gdn-howibu/gdn-fadeti (mockup outcome closed achieved-in-substance, snapshot
+tests veiled), gdn-bumido (KillMode stays control-group; deploy discipline =
+enumerate live sessions before restart; /opt re-clone extracted to gdn-pawoso).
+OPEN: **gdn-vagori** — the new-role outcome (launcher as the estate's mobile
+switchboard, claude-agents flick feel): gdn-riheri (own Vertex `-p` sessions
+classified attachable in the roster — today they render kind:local read-only),
+gdn-hevuri (roster never refreshes — no interval/visibilitychange, stale on
+Safari tab-resurrect), gdn-heroso (resumable-but-idle conversations in the
+roster — verify-first fork, only if missing-feeling persists). Standalone:
+gdn-harili (.env template — verified gap: live .env 6 keys, .env.example 3),
+gdn-pawoso (/opt re-clone), gdn-muluwo (AskUser chips), gdn-hodoco (1M gauge),
+gdn-lometu (MCP probe).
+
+**2026-07-07 same night: bridge restarted for the new LLM creds** — dotfiles
+c185f9a repointed Vertex billing; the 04:00-booted bridge still carried the old
+project. Restart verified: bridge env now `ANTHROPIC_VERTEX_PROJECT_ID=
+itv-mit-llm-sameer`. (Restart was checked safe first: /status showed zero
+sessions/clients, and this CC session confirmed itself a terminal child, not a
+bridge child.)
 
 **AskUserQuestion crash fixed 2026-06-29.** The overlay crashed on mobile
 (`questions.forEach is not a function`) when the model emitted the tool input
