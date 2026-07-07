@@ -44,6 +44,7 @@ import {
   extractLastToolCall,
   buildSessionRoster,
   type RcRosterInfo,
+  type VertexRosterInfo,
   shouldSendEvent,
   STATIC_FILES,
   CSP,
@@ -1677,9 +1678,16 @@ const server = createServer((req, res) => {
         ready: rc.autoPrompted ? await isRcSessionReady(rc.folder, rc.spawnedAt) : true,
       });
     }
-    const sessions = buildSessionRoster(procs, rcByPid, SCAN_ROOT, homedir());
+    // Guéridon's own streaming-lane sessions, attachable at /#folder (gdn-riheri). The
+    // exitCode guard keeps a recycled pid from misclassifying a foreign process.
+    const vertexByPid = new Map<number, VertexRosterInfo>();
+    for (const s of sessions.values()) {
+      const pid = s.process?.pid;
+      if (pid && s.process!.exitCode === null) vertexByPid.set(pid, { folderName: s.folderName });
+    }
+    const roster = buildSessionRoster(procs, rcByPid, vertexByPid, SCAN_ROOT, homedir());
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ sessions }));
+    res.end(JSON.stringify({ sessions: roster }));
     return;
   }
 

@@ -22,6 +22,7 @@ import {
   buildSessionRoster,
   sessionDisplayName,
   type RcRosterInfo,
+  type VertexRosterInfo,
   formatToolCallSummary,
   shouldSendEvent,
   HANDOFF_STALE_THRESHOLD_MS,
@@ -1744,13 +1745,15 @@ describe("sessionDisplayName", () => {
 describe("buildSessionRoster", () => {
   const ROOT = "/home/modha/repos";
   const HOME = "/home/modha";
+  const NO_RC = new Map<number, RcRosterInfo>();
+  const NO_VX = new Map<number, VertexRosterInfo>();
 
   it("marks an RC session attachable with its url/ready/folderName", () => {
     const rcByPid = new Map<number, RcRosterInfo>([
       [100, { folderName: "spm1001/glaneur", url: "https://claude.ai/code/session_X", ready: false }],
     ]);
     const [e] = buildSessionRoster(
-      [{ pid: 100, cwd: "/home/modha/repos/spm1001/glaneur", ageSec: 5 }], rcByPid, ROOT, HOME);
+      [{ pid: 100, cwd: "/home/modha/repos/spm1001/glaneur", ageSec: 5 }], rcByPid, NO_VX, ROOT, HOME);
     expect(e).toMatchObject({
       pid: 100, name: "spm1001/glaneur", kind: "rc", attachable: true,
       url: "https://claude.ai/code/session_X", ready: false,
@@ -1759,10 +1762,38 @@ describe("buildSessionRoster", () => {
 
   it("marks a hand-started session local, read-only, named from its cwd", () => {
     const [e] = buildSessionRoster(
-      [{ pid: 200, cwd: "/home/modha", ageSec: 9 }], new Map(), ROOT, HOME);
+      [{ pid: 200, cwd: "/home/modha", ageSec: 9 }], NO_RC, NO_VX, ROOT, HOME);
     expect(e).toMatchObject({
       pid: 200, name: "~", kind: "local", attachable: false, url: null, ready: true,
     });
+  });
+
+  it("marks a Guéridon vertex (-p) session attachable at its RAW hash route (gdn-riheri)", () => {
+    const vertexByPid = new Map<number, VertexRosterInfo>([
+      [300, { folderName: "spm1001/mary-bujournal" }],
+    ]);
+    const [e] = buildSessionRoster(
+      [{ pid: 300, cwd: "/home/modha/repos/spm1001/mary-bujournal", ageSec: 12 }],
+      NO_RC, vertexByPid, ROOT, HOME);
+    expect(e).toMatchObject({
+      pid: 300, name: "spm1001/mary-bujournal", kind: "vertex", attachable: true,
+      url: "/#spm1001/mary-bujournal", ready: true,
+    });
+    // The hash↔folder match is a routing contract: the slash must survive un-encoded.
+    expect(e.url).not.toContain("%2F");
+  });
+
+  it("rc wins over vertex if a pid somehow appears in both registries", () => {
+    const rcByPid = new Map<number, RcRosterInfo>([
+      [7, { folderName: "spm1001/infra", url: "https://claude.ai/code/session_Z", ready: true }],
+    ]);
+    const vertexByPid = new Map<number, VertexRosterInfo>([
+      [7, { folderName: "spm1001/infra" }],
+    ]);
+    const [e] = buildSessionRoster(
+      [{ pid: 7, cwd: "/home/modha/repos/spm1001/infra", ageSec: 3 }],
+      rcByPid, vertexByPid, ROOT, HOME);
+    expect(e.kind).toBe("rc");
   });
 
   it("sorts newest first (smallest ageSec)", () => {
@@ -1770,21 +1801,27 @@ describe("buildSessionRoster", () => {
       { pid: 1, cwd: "/home/modha/a", ageSec: 300 },
       { pid: 2, cwd: "/home/modha/b", ageSec: 10 },
       { pid: 3, cwd: "/home/modha/c", ageSec: 120 },
-    ], new Map(), ROOT, HOME);
+    ], NO_RC, NO_VX, ROOT, HOME);
     expect(roster.map((r) => r.pid)).toEqual([2, 3, 1]);
   });
 
-  it("classifies a mixed roster (RC + foreign) correctly", () => {
+  it("classifies a mixed roster (RC + vertex + foreign) correctly", () => {
     const rcByPid = new Map<number, RcRosterInfo>([
       [2, { folderName: "spm1001/gueridon", url: "https://claude.ai/code/session_Y", ready: true }],
+    ]);
+    const vertexByPid = new Map<number, VertexRosterInfo>([
+      [3, { folderName: "spm1001/notes" }],
     ]);
     const roster = buildSessionRoster([
       { pid: 1, cwd: "/home/modha", ageSec: 50 },
       { pid: 2, cwd: "/home/modha/repos/spm1001/gueridon", ageSec: 5 },
-    ], rcByPid, ROOT, HOME);
+      { pid: 3, cwd: "/home/modha/repos/spm1001/notes", ageSec: 20 },
+    ], rcByPid, vertexByPid, ROOT, HOME);
     expect(roster.find((r) => r.pid === 1)?.kind).toBe("local");
     expect(roster.find((r) => r.pid === 2)?.kind).toBe("rc");
     expect(roster.find((r) => r.pid === 2)?.attachable).toBe(true);
+    expect(roster.find((r) => r.pid === 3)?.kind).toBe("vertex");
+    expect(roster.find((r) => r.pid === 3)?.url).toBe("/#spm1001/notes");
   });
 });
 

@@ -811,11 +811,11 @@ export function isSessionReadyFromTail(jsonlContent: string): boolean {
 
 export interface RosterEntry {
   pid: number;
-  name: string;        // display name (folderName for RC, cwd-derived for foreign)
+  name: string;        // display name (folderName for RC/vertex, cwd-derived for foreign)
   cwd: string;
   ageSec: number;
-  kind: "rc" | "local";
-  attachable: boolean; // true only for Guéridon-spawned RC sessions (have a claude.ai URL)
+  kind: "rc" | "vertex" | "local";
+  attachable: boolean; // true for Guéridon-spawned sessions: rc (claude.ai URL) and vertex (/#folder)
   url: string | null;
   ready: boolean;
 }
@@ -825,6 +825,11 @@ export interface RcRosterInfo {
   folderName: string;
   url: string | null;
   ready: boolean;
+}
+
+/** What the roster needs to know about a Vertex `-p` session, keyed by pid (gdn-riheri). */
+export interface VertexRosterInfo {
+  folderName: string;
 }
 
 /**
@@ -840,16 +845,21 @@ export function sessionDisplayName(cwd: string, scanRoot: string, homeDir: strin
 }
 
 /**
- * Build the launcher's live-sessions roster from a /proc scan + the RC registry (gdn-batogo).
+ * Build the launcher's live-sessions roster from a /proc scan + the RC registry (gdn-batogo)
+ * + the Vertex `-p` session registry (gdn-riheri).
  *
  * A process whose pid is in `rcByPid` is a Guéridon-spawned RC session — attachable, carrying
- * its claude.ai URL and ready flag, shown under its routing folderName. Every other live
- * `claude` process is a hand-started / foreign session: read-only ("local"), never attachable
- * (Guéridon has no pty handle to drive it). Sorted newest-first (smallest ageSec).
+ * its claude.ai URL and ready flag, shown under its routing folderName. A pid in `vertexByPid`
+ * is Guéridon's own streaming-lane session — attachable via its conversation page. The url is
+ * the RAW hash route ("/#" + folderName, slash intact): the hash↔folder match is a routing
+ * contract and must never be percent-encoded. Every other live `claude` process is a
+ * hand-started / foreign session: read-only ("local"), never attachable (Guéridon has no pty
+ * handle to drive it). Sorted newest-first (smallest ageSec).
  */
 export function buildSessionRoster(
   procs: { pid: number; cwd: string; ageSec: number }[],
   rcByPid: Map<number, RcRosterInfo>,
+  vertexByPid: Map<number, VertexRosterInfo>,
   scanRoot: string,
   homeDir: string,
 ): RosterEntry[] {
@@ -858,12 +868,19 @@ export function buildSessionRoster(
     if (rc) {
       return {
         pid: p.pid, name: rc.folderName, cwd: p.cwd, ageSec: p.ageSec,
-        kind: "rc", attachable: true, url: rc.url, ready: rc.ready,
+        kind: "rc" as const, attachable: true, url: rc.url, ready: rc.ready,
+      };
+    }
+    const vx = vertexByPid.get(p.pid);
+    if (vx) {
+      return {
+        pid: p.pid, name: vx.folderName, cwd: p.cwd, ageSec: p.ageSec,
+        kind: "vertex" as const, attachable: true, url: "/#" + vx.folderName, ready: true,
       };
     }
     return {
       pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir), cwd: p.cwd,
-      ageSec: p.ageSec, kind: "local", attachable: false, url: null, ready: true,
+      ageSec: p.ageSec, kind: "local" as const, attachable: false, url: null, ready: true,
     };
   });
   roster.sort((a, b) => a.ageSec - b.ageSec); // newest first

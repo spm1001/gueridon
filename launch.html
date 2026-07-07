@@ -200,29 +200,35 @@
     $runningList.innerHTML = "";
     for (const s of sessions) {
       const isRc = s.kind === "rc";
+      const isVertex = s.kind === "vertex"; // Guéridon's own streaming-lane session (gdn-riheri)
       const row = document.createElement("div");
       row.className = "run-row";
       const dot = document.createElement("span");
-      dot.className = isRc ? (s.ready ? "dot" : "dot orienting") : "dot local";
+      dot.className = s.attachable ? (s.ready ? "dot" : "dot orienting") : "dot local";
       row.appendChild(dot);
       const name = document.createElement("span");
       name.className = "run-name"; name.textContent = s.name;
       row.appendChild(name);
 
-      if (isRc) {
-        if (!s.ready) {
+      if (s.attachable) {
+        if (isRc && !s.ready) {
           const st = document.createElement("span");
           st.className = "run-status"; st.textContent = "orienting…";
           row.appendChild(st);
+        } else if (isVertex) {
+          const st = document.createElement("span");
+          st.className = "run-status"; st.textContent = "vertex · " + ageLabel(s.ageSec);
+          row.appendChild(st);
         }
         if (s.url) {
+          // For vertex, url is the RAW hash route ("/#owner/repo") — never encode it.
           const open = document.createElement("a");
           open.className = "mini"; open.textContent = "Open"; open.href = s.url; open.rel = "noopener";
           row.appendChild(open);
         }
         const end = document.createElement("button");
         end.className = "mini end"; end.textContent = "End";
-        end.addEventListener("click", () => endSession(s.name, end));
+        end.addEventListener("click", () => endSession(s, end));
         row.appendChild(end);
       } else {
         // Hand-started / foreign session — read-only, just shown for awareness.
@@ -235,12 +241,19 @@
     return sessions;
   }
 
-  async function endSession(folder, btn) {
+  async function endSession(s, btn) {
     btn.disabled = true; btn.textContent = "Ending…";
+    // Path params ARE percent-encoded (the bridge decodes them) — only location.hash
+    // writes must stay raw. Vertex ends via the -p lane's own deliberate-close endpoint;
+    // RC ends via DELETE /launch (SIGTERM graceful shutdown).
     try {
-      await fetch("/launch/" + encodeURIComponent(folder), { method: "DELETE" });
+      if (s.kind === "vertex") {
+        await fetch("/exit/" + encodeURIComponent(s.name), { method: "POST" });
+      } else {
+        await fetch("/launch/" + encodeURIComponent(s.name), { method: "DELETE" });
+      }
     } catch (e) { /* fall through to refresh */ }
-    // Give the pty a beat to process the SIGTERM, then refresh the roster.
+    // Give the process a beat to die, then refresh the roster.
     setTimeout(loadSessions, 1200);
   }
 
@@ -385,4 +398,24 @@
   $filter.addEventListener("input", renderRepos);
   loadRepos();
   loadSessions();
+
+  // ---- Roster freshness (gdn-hevuri) ----
+  // Mobile Safari resurrects this page from cache with a stale roster; nothing above
+  // re-fetches on wake. Re-fetch whenever the tab becomes visible (visibilitychange
+  // covers app-switch, pageshow covers back-forward cache), and poll gently while
+  // visible only — the timer is cleared when hidden so a backgrounded tab costs nothing.
+  let rosterTimer = null;
+  function startRosterPolling() {
+    if (rosterTimer) return;
+    rosterTimer = setInterval(loadSessions, 20000);
+  }
+  function stopRosterPolling() {
+    if (rosterTimer) { clearInterval(rosterTimer); rosterTimer = null; }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") { loadSessions(); startRosterPolling(); }
+    else stopRosterPolling();
+  });
+  window.addEventListener("pageshow", () => { loadSessions(); startRosterPolling(); });
+  startRosterPolling();
 </script>
