@@ -116,7 +116,7 @@ The bridge is split across several modules in `server/`:
 | GET | `/repos` | **Launcher (ungated, read-only):** lean launcher repo list — `listRepos`, git-commit-recency order, reads no sessions. `{repos:[{name,path,lastCommit}]}` |
 | POST | `/launch/:folder` | **Teams lane (gated on `GUERIDON_ENABLE_RC=1`, else 404):** spawn a `claude --remote-control` RC session; returns `{status, pid, folder, url, autoOpened, ready}` (the claude.ai attach URL, awaited up to 15s). `handleLaunch` passes `/open` as the initial prompt **only when the repo has `.bon`** (gdn-cumado conditional-`/open` — a context-less repo makes `/open` flail); `autoOpened` reflects that, `ready` is the JSONL-derived orientation status |
 | GET | `/rc` | **Teams lane (gated):** live RC sessions Guéridon spawned — `{sessions:[{folder,url,pid,spawnedAt,ready}]}`. `ready` (gdn-cumado) = false while the auto-`/open` turn runs. (The launcher now reads `/sessions`, not this; `/rc` stays for the RC-only contract + tests.) |
-| GET | `/sessions` | **Launcher (gated):** the launcher roster — EVERY live `claude` session (gdn-batogo), not just RC ones. `{sessions:[{pid,name,cwd,ageSec,kind,attachable,url,ready}]}`, newest first. `kind:"rc"` = Guéridon-spawned (attachable, Open+End); `kind:"local"` = hand-started/foreign (read-only, e.g. a terminal session in `~`). `/proc`-scans `comm=="claude"`, cross-refs `rcSessions` by pid |
+| GET | `/sessions` | **Launcher (gated):** the launcher roster — EVERY live `claude` session (gdn-batogo), not just RC ones. `{sessions:[{pid,name,cwd,ageSec,kind,attachable,url,ready}]}`, newest first. Three kinds (gdn-riheri): `kind:"rc"` = Guéridon-spawned RC (attachable; Open = claude.ai URL, End = `DELETE /launch`); `kind:"vertex"` = Guéridon's own streaming-lane `-p` session (attachable; Open = RAW `/#folder` — never percent-encoded, End = `POST /exit`); `kind:"local"` = hand-started/foreign (read-only, e.g. a terminal session in `~`). `/proc`-scans `comm=="claude"`, cross-refs `rcSessions` + the `-p` `sessions` map by pid |
 | DELETE | `/launch/:folder` | **Teams lane (gated):** cleanly end an RC session — `handleRcExit` SIGTERMs it (claude's GracefulShutdown: SessionEnd hooks fire, JSONL flushed, resumable), SIGKILL fallback @ 8s. NOT a literal `/exit` keystroke |
 
 **Key design:**
@@ -149,10 +149,12 @@ push, the **launcher UI** (`launch.html` at `/launch.html`; bare `/` redirects h
 SIGTERM graceful shutdown, SessionEnd hooks fire), **conditional auto-`/open`** + readiness
 spinner (`gdn-cumado`), the **live-sessions roster** (`gdn-batogo`), launch-notify gating
 (`gdn-nagepa`), and **endpoint tests** (`gdn-towiva`). The launcher's top section is a roster
-of EVERY live `claude` session (`GET /sessions`) — RC sessions Guéridon spawned are attachable
-(Open/End/orienting); hand-started/foreign sessions show read-only ("local · 44m"). Remaining:
-share-sheet→RC (`gdn-fuzeba`, paused — it'll pass the deposit as the initial prompt with
-`pushOnReady=true`).
+of EVERY live `claude` session (`GET /sessions`) — Guéridon-owned sessions are attachable
+(RC: Open/End/orienting; Vertex `-p`: Open = raw `/#folder`, End = `/exit` — gdn-riheri);
+hand-started/foreign sessions show read-only ("local · 44m"). The roster auto-refreshes on
+tab wake + a 20s visible-only poll (gdn-hevuri). (Share-sheet→RC was CUT at the 2026-07-07
+triage — gdn-fuzeba/gdn-gafode close notes have the why; the server-side upload path remains
+built if it ever revives.)
 
 | Piece | Where | What |
 |------|-------|------|
@@ -160,7 +162,7 @@ share-sheet→RC (`gdn-fuzeba`, paused — it'll pass the deposit as the initial
 | `buildRemoteControlEnv()` | `bridge-logic.ts` | Strips the full `VERTEX_ENV_VARS` set + CC-internal markers → the session comes up on **Teams** (which the claude.ai relay attaches to; the `-p` path's `max` mode reuses this var list). Unit-tested. |
 | `extractClaudeAiUrl(buffer)` | `bridge-logic.ts` | ANSI-strips + matches the `claude.ai/code/session_…` URL (last occurrence). Unit-tested. |
 | `isSessionReadyFromTail(tail)` | `bridge-logic.ts` | Readiness from a session JSONL tail (gdn-cumado): last MAIN-thread (`parent_tool_use_id` null) assistant `stop_reason==="end_turn"` (or an AskUserQuestion) → ready. `isRcSessionReady(folder, spawnedAt)` (folders.ts) is the fs glue. Unit-tested. |
-| `scanClaudeSessions()` + `buildSessionRoster()` | `sessions.ts` / `bridge-logic.ts` | Roster (gdn-batogo): `/proc`-scan `comm=="claude"` for live sessions (pid/cwd/age), then classify rc/local by pid membership in `rcSessions`. `GET /sessions` feeds the launcher. Pure classifier unit-tested. |
+| `scanClaudeSessions()` + `buildSessionRoster()` | `sessions.ts` / `bridge-logic.ts` | Roster (gdn-batogo + gdn-riheri): `/proc`-scan `comm=="claude"` for live sessions (pid/cwd/age), then classify rc/vertex/local — rc by `rcSessions` pid, vertex by the `-p` `sessions` map pid (exitCode-guarded against pid recycling). `GET /sessions` feeds the launcher. Pure classifier unit-tested (incl. the raw-`/#folder` %2F scar-guard). |
 | `rcSessions` map + `handleLaunch` | `bridge.ts` | Lightweight registry (separate from the `-p` `sessions` map); `POST /launch` passes `/open` only when `.bon` exists, awaits the URL (≤15s), returns `{…, autoOpened, ready}`. |
 | `pushLaunchReady(folder, url)` | `push.ts` | Pushes the attach URL to the phone (sw.js opens it on tap); fires only when `rc.pushOnReady && allClients.size===0`. Launcher launches set `pushOnReady=false` (URL delivered in-page + via the roster) — the push is for phone-in-pocket paths (share-sheet) only (gdn-nagepa). |
 
@@ -314,7 +316,7 @@ The document body scrolls (not a container element). This enables Safari Full Pa
 - Collapsible tool calls (consecutive successful calls coalesce)
 - Enter never submits (mobile newlines), submit is the button
 - Chunk-level updates (not token-level)
-- No in-conversation session switcher (retired in gdn-deloce). The launcher (`launch.html`) is the home/chooser: repo list by git-recency + a live roster of every `claude` session; pick a repo → two lane buttons (Vertex | Teams). The conversation page is single-session; leaving it (folder-lozenge tap, `/exit`, session end, or bare `/`) returns to the launcher.
+- No in-conversation session switcher (retired in gdn-deloce). The launcher (`launch.html`) is the home/chooser AND the session switchboard (gdn-vagori): repo list by git-recency + a live roster of every `claude` session — Guéridon-owned entries (rc/vertex) are tappable (Open/End), foreign ones read-only; the roster re-fetches on tab wake and polls every 20s while visible. Pick a repo → two lane buttons (Vertex | Teams). The conversation page is single-session; leaving it (folder-lozenge tap, `/exit`, session end, or bare `/`) returns to the launcher. Flick = launcher ⇄ tap-in/tap-out.
 - Push notifications via service worker
 - Push-to-talk: long-press anywhere on the `.btn-bar` (folder + context lozenges) activates `SpeechRecognition`. Release stops and auto-sends with `[dictated]` prefix. Send button is tap-only. Folder lozenge pulses orange (accent) during dictation. iOS system mic sounds are not suppressible.
 - Turn-complete chime: 350Hz sine wave, gain 0.06, 300ms decay. Plays when `data-busy` transitions false. Uses shared `AudioContext` (created on first user gesture for Safari).

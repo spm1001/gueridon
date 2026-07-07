@@ -27,15 +27,19 @@ Feb, unmissed; Sameer's own page→markdown iOS Shortcut covers the need),
 gdn-howibu/gdn-fadeti (mockup outcome closed achieved-in-substance, snapshot
 tests veiled), gdn-bumido (KillMode stays control-group; deploy discipline =
 enumerate live sessions before restart; /opt re-clone extracted to gdn-pawoso).
-OPEN: **gdn-vagori** — the new-role outcome (launcher as the estate's mobile
-switchboard, claude-agents flick feel): gdn-riheri (own Vertex `-p` sessions
-classified attachable in the roster — today they render kind:local read-only),
-gdn-hevuri (roster never refreshes — no interval/visibilitychange, stale on
-Safari tab-resurrect), gdn-heroso (resumable-but-idle conversations in the
-roster — verify-first fork, only if missing-feeling persists). Standalone:
+**Same night, the switchboard half SHIPPED (deployed @ 0f91793, phone-verified
+live on spm1001/jeton):** gdn-riheri ✓ (roster is three-kind rc/vertex/local —
+own `-p` sessions attachable, Open = RAW `/#folder`, End = `/exit`) and
+gdn-hevuri ✓ (wake-refetch + 20s visible-only poll; Sameer's phone poll observed
+beating in /status recentEvents). gdn-pawoso ✓ (/opt re-cloned from GitHub —
+`git pull` deploys work again). OPEN under **gdn-vagori**: gdn-heroso
+(resumable-but-idle conversations in the roster — verify-first fork, armed now
+that riheri+hevuri are live; only build if the missing-feeling persists) and
+gdn-pefipi (extract the launcher's inline roster row-builder to a tested client
+module — the raw-hash blind-spot class, now three branches deep). Standalone:
 gdn-harili (.env template — verified gap: live .env 6 keys, .env.example 3),
-gdn-pawoso (/opt re-clone), gdn-muluwo (AskUser chips), gdn-hodoco (1M gauge),
-gdn-lometu (MCP probe).
+gdn-muluwo (AskUser chips), gdn-hodoco (1M gauge), gdn-lometu (MCP probe — the
+live error text is in its brief now; per-server globs confirmed valid).
 
 **2026-07-07 same night: bridge restarted for the new LLM creds** — dotfiles
 c185f9a repointed Vertex billing; the 04:00-booted bridge still carried the old
