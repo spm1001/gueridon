@@ -153,6 +153,10 @@
 <script>
   let repos = [];
   let selected = null; // repo name
+  // Names of repos with a live session (any kind) — those are hidden from the launch list
+  // below, so a folder is never offered for a 2nd launch while one driver already owns it
+  // (gdn-wuvujo). Kept fresh by loadSessions().
+  let liveSessionNames = new Set();
 
   const $repos = document.getElementById("repos");
   const $filter = document.getElementById("filter");
@@ -212,6 +216,10 @@
       setOffline(true); // network threw — bridge unreachable (VPN/Tailscale off)
     }
     if (sessions === null) return null; // leave current UI in place, don't flicker
+    // Repos with a live session are hidden from the launch list (gdn-wuvujo) — refresh it
+    // whenever the roster changes (empty set when no sessions → all repos shown).
+    liveSessionNames = new Set(sessions.map((s) => s.name));
+    renderRepos();
     if (!sessions.length) { $running.hidden = true; $runningList.innerHTML = ""; return sessions; }
     $running.hidden = false;
     $runningLabel.textContent = "Sessions (" + sessions.length + ")";
@@ -282,7 +290,10 @@
   // ---- REPO list ----
   function renderRepos() {
     const q = $filter.value.trim().toLowerCase();
-    const shown = q ? repos.filter((r) => r.name.toLowerCase().includes(q)) : repos;
+    // Hide repos that already have a live session (gdn-wuvujo) — one driver per folder.
+    // Applied before the search filter, so a live repo is unreachable via search too.
+    const idle = repos.filter((r) => !liveSessionNames.has(r.name));
+    const shown = q ? idle.filter((r) => r.name.toLowerCase().includes(q)) : idle;
     if (!shown.length) {
       $repos.innerHTML = '<div class="empty">' + (q ? "No matching repos." : "No repos found.") + "</div>";
       return;
