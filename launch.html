@@ -249,9 +249,13 @@
         end.addEventListener("click", () => endSession(s, end));
         row.appendChild(end);
       } else {
-        // Hand-started / foreign session — read-only, just shown for awareness.
+        // Foreign, read-only, shown for awareness. A Vertex-billed terminal session
+        // (claudev/claudefv, gdn-kuhaku) is labelled "vertex · terminal" so it's not mistaken
+        // for a bland local one; everything else is "local". Neither is attachable yet
+        // (takeover = gdn-kidowe baton-pass).
         const st = document.createElement("span");
-        st.className = "run-status"; st.textContent = "local · " + ageLabel(s.ageSec);
+        st.className = "run-status";
+        st.textContent = (s.kind === "vertex-terminal" ? "vertex · terminal · " : "local · ") + ageLabel(s.ageSec);
         row.appendChild(st);
       }
       $runningList.appendChild(row);

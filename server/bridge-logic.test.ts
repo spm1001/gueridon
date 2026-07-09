@@ -1823,6 +1823,34 @@ describe("buildSessionRoster", () => {
     expect(roster.find((r) => r.pid === 3)?.kind).toBe("vertex");
     expect(roster.find((r) => r.pid === 3)?.url).toBe("/#spm1001/notes");
   });
+
+  it("labels a foreign Vertex-billed session vertex-terminal, read-only (gdn-kuhaku)", () => {
+    const [e] = buildSessionRoster(
+      [{ pid: 400, cwd: "/home/modha/repos/itv/mit-commons", ageSec: 5188, vertexBilled: true }],
+      NO_RC, NO_VX, ROOT, HOME);
+    expect(e).toMatchObject({
+      pid: 400, name: "itv/mit-commons", kind: "vertex-terminal", attachable: false,
+      url: null, ready: true,
+    });
+  });
+
+  it("keeps a foreign non-Vertex session as plain local (gdn-kuhaku)", () => {
+    const [e] = buildSessionRoster(
+      [{ pid: 401, cwd: "/home/modha/repos/itv/mit-commons", ageSec: 5188, vertexBilled: false }],
+      NO_RC, NO_VX, ROOT, HOME);
+    expect(e.kind).toBe("local");
+  });
+
+  it("own-vertex (-p) wins over the generic vertexBilled detection (gdn-kuhaku)", () => {
+    const vertexByPid = new Map<number, VertexRosterInfo>([
+      [402, { folderName: "spm1001/notes" }],
+    ]);
+    const [e] = buildSessionRoster(
+      [{ pid: 402, cwd: "/home/modha/repos/spm1001/notes", ageSec: 8, vertexBilled: true }],
+      NO_RC, vertexByPid, ROOT, HOME);
+    expect(e.kind).toBe("vertex");      // attachable own session, not the read-only terminal kind
+    expect(e.attachable).toBe(true);
+  });
 });
 
 // --- formatToolCallSummary ---

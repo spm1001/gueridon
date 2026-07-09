@@ -63,7 +63,26 @@
 // occur BEFORE the inline script's own error reporting sets up. Without this,
 // a broken module chain produces a silently dead page (gdn-lemega).
 window.__gdnErrors = [];
+// A browser extension (StopTheMadness, ad-blockers, …) can inject a script that
+// throws into ANY page. Safari masks its URL as webkit-masked-url://; Chrome/FF
+// use *-extension: schemes. Those errors are not Guéridon's — don't paint the
+// banner or POST them. Real Guéridon errors carry e.filename = our served /*.js
+// or the page URL, and their stack names our own modules — those are kept.
+window.__gdnIsForeignError = function(e) {
+  var EXT = /^(webkit-masked-url:|safari-web-extension:|chrome-extension:|moz-extension:)/;
+  var fn = e && e.filename ? String(e.filename) : '';
+  if (EXT.test(fn)) return true;
+  var stack = e && e.error && e.error.stack ? String(e.error.stack) : '';
+  if (/(webkit-masked-url:|safari-web-extension:|chrome-extension:|moz-extension:)/.test(stack)) {
+    // Extension frames present — foreign unless a same-origin frame also appears
+    // (our served modules or this host), which would mean Guéridon code is on the stack.
+    var own = new RegExp('(render-|state-handlers|marked\\.js|/index|' + String(location.host).replace(/[.]/g, '\\.') + ')');
+    if (!own.test(stack)) return true;
+  }
+  return false;
+};
 window.addEventListener('error', function(e) {
+  if (window.__gdnIsForeignError(e)) return;
   window.__gdnErrors.push(e.message + (e.filename ? ' @ ' + e.filename + ':' + e.lineno + ':' + (e.colno || 0) : '') + (e.error && e.error.stack ? '\n  stack: ' + String(e.error.stack).slice(0, 500) : '') + ' [ua: ' + navigator.userAgent.slice(-60) + ']');
   var d = document.getElementById('__gdnErrorBanner');
   if (!d) {
@@ -102,7 +121,10 @@ window.addEventListener('error', function(e) {
       }).catch(() => {}); // swallow fetch failures
     } catch { /* swallow */ }
   }
-  window.addEventListener('error', (e) => reportError(e.message, e.error?.stack));
+  window.addEventListener('error', (e) => {
+    if (window.__gdnIsForeignError && window.__gdnIsForeignError(e)) return; // extension noise
+    reportError(e.message, e.error?.stack);
+  });
   window.addEventListener('unhandledrejection', (e) => reportError(String(e.reason), e.reason?.stack));
 }
 

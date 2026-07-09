@@ -814,7 +814,11 @@ export interface RosterEntry {
   name: string;        // display name (folderName for RC/vertex, cwd-derived for foreign)
   cwd: string;
   ageSec: number;
-  kind: "rc" | "vertex" | "local";
+  // "vertex-terminal" (gdn-kuhaku): a Vertex-billed session Guéridon did NOT launch (a claudev/
+  // claudefv terminal session). Shown honestly, but NOT attachable — Guéridon has no pty handle
+  // and driving it would collide with the live terminal over the shared JSONL. Baton-pass
+  // takeover is the parked feature (gdn-kidowe) that will make this kind actionable.
+  kind: "rc" | "vertex" | "vertex-terminal" | "local";
   attachable: boolean; // true for Guéridon-spawned sessions: rc (claude.ai URL) and vertex (/#folder)
   url: string | null;
   ready: boolean;
@@ -857,7 +861,7 @@ export function sessionDisplayName(cwd: string, scanRoot: string, homeDir: strin
  * handle to drive it). Sorted newest-first (smallest ageSec).
  */
 export function buildSessionRoster(
-  procs: { pid: number; cwd: string; ageSec: number }[],
+  procs: { pid: number; cwd: string; ageSec: number; vertexBilled?: boolean }[],
   rcByPid: Map<number, RcRosterInfo>,
   vertexByPid: Map<number, VertexRosterInfo>,
   scanRoot: string,
@@ -876,6 +880,15 @@ export function buildSessionRoster(
       return {
         pid: p.pid, name: vx.folderName, cwd: p.cwd, ageSec: p.ageSec,
         kind: "vertex" as const, attachable: true, url: "/#" + vx.folderName, ready: true,
+      };
+    }
+    // Foreign but Vertex-billed (a claudev/claudefv terminal session) — label honestly, but
+    // NOT attachable: driving it would collide with the live terminal over the shared JSONL.
+    // Takeover is gdn-kidowe (baton-pass). Own-vertex above wins over this generic detection.
+    if (p.vertexBilled) {
+      return {
+        pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir), cwd: p.cwd,
+        ageSec: p.ageSec, kind: "vertex-terminal" as const, attachable: false, url: null, ready: true,
       };
     }
     return {

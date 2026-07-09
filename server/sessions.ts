@@ -17,6 +17,19 @@ export interface ClaudeProc {
   pid: number;
   cwd: string;
   ageSec: number;
+  /**
+   * True when the session is Vertex-billed (gdn-kuhaku). The marker lives in one of two
+   * places depending on how it was launched: the systemd/`-p` lane inherits
+   * `CLAUDE_CODE_USE_VERTEX=1` in its ENVIRON; the `claudev`/`claudefv` shell wrappers pass
+   * it inside the `--settings` JSON on the CMDLINE. So we check both.
+   */
+  vertexBilled: boolean;
+}
+
+/** True if `CLAUDE_CODE_USE_VERTEX` is set truthy in either environ or cmdline text. */
+function hasVertexMarker(text: string): boolean {
+  // Matches `CLAUDE_CODE_USE_VERTEX=1` (environ) and `CLAUDE_CODE_USE_VERTEX":"1"` (--settings JSON).
+  return /CLAUDE_CODE_USE_VERTEX["\s]*[:=]["\s]*"?1/.test(text);
 }
 
 /**
@@ -69,7 +82,17 @@ export async function scanClaudeSessions(): Promise<ClaudeProc[]> {
     } catch {
       continue; // can't resolve cwd (process gone / permissions) — skip it
     }
-    procs.push({ pid, cwd, ageSec: ageByPid.get(pid) ?? 0 });
+    // Vertex detection: environ (systemd/-p lane, env-var launch) OR cmdline (wrapper --settings).
+    let vertexBilled = false;
+    for (const src of ["environ", "cmdline"]) {
+      try {
+        const raw = await readFile(`/proc/${pid}/${src}`, "utf-8");
+        if (hasVertexMarker(raw)) { vertexBilled = true; break; }
+      } catch {
+        /* unreadable (race / permissions) — leave as not-detected on this source */
+      }
+    }
+    procs.push({ pid, cwd, ageSec: ageByPid.get(pid) ?? 0, vertexBilled });
   }
   return procs;
 }
