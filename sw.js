@@ -1,7 +1,7 @@
 // Guéridon service worker — push notification handlers + offline app shell cache.
 // Deep-link via hash fragments (/#folder-name).
 
-const CACHE_NAME = "gueridon-shell-v3";
+const CACHE_NAME = "gueridon-shell-v4";
 const SHELL_URLS = ["/", "/manifest.json", "/icon-192.svg", "/icon-512.svg", "/apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {
@@ -40,8 +40,13 @@ self.addEventListener("fetch", (event) => {
       url.pathname.startsWith("/exit/") ||
       url.pathname.startsWith("/push/") ||
       url.pathname === "/folders" ||
+      url.pathname === "/sessions" ||
+      url.pathname === "/repos" ||
       url.pathname === "/status" ||
       url.pathname === "/client-error") {
+    // Roster/liveness endpoints — NEVER cache. If cached, an offline load (e.g. VPN
+    // off) is served a stale 200 and the launcher shows a "live" session that is dead,
+    // with no fetch error to surface. They must fail so the offline banner fires. (gdn-jafebe)
     return;
   }
 

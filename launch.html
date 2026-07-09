@@ -35,6 +35,7 @@
     --accent: #d97757;
     --accent-dim: #b85a35;
     --red: #ce3931;
+    --amber: #fbbf24;
     --radius: 10px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -118,12 +119,19 @@
   .lane { flex: 1; }
   .note { color: var(--text-dim); font-size: 0.78rem; text-align: center; margin-top: 0.5rem; min-height: 1.1em; }
   .note.warn { color: var(--amber, #fbbf24); }
+  .offline {
+    background: var(--amber, #fbbf24); color: #1a1a1a;
+    font: 600 0.8rem/1.3 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    text-align: center; padding: 0.5rem 1.1rem;
+  }
 </style>
 
 <header>
   <h1>Guéridon</h1>
   <span class="sub">launch a session</span>
 </header>
+
+<div id="offline" class="offline" hidden>⚠ Can’t reach Guéridon — check VPN / Tailscale. Showing cached info.</div>
 
 <div id="running" hidden>
   <div class="label" id="running-label">Sessions</div>
@@ -154,6 +162,7 @@
   const $running = document.getElementById("running");
   const $runningList = document.getElementById("running-list");
   const $runningLabel = document.getElementById("running-label");
+  const $offline = document.getElementById("offline");
 
   function timeAgo(unixSecs) {
     if (!unixSecs) return "";
@@ -172,6 +181,12 @@
     $note.textContent = text;
     $note.className = warn ? "note warn" : "note";
   }
+
+  // Offline banner (gdn-jafebe): the app shell loads from the service-worker cache even when
+  // the bridge is unreachable (e.g. VPN/Tailscale off). Without this the roster looks live
+  // while it is stale. Driven by the /sessions + /repos fetch outcome — a network throw means
+  // unreachable; any HTTP response (even a 404 = RC off) means we reached the bridge = online.
+  function setOffline(off) { $offline.hidden = !off; }
 
   function ageLabel(sec) {
     if (!sec || sec < 60) return "just now";
@@ -192,7 +207,10 @@
     try {
       const r = await fetch("/sessions");
       if (r.ok) sessions = (await r.json()).sessions || [];
-    } catch (e) { /* RC off or unreachable */ }
+      setOffline(false); // got a response — bridge reachable (even a 404 = RC off = online)
+    } catch (e) {
+      setOffline(true); // network threw — bridge unreachable (VPN/Tailscale off)
+    }
     if (sessions === null) return null; // leave current UI in place, don't flicker
     if (!sessions.length) { $running.hidden = true; $runningList.innerHTML = ""; return sessions; }
     $running.hidden = false;
@@ -314,8 +332,10 @@
       const r = await fetch("/repos");
       repos = (await r.json()).repos || [];   // server sorts by git recency
       renderRepos();
+      setOffline(false);
     } catch (e) {
       $repos.innerHTML = '<div class="empty">Couldn’t reach the bridge.</div>';
+      setOffline(true);
     }
   }
 
