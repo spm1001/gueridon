@@ -51,6 +51,8 @@ cd /opt/gueridon && git pull && npm install && sudo systemctl restart gueridon
 
 Production serves from `/opt/gueridon`, not `~/repos/spm1001/gueridon`. Changes that aren't committed and pushed won't appear in production — `git pull` in `/opt` has nothing to pull.
 
+**Never hot-edit `/opt` directly.** Deploy is always commit → push (dev) → `git pull` (`/opt`). A past deploy edited `/opt` in place, leaving uncommitted working-tree changes that later **aborted a `git pull`** ("Please commit your changes or stash them"). If a `/opt` pull ever aborts on local changes: don't blind-`reset` — `git diff origin/main -- <files>` first; if the local edits are byte-identical to what's already committed (the usual case — a hot-edit that mirrored a later commit), `git checkout -- <files>` and ff-pull (the content returns via history, zero loss). Frontend-only changes (index.html, launch.html, client/*, style.css, sw.js) take effect on `git pull` alone — served fresh from disk, **no restart needed**; only server changes (`server/*.ts`) need `systemctl restart`.
+
 **Service management:**
 ```bash
 sudo systemctl restart gueridon    # Restart bridge
@@ -151,8 +153,11 @@ spinner (`gdn-cumado`), the **live-sessions roster** (`gdn-batogo`), launch-noti
 (`gdn-nagepa`), and **endpoint tests** (`gdn-towiva`). The launcher's top section is a roster
 of EVERY live `claude` session (`GET /sessions`) — Guéridon-owned sessions are attachable
 (RC: Open/End/orienting; Vertex `-p`: Open = raw `/#folder`, End = `/exit` — gdn-riheri);
-hand-started/foreign sessions show read-only ("local · 44m"). The roster auto-refreshes on
-tab wake + a 20s visible-only poll (gdn-hevuri). (Share-sheet→RC was CUT at the 2026-07-07
+hand-started/foreign sessions show read-only — a Vertex-billed one Guéridon didn't launch as
+"vertex · terminal · 1h" (gdn-kuhaku, 4th kind), everything else as "local · 44m". The roster
+auto-refreshes on tab wake + a 20s visible-only poll (gdn-hevuri), and repos with a live session
+are hidden from the launch list below (gdn-wuvujo — one-driver-per-folder; they'd be duplicates
+and a 2nd launch would collide on the shared JSONL). (Share-sheet→RC was CUT at the 2026-07-07
 triage — gdn-fuzeba/gdn-gafode close notes have the why; the server-side upload path remains
 built if it ever revives.)
 
@@ -316,7 +321,7 @@ The document body scrolls (not a container element). This enables Safari Full Pa
 - Collapsible tool calls (consecutive successful calls coalesce)
 - Enter never submits (mobile newlines), submit is the button
 - Chunk-level updates (not token-level)
-- No in-conversation session switcher (retired in gdn-deloce). The launcher (`launch.html`) is the home/chooser AND the session switchboard (gdn-vagori): repo list by git-recency + a live roster of every `claude` session — Guéridon-owned entries (rc/vertex) are tappable (Open/End), foreign ones read-only; the roster re-fetches on tab wake and polls every 20s while visible. Pick a repo → two lane buttons (Vertex | Teams). The conversation page is single-session; leaving it (folder-lozenge tap, `/exit`, session end, or bare `/`) returns to the launcher. Flick = launcher ⇄ tap-in/tap-out.
+- No in-conversation session switcher (retired in gdn-deloce). The launcher (`launch.html`) is the home/chooser AND the session switchboard (gdn-vagori): repo list by git-recency + a live roster of every `claude` session — Guéridon-owned entries (rc/vertex) are tappable (Open/End), foreign ones read-only (a foreign Vertex session shows "vertex · terminal", gdn-kuhaku); the roster re-fetches on tab wake and polls every 20s while visible. A repo with a live session is hidden from the launch list (gdn-wuvujo) — it's already in the roster, and a 2nd launch into it would collide on the shared JSONL. Pick a repo → two lane buttons (Vertex | Teams). The conversation page is single-session; leaving it (folder-lozenge tap, `/exit`, session end, or bare `/`) returns to the launcher. Flick = launcher ⇄ tap-in/tap-out.
 - Push notifications via service worker
 - Push-to-talk: long-press anywhere on the `.btn-bar` (folder + context lozenges) activates `SpeechRecognition`. Release stops and auto-sends with `[dictated]` prefix. Send button is tap-only. Folder lozenge pulses orange (accent) during dictation. iOS system mic sounds are not suppressible.
 - Turn-complete chime: 350Hz sine wave, gain 0.06, 300ms decay. Plays when `data-busy` transitions false. Uses shared `AudioContext` (created on first user gesture for Safari).

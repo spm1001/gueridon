@@ -48,6 +48,47 @@ itv-mit-llm-sameer`. (Restart was checked safe first: /status showed zero
 sessions/clients, and this CC session confirmed itself a terminal child, not a
 bridge child.)
 
+**2026-07-09 — three tickles from a live phone-screenshot session (all shipped +
+deployed + live-verified).** Root cause of all of it: Guéridon assumes it *owns*
+every session it renders; the moment it renders one it doesn't own — a **Vertex
+`claudefv` terminal session** sharing the folder+JSONL — the view goes stale
+(one-time `replayFromJSONL` at attach, no watcher, while the terminal keeps
+writing) and the roster mis-classifies it (`local`, because its pid isn't in the
+`-p` `sessions` map). Ships:
+- **gdn-kariru** — Guéridon's catch-all `window.onerror` was painting a red
+  "Guéridon JS error" banner for a **StopTheMadness Safari-extension** error
+  (`webkit-masked-url://`). `__gdnIsForeignError` (index.html) filters extension
+  schemes / no-same-origin-frame stacks from both the banner and `/client-error`.
+  The banner keeps its real dead-module job (gdn-lemega).
+- **gdn-kuhaku** — the roster's **4th kind `vertex-terminal`** (was three:
+  rc/vertex/local). `scanClaudeSessions` reads `/proc/<pid>/environ` OR the
+  cmdline `--settings` blob for `CLAUDE_CODE_USE_VERTEX` (the wrappers put it in
+  **cmdline**, systemd/`-p` in **environ** — must check both). A foreign
+  Vertex-billed proc → `vertex-terminal` (read-only, "vertex · terminal · 1h");
+  own `-p` vertex still wins as attachable.
+- **gdn-wuvujo** — the launcher's repo list now **hides repos that have a live
+  session** (client-side: `liveSessionNames` Set, filtered before the search
+  query). De-dups the roster AND enforces one-driver-per-folder by not offering a
+  live repo for a 2nd launch. Re-runs each poll → a repo reappears when its
+  session ends. Seam verified live: session.name == repo.name (both
+  SCAN_ROOT-relative owner/repo).
+- **PARKED — gdn-kidowe (baton-pass takeover):** the real "toggle terminal ⇄
+  phone". A *simultaneous* mirror is impossible (two drivers, one JSONL), but a
+  clean baton-pass is not: tap a `vertex-terminal` row → SIGTERM the foreign pid
+  (graceful, resumable — same mechanism as RC End) → resume as Guéridon `-p`.
+  SEAM TO SOLVE: a graceful exit may write a handoff, and `resolveSessionForFolder`
+  treats "handoff matches latest session → start FRESH" — takeover must
+  force-resume the specific id. Sameer tempted but deferred (maintenance mode).
+
+**Deploy trap found 2026-07-09:** the first `/opt` `git pull` **aborted** —
+`/opt/gueridon` had uncommitted edits to `sw.js`+`launch.html` (a past deploy
+hot-edited `/opt` directly instead of commit→pull; the edits were byte-identical
+to the already-committed gdn-jafebe change). Resolution: verify the local edits
+against `origin/main` (`git diff origin/main -- <files>`), and if identical,
+`git checkout --` them and ff-pull — the content returns via history. **Never
+hot-edit `/opt`; if a pull aborts on local changes, they're almost always a past
+hot-edit — don't blind-`reset`, diff against origin first.**
+
 **AskUserQuestion crash fixed 2026-06-29.** The overlay crashed on mobile
 (`questions.forEach is not a function`) when the model emitted the tool input
 with a non-array `questions`; `state-builder.ts`'s `args.questions || []` only
@@ -90,6 +131,26 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
     Lesson: anything that writes `location.hash` must use the raw folder name — the slash is
     load-bearing, do not `encodeURIComponent` it. Caught by Sameer's live test, not by the
     suite (the launcher's inline JS isn't unit-tested).
+
+- **ONE live driver per session JSONL is the invariant everything hangs off (2026-07-09).**
+  Two `claude` processes resuming the same session-id both append to one JSONL → interleave and
+  corrupt. This single fact shapes the whole session-joining story: (a) a foreign `vertex-terminal`
+  session is **read-only** — Guéridon has no pty handle and resuming it would collide with the live
+  terminal; (b) the launcher **hides repos with a live session** (gdn-wuvujo) so a 2nd launch can't
+  resume the JSONL the first is writing; (c) the parked baton-pass (gdn-kidowe) is a *hand-off*
+  (SIGTERM the old, then resume), never a *simultaneous mirror* — precisely because two drivers
+  can't coexist. When adding any "attach / join / resume" affordance, first ask: could this put a
+  second live process on a JSONL another process is writing? If yes, it must hand off, not share.
+  The corollary bug it explains: Guéridon rendering a session it doesn't own shows a **frozen
+  snapshot** (`replayFromJSONL` fires once at attach, no watcher) — live-tailing a foreign session
+  would need a watcher+SSE path (deliberately NOT built; streaming lane is maintenance-mode).
+
+- **Roster is FOUR-kind (rc/vertex/vertex-terminal/local) as of gdn-kuhaku.** The contract note
+  stands and grew a member: anything touching the roster must move together — the classifier
+  (`buildSessionRoster` in bridge-logic + the `vertexBilled` read in `sessions.ts`), the
+  `launch.html` render, and CLAUDE.md's `/sessions` row. `vertex-terminal` detection reads
+  `/proc` environ OR cmdline (`--settings`) — the wrappers hide Vertex in cmdline, so an
+  environ-only check silently mislabels every wrapper session as `local`.
 
 - **KillMode=control-group makes shutdown a race.** systemd SIGTERMs every
   process in the cgroup simultaneously — CC children may exit and fire their
