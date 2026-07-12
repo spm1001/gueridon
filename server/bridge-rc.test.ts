@@ -58,8 +58,11 @@ import {
   spawnRemoteControl,
   handleLaunch,
   handleRcExit,
+  handleSessionEnd,
   rcSessions,
 } from "./bridge.ts";
+import { isLiveClaudePid } from "./sessions.ts";
+import { spawn, type ChildProcess } from "node:child_process";
 import { pushLaunchReady } from "./push.js"; // the vi.mock above replaces this
 
 // Minimal ServerResponse stand-in: captures status + body, supports writeHead().end() chaining.
@@ -247,5 +250,78 @@ describe("launch-push gating (gdn-nagepa)", () => {
     const dir = tmpRepo(true);
     await handleLaunch(dir, asRes(makeRes()));
     expect(vi.mocked(pushLaunchReady)).not.toHaveBeenCalled();
+  });
+});
+
+// End-a-foreign-session by pid (gdn-racuca). A real spawned child stands in for a foreign
+// `claude` session: setting `process.title = "claude"` makes /proc/<pid>/comm read "claude",
+// so isLiveClaudePid (and thus handleSessionEnd) treat it exactly like a real session — no
+// mocking of /proc. Each test kills its child in cleanup.
+const fakeClaudes: ChildProcess[] = [];
+function spawnFakeClaude(): ChildProcess {
+  // Sets comm to "claude" and idles until signalled.
+  const child = spawn(process.execPath, ["-e", "process.title='claude';setInterval(()=>{},1000)"], {
+    stdio: "ignore",
+  });
+  fakeClaudes.push(child);
+  return child;
+}
+async function waitFor(cond: () => Promise<boolean> | boolean, ms = 3000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await cond()) return true;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  return false;
+}
+
+afterEach(() => {
+  for (const c of fakeClaudes.splice(0)) { try { c.kill("SIGKILL"); } catch { /* gone */ } }
+});
+
+describe("isLiveClaudePid (gdn-racuca guard)", () => {
+  it("fails closed for pid 0, 1 and a non-existent pid", async () => {
+    expect(await isLiveClaudePid(0)).toBe(false);
+    expect(await isLiveClaudePid(1)).toBe(false);
+    expect(await isLiveClaudePid(2147480000)).toBe(false); // no such process
+    expect(await isLiveClaudePid(NaN)).toBe(false);
+  });
+
+  it("is false for a live process whose comm is NOT claude (the test runner itself)", async () => {
+    // process.pid here is node/vitest — comm !== "claude", so it must never be signallable.
+    expect(await isLiveClaudePid(process.pid)).toBe(false);
+  });
+
+  it("is true for a live process whose comm IS claude", async () => {
+    const child = spawnFakeClaude();
+    expect(await waitFor(() => isLiveClaudePid(child.pid!))).toBe(true);
+  });
+});
+
+describe("handleSessionEnd (gdn-racuca)", () => {
+  it("404s a pid that is not a live claude session (fail-closed, no signal sent)", async () => {
+    const res = makeRes();
+    await handleSessionEnd(process.pid, asRes(res)); // node, not claude
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toContain("No live claude session");
+  });
+
+  it("SIGTERMs a real claude-comm process and returns { ending: true }", async () => {
+    const child = spawnFakeClaude();
+    expect(await waitFor(() => isLiveClaudePid(child.pid!))).toBe(true);
+
+    const res = makeRes();
+    await handleSessionEnd(child.pid!, asRes(res));
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ending: true, pid: child.pid });
+
+    // SIGTERM (no handler in the child) terminates it — the graceful default action.
+    const died = await new Promise<boolean>((resolve) => {
+      if (child.exitCode !== null || child.signalCode) return resolve(true);
+      child.once("exit", () => resolve(true));
+      setTimeout(() => resolve(false), 3000);
+    });
+    expect(died).toBe(true);
+    expect(await isLiveClaudePid(child.pid!)).toBe(false);
   });
 });

@@ -257,14 +257,27 @@
         end.addEventListener("click", () => endSession(s, end));
         row.appendChild(end);
       } else {
-        // Foreign, read-only, shown for awareness. A Vertex-billed terminal session
-        // (claudev/claudefv, gdn-kuhaku) is labelled "vertex · terminal" so it's not mistaken
-        // for a bland local one; everything else is "local". Neither is attachable yet
-        // (takeover = gdn-kidowe baton-pass).
+        // Foreign, read-only for ATTACH (Guéridon has no pty handle — takeover = gdn-kidowe).
+        // A Vertex-billed terminal session (claudev/claudefv, gdn-kuhaku) is labelled
+        // "vertex · terminal"; everything else is "local". But foreign sessions ARE END-able
+        // by pid (gdn-racuca): SIGTERM is a graceful, resumable /exit, so you can clear a stuck
+        // desktop-app or terminal session that's holding a repo out of the launch list.
         const st = document.createElement("span");
         st.className = "run-status";
         st.textContent = (s.kind === "vertex-terminal" ? "vertex · terminal · " : "local · ") + ageLabel(s.ageSec);
         row.appendChild(st);
+        const end = document.createElement("button");
+        end.className = "mini end"; end.textContent = "End";
+        // Two-tap arm (PWA-safe; native confirm() is unreliable in iOS standalone): first tap
+        // → "Sure?", a second tap within 3s ends it. Guards a fat-finger on a live foreign row.
+        end.addEventListener("click", () => {
+          if (end.dataset.armed === "1") { endSession(s, end); return; }
+          end.dataset.armed = "1"; end.textContent = "Sure?";
+          setTimeout(() => {
+            if (end.dataset.armed === "1") { end.dataset.armed = "0"; end.textContent = "End"; }
+          }, 3000);
+        });
+        row.appendChild(end);
       }
       $runningList.appendChild(row);
     }
@@ -273,14 +286,17 @@
 
   async function endSession(s, btn) {
     btn.disabled = true; btn.textContent = "Ending…";
-    // Path params ARE percent-encoded (the bridge decodes them) — only location.hash
-    // writes must stay raw. Vertex ends via the -p lane's own deliberate-close endpoint;
-    // RC ends via DELETE /launch (SIGTERM graceful shutdown).
+    // Owned sessions end via their folder-keyed handles (path params ARE percent-encoded — the
+    // bridge decodes them; only location.hash writes stay raw): vertex → the -p lane's own
+    // close endpoint, RC → DELETE /launch (SIGTERM). FOREIGN sessions have no folder handle, so
+    // end them by PID (gdn-racuca) — DELETE /session/:pid SIGTERMs the process (graceful, resumable).
     try {
       if (s.kind === "vertex") {
         await fetch("/exit/" + encodeURIComponent(s.name), { method: "POST" });
-      } else {
+      } else if (s.kind === "rc") {
         await fetch("/launch/" + encodeURIComponent(s.name), { method: "DELETE" });
+      } else {
+        await fetch("/session/" + s.pid, { method: "DELETE" });
       }
     } catch (e) { /* fall through to refresh */ }
     // Give the process a beat to die, then refresh the roster.

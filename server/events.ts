@@ -102,6 +102,8 @@ export type BridgeEvent =
   | { type: "rc:url-timeout"; folder: string; pid: number }
   | { type: "rc:exit-requested"; folder: string; pid: number }
   | { type: "rc:exit-forced"; folder: string; pid: number }
+  | { type: "session:end-requested"; pid: number }
+  | { type: "session:end-forced"; pid: number }
 
   // Server lifecycle
   | { type: "server:start"; port: number; scanRoot: string }
@@ -171,6 +173,8 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "rc:url-timeout": "warn",
   "rc:exit-requested": "info",
   "rc:exit-forced": "warn",
+  "session:end-requested": "info",
+  "session:end-forced": "warn",
   "server:start": "info",
   "server:shutdown": "info",
   "server:shutdown-complete": "info",

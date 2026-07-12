@@ -96,3 +96,19 @@ export async function scanClaudeSessions(): Promise<ClaudeProc[]> {
   }
   return procs;
 }
+
+/**
+ * True iff `pid` is a live process whose `comm` is `claude` (gdn-racuca) — the guard for
+ * SIGTERM-by-pid. Confirms the pid is a real claude session (roster membership) and rules out
+ * a recycled or foreign pid before we signal it. False on any error (process gone, non-Linux,
+ * permissions) — fail closed, so a bad pid never gets signalled.
+ */
+export async function isLiveClaudePid(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try {
+    const comm = (await readFile(`/proc/${pid}/comm`, "utf-8")).trim();
+    return comm === "claude";
+  } catch {
+    return false; // process exited, or /proc unreadable
+  }
+}

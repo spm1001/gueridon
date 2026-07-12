@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { spawn as ptySpawn, type IPty } from "node-pty";
-import { scanClaudeSessions } from "./sessions.js";
+import { scanClaudeSessions, isLiveClaudePid } from "./sessions.js";
 
 import {
   buildCCArgs,
@@ -1222,6 +1222,37 @@ export function handleRcExit(folderPath: string, res: ServerResponse): void {
     .end(JSON.stringify({ exiting: true, folder: rc.folderName }));
 }
 
+/**
+ * End ANY live `claude` session by pid via SIGTERM (gdn-racuca) — the foreign-session
+ * counterpart to handleRcExit. Guéridon holds no pty for sessions it didn't spawn (Claude
+ * Desktop-app agents, terminal sessions), but SIGTERM is a faithful out-of-band `/exit` for any
+ * `claude` process: it fires the GracefulShutdown handler (SessionEnd hooks, JSONL flush,
+ * `--resume`-able) with no pty handle needed. The comm=="claude" guard (isLiveClaudePid)
+ * confirms the pid is a real session before we signal — rules out a recycled or foreign pid.
+ * SIGKILL fallback @ grace, RE-checking identity so an 8s-later pid recycle can't be force-
+ * killed. Single-user box: every session is Sameer's and the exit is resumable, so ending a
+ * foreign session is cheap and reversible — the read-only-foreign pick has expired. Gated like
+ * /sessions (the only surface that hands out these pids).
+ */
+export async function handleSessionEnd(pid: number, res: ServerResponse): Promise<void> {
+  if (!(await isLiveClaudePid(pid))) {
+    res.writeHead(404, { "Content-Type": "application/json" })
+      .end(JSON.stringify({ error: "No live claude session with that pid" }));
+    return;
+  }
+  try { process.kill(pid, "SIGTERM"); } catch { /* raced to exit */ }
+  emit({ type: "session:end-requested", pid });
+  const t = setTimeout(async () => {
+    if (await isLiveClaudePid(pid)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+      emit({ type: "session:end-forced", pid });
+    }
+  }, RC_EXIT_GRACE_MS);
+  t.unref?.();
+  res.writeHead(200, { "Content-Type": "application/json" })
+    .end(JSON.stringify({ ending: true, pid }));
+}
+
 async function handleSession(
   folderPath: string,
   client: SSEClient | undefined,
@@ -1945,6 +1976,25 @@ const server = createServer((req, res) => {
       handleRcExit(folderPath, res);
     } catch (err) {
       emit({ type: "request:error", action: "rc-exit", error: errorDetail(err) });
+      if (!res.headersSent) res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
+    }
+    return;
+  }
+
+  // DELETE /session/:pid — SIGTERM a live claude session by pid, incl. FOREIGN ones the roster
+  // lists but Guéridon doesn't own (gdn-racuca). Numeric-only match so it never collides with
+  // the POST /session/:folder route above. Gated like /sessions (its pids come from that roster).
+  const sessionPidMatch = url.pathname.match(/^\/session\/(\d+)$/);
+  if (req.method === "DELETE" && sessionPidMatch) {
+    if (process.env.GUERIDON_ENABLE_RC !== "1") {
+      res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
+      return;
+    }
+    const pid = parseInt(sessionPidMatch[1], 10);
+    try {
+      await handleSessionEnd(pid, res);
+    } catch (err) {
+      emit({ type: "request:error", action: "session-end", error: errorDetail(err) });
       if (!res.headersSent) res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
     }
     return;

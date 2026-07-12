@@ -14,10 +14,21 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { STATIC_FILES, CSP } from "./bridge-logic.js";
+import { isLiveClaudePid } from "./sessions.js";
 
 const PROJECT_ROOT = join(fileURLToPath(import.meta.url), "../..");
 
 // -- Helpers --
+
+/** Poll until `pid` reads comm=="claude" in /proc (or timeout). For the gdn-racuca smoke. */
+async function waitForClaudePid(pid: number, ms = 3000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (await isLiveClaudePid(pid)) return true;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  return false;
+}
 
 /** Grab an unused port by briefly binding to port 0. */
 function findFreePort(): Promise<number> {
@@ -158,6 +169,11 @@ describe("bridge HTTP smoke tests", () => {
 
   it("GET /sessions returns 404 when RC is disabled", async () => {
     const res = await fetch(`${baseUrl}/sessions`);
+    expect(res.status).toBe(404);
+  });
+
+  it("DELETE /session/:pid returns 404 when RC is disabled (gdn-racuca gated like /sessions)", async () => {
+    const res = await fetch(`${baseUrl}/session/999999`, { method: "DELETE" });
     expect(res.status).toBe(404);
   });
 
@@ -847,5 +863,33 @@ describe("launcher endpoints (RC enabled)", () => {
   it("POST /launch with a path-traversal folder returns 400 (rejected before any spawn)", async () => {
     const res = await fetch(`${baseUrl}/launch/${encodeURIComponent("../../etc")}`, { method: "POST" });
     expect(res.status).toBe(400);
+  });
+
+  // --- DELETE /session/:pid — end a foreign session by pid (gdn-racuca) ---
+
+  it("DELETE /session/:pid 404s a pid that is not a live claude session", async () => {
+    // The bridge subprocess's own pid is tsx/node (comm !== "claude") — must fail closed.
+    const res = await fetch(`${baseUrl}/session/${child.pid}`, { method: "DELETE" });
+    expect(res.status).toBe(404);
+  });
+
+  it("DELETE /session/:pid SIGTERMs a real claude-comm process by pid, end-to-end", async () => {
+    // A node child whose process.title is "claude" reads comm=="claude" in the host-global /proc
+    // scan, so the bridge subprocess (same uid) sees and signals it exactly like a foreign session.
+    const fake = spawn(process.execPath, ["-e", "process.title='claude';setInterval(()=>{},1000)"], { stdio: "ignore" });
+    try {
+      expect(await waitForClaudePid(fake.pid!)).toBe(true);
+      const res = await fetch(`${baseUrl}/session/${fake.pid}`, { method: "DELETE" });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ending: true, pid: fake.pid });
+      const died = await new Promise<boolean>((resolve) => {
+        if (fake.exitCode !== null || fake.signalCode) return resolve(true);
+        fake.once("exit", () => resolve(true));
+        setTimeout(() => resolve(false), 3000);
+      });
+      expect(died).toBe(true);
+    } finally {
+      try { fake.kill("SIGKILL"); } catch { /* already dead */ }
+    }
   });
 });
