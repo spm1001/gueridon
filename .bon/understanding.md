@@ -89,6 +89,21 @@ against `origin/main` (`git diff origin/main -- <files>`), and if identical,
 hot-edit `/opt`; if a pull aborts on local changes, they're almost always a past
 hot-edit — don't blind-`reset`, diff against origin first.**
 
+**2026-07-12 — End a foreign session (gdn-racuca), built + pushed @018d7e8, deploy
+HELD.** Sameer hit the pincer live: a Claude Desktop-app `batterie-de-savoir` agent
+(Teams-billed, shown `local · 2h`) he could neither End (owner-only `handleRcExit`)
+nor relaunch over (gdn-wuvujo hides live-session repos). Fix: `DELETE /session/:pid`
+→ SIGTERM by pid (see the End-able≠attachable structural lesson below). Verified
+server-side (5 unit + 3 HTTP integration tests, real process killed end-to-end) and
+client-side (self-render: End button on every foreign row). **NOT deployed** — the
+restart ends every RC session in the bridge cgroup (incl. the self-deploying driver;
+no auto-resume), and Sameer's other live sessions were alive, so gdn-racuca is parked
+`waiting`. Ship with `cd /opt/gueridon && git pull && npm install && sudo systemctl
+restart gueridon`, then tap-test End on a foreign row. (The original batterie-de-savoir
+process self-exited before the SIGTERM test could run — desktop-app agents are ephemeral.)
+Also filed **gdn-botife**: `folders.test.ts` fails 16/39 on clean `main` (pre-existing,
+`scanFolders` returns `[]`; NOT from this session) — so `npm test` isn't fully green.
+
 **AskUserQuestion crash fixed 2026-06-29.** The overlay crashed on mobile
 (`questions.forEach is not a function`) when the model emitted the tool input
 with a non-array `questions`; `state-builder.ts`'s `args.questions || []` only
@@ -134,13 +149,18 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
 
 - **ONE live driver per session JSONL is the invariant everything hangs off (2026-07-09).**
   Two `claude` processes resuming the same session-id both append to one JSONL → interleave and
-  corrupt. This single fact shapes the whole session-joining story: (a) a foreign `vertex-terminal`
-  session is **read-only** — Guéridon has no pty handle and resuming it would collide with the live
-  terminal; (b) the launcher **hides repos with a live session** (gdn-wuvujo) so a 2nd launch can't
-  resume the JSONL the first is writing; (c) the parked baton-pass (gdn-kidowe) is a *hand-off*
-  (SIGTERM the old, then resume), never a *simultaneous mirror* — precisely because two drivers
-  can't coexist. When adding any "attach / join / resume" affordance, first ask: could this put a
-  second live process on a JSONL another process is writing? If yes, it must hand off, not share.
+  corrupt. The invariant forbids a second live *driver*; it says nothing against *removing* one —
+  which is why **ending a foreign session is safe but attaching to it is not** (gdn-racuca, 2026-07-12):
+  End is subtraction (SIGTERM by pid removes a driver — graceful, resumable, no pty needed), whereas
+  attach/resume is addition (a second driver on a JSONL the first is writing = the collision). This
+  single fact shapes the whole session-joining story: (a) a foreign session (`vertex-terminal` OR
+  `local`) is **End-able but NOT attachable** — Guéridon can SIGTERM it by pid (`DELETE /session/:pid`,
+  gdn-racuca) but has no pty to *drive* it, and attaching would collide; (b) the launcher **hides repos
+  with a live session** (gdn-wuvujo) so a 2nd launch can't resume the JSONL the first is writing; (c) the
+  parked baton-pass (gdn-kidowe) is a *hand-off* (SIGTERM the old, then resume), never a *simultaneous
+  mirror* — precisely because two drivers can't coexist. When adding any "attach / join / resume"
+  affordance, first ask: could this put a second live process on a JSONL another process is writing?
+  If yes, it must hand off, not share. (Ending never triggers this — it's the safe subtraction.)
   The corollary bug it explains: Guéridon rendering a session it doesn't own shows a **frozen
   snapshot** (`replayFromJSONL` fires once at attach, no watcher) — live-tailing a foreign session
   would need a watcher+SSE path (deliberately NOT built; streaming lane is maintenance-mode).
@@ -151,6 +171,21 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   `launch.html` render, and CLAUDE.md's `/sessions` row. `vertex-terminal` detection reads
   `/proc` environ OR cmdline (`--settings`) — the wrappers hide Vertex in cmdline, so an
   environ-only check silently mislabels every wrapper session as `local`.
+  - **The `local` bucket is HETEROGENEOUS (2026-07-12, gdn-racuca).** It's not just "hand-started
+    terminal sessions" — it holds at least three distinct things that look identical in the roster:
+    (1) **Claude Desktop-app agents** (the desktop app over RDP on tube — identifiable by the
+    `--plugin-dir …/local-agent-mode-sessions/…` + `mcp__ccd_session__*` + `--permission-prompt-tool
+    stdio` + `--replay-user-messages` cmdline signature; these are ephemeral — they come and go with
+    the app), (2) **plain terminal `claude` sessions** (a human at a TUI — ending one yanks their rug),
+    and (3) **RC sessions orphaned by a bridge restart** (the in-memory `rcSessions` map is lost on
+    restart, so a previously-Guéridon-owned RC session demotes to `local` — this is common, fires on
+    every deploy / the 04:00 reboot). All are now End-able by pid; none are attachable.
+  - **End-able ≠ attachable (gdn-racuca).** Foreign rows (`local`/`vertex-terminal`) get an **End**
+    button → `DELETE /session/:pid` → `handleSessionEnd` (SIGTERM by pid, `isLiveClaudePid` comm-guard,
+    SIGKILL fallback @8s). No pty needed — it's the SIGTERM-by-pid primitive. Client `endSession`
+    branches: owned rc → `DELETE /launch/:folder`, owned vertex → `POST /exit/:folder`, foreign →
+    `DELETE /session/:pid` (with a two-tap "Sure?" arm — native `confirm()` is unreliable in iOS
+    standalone). So the move-together set grew a fifth member: the End-by-pid path.
 
 - **KillMode=control-group makes shutdown a race.** systemd SIGTERMs every
   process in the cgroup simultaneously — CC children may exit and fire their
