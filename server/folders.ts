@@ -376,107 +376,119 @@ interface HandoffInfo {
 }
 
 /**
- * Find the .bon/handoffs/ directory by walking up from folderPath.
- * Returns the first .bon/handoffs/ found, or null.
+ * Resolve the ordered list of directories to search for handoffs, walking up
+ * from folderPath. Mirrors bon's lib-handoff.sh `handoff_read_dirs`: at each
+ * level a VISIBLE `handoffs/` is preferred over that level's legacy
+ * `.bon/handoffs/` (the "legible substrate" convention — prose lives visible at
+ * the room where work happens). Stops at the first `.bon/handoffs/` (the board
+ * root) or a `.git` boundary, so the walk never climbs into a parent container.
+ * Nearest-room dirs come first; the caller picks the first non-empty.
  */
-async function findBonHandoffDir(folderPath: string): Promise<string | null> {
+async function findHandoffDirs(folderPath: string): Promise<string[]> {
+  const dirs: string[] = [];
   let walk = folderPath;
   while (walk !== dirname(walk)) {
-    const candidate = join(walk, ".bon", "handoffs");
     try {
-      await access(candidate);
-      return candidate;
+      await access(join(walk, "handoffs"));
+      dirs.push(join(walk, "handoffs"));
     } catch {
-      walk = dirname(walk);
+      // no visible handoffs/ at this level
     }
+    try {
+      await access(join(walk, ".bon", "handoffs"));
+      dirs.push(join(walk, ".bon", "handoffs"));
+      break; // board root reached — stop climbing
+    } catch {
+      // no .bon/handoffs/ here
+    }
+    try {
+      await access(join(walk, ".git"));
+      break; // repo boundary — don't climb into a parent container
+    } catch {
+      // not a repo root — keep climbing
+    }
+    walk = dirname(walk);
   }
-  return null;
+  return dirs;
 }
 
 /**
  * Find the most recent handoff .md file for a folder.
- * Checks .bon/handoffs/ (walk up from folder) first, then legacy ~/.claude/handoffs/.
- * Extracts session_id (line 3) and purpose (line 4).
+ * Checks visible handoffs/ then .bon/handoffs/ (walk up from folder), then
+ * legacy ~/.claude/handoffs/. Extracts session_id (line 3) and purpose (line 4).
  * Returns null if no handoffs exist or file is malformed.
  */
 export async function getLatestHandoff(
   folderPath: string,
 ): Promise<HandoffInfo | null> {
-  // Primary: .bon/handoffs/ (walk up from project)
+  // Primary: visible handoffs/ then .bon/handoffs/ (walk up from project)
   // Fallback: legacy ~/.claude/handoffs/{encoded}
-  const bonDir = await findBonHandoffDir(folderPath);
+  const handoffDirs = await findHandoffDirs(folderPath);
   const legacyDir = join(HANDOFFS_DIR, encodePath(folderPath));
 
-  const dirs = [bonDir, legacyDir].filter((d): d is string => d !== null);
+  // Search dirs in preference order (visible-first), de-duplicated.
+  const dirs = [...new Set([...handoffDirs, legacyDir])];
 
-  let entries: string[] = [];
-  let resolvedDir: string | null = null;
-
+  // Rank the newest handoff ACROSS all dirs by the header date
+  // ("# Handoff — YYYY-MM-DD"), with mtime only breaking same-day ties. mtime
+  // alone is unreliable: a fresh clone flattens every file's mtime to checkout
+  // time, so mtime-first would pick an arbitrary handoff. Mirrors bon's
+  // open-context.sh reader. On a full (date + mtime) tie the first dir seen
+  // wins — dirs are in visible-first order, so a visible handoffs/ beats a
+  // legacy .bon/handoffs/ on an exact tie.
+  let best: { date: string; mtime: Date; content: string } | null = null;
   for (const dir of dirs) {
+    let entries: string[];
     try {
       entries = await readdir(dir);
-      if (entries.length > 0) {
-        resolvedDir = dir;
-        break;
+    } catch {
+      continue;
+    }
+    for (const file of entries) {
+      if (!file.endsWith(".md")) continue;
+      const path = join(dir, file);
+      let s: Awaited<ReturnType<typeof stat>>;
+      try {
+        s = await stat(path);
+      } catch {
+        continue;
       }
-    } catch {
-      continue;
-    }
-  }
-
-  if (!resolvedDir || entries.length === 0) return null;
-
-  const dir = resolvedDir;
-
-  // Filter to .md files, skip symlinks
-  const mdFiles: string[] = [];
-  for (const file of entries) {
-    if (!file.endsWith(".md")) continue;
-    try {
-      const s = await stat(join(dir, file));
-      if (s.isFile()) mdFiles.push(file);
-    } catch {
-      continue;
-    }
-  }
-
-  if (mdFiles.length === 0) return null;
-
-  // Find most recent by mtime
-  let latest: { name: string; mtime: Date } | null = null;
-  for (const file of mdFiles) {
-    try {
-      const s = await stat(join(dir, file));
-      if (!latest || s.mtime > latest.mtime) {
-        latest = { name: file, mtime: s.mtime };
+      if (!s.isFile()) continue;
+      let content: string;
+      try {
+        content = await readFile(path, "utf-8");
+      } catch {
+        continue;
       }
-    } catch {
-      continue;
+      // Header date from the first line; header-less files sort to the bottom.
+      const dateMatch = content.match(/^# Handoff — (\d{4}-\d{2}-\d{2})/);
+      const date = dateMatch ? dateMatch[1] : "0000-00-00";
+      if (
+        !best ||
+        date > best.date ||
+        (date === best.date && s.mtime > best.mtime)
+      ) {
+        best = { date, mtime: s.mtime, content };
+      }
     }
   }
 
-  if (!latest) return null;
+  if (!best) return null;
 
-  // Read first 5 lines and extract metadata
-  try {
-    const content = await readFile(join(dir, latest.name), "utf-8");
-    const lines = content.split("\n", 5);
+  // Extract metadata from the winner's first 5 lines.
+  const lines = best.content.split("\n", 5);
+  // Line 3 (index 2): "session_id: <value>"
+  const sessionIdMatch = lines[2]?.match(/^session_id:\s*(.+)$/);
+  // Line 4 (index 3): "purpose: <value>"
+  const purposeMatch = lines[3]?.match(/^purpose:\s*(.+)$/);
 
-    // Line 3 (index 2): "session_id: <value>"
-    const sessionIdMatch = lines[2]?.match(/^session_id:\s*(.+)$/);
-    // Line 4 (index 3): "purpose: <value>"
-    const purposeMatch = lines[3]?.match(/^purpose:\s*(.+)$/);
+  if (!sessionIdMatch || !purposeMatch) return null;
 
-    if (!sessionIdMatch || !purposeMatch) return null;
-
-    return {
-      sessionId: sessionIdMatch[1].trim(),
-      purpose: purposeMatch[1].trim(),
-      mtime: latest.mtime,
-    };
-  } catch {
-    return null;
-  }
+  return {
+    sessionId: sessionIdMatch[1].trim(),
+    purpose: purposeMatch[1].trim(),
+    mtime: best.mtime,
+  };
 }
 
 // --- Main scan ---

@@ -73,9 +73,13 @@ function wireVfs() {
   });
 }
 
-function makeHandoff(sessionId: string, purpose: string): string {
+function makeHandoff(
+  sessionId: string,
+  purpose: string,
+  date = "2026-02-09",
+): string {
   return [
-    "# Handoff — 2026-02-09",
+    `# Handoff — ${date}`,
     "",
     `session_id: ${sessionId}`,
     `purpose: ${purpose}`,
@@ -271,24 +275,119 @@ describe("getLatestHandoff", () => {
     });
   });
 
-  it("prefers .bon/handoffs/ over legacy location", async () => {
-    // Legacy handoff
+  it("prefers the newer header date (.bon over legacy), not newer mtime", async () => {
+    // Legacy handoff — older header date but NEWER mtime
     addDir(HANDOFF_DIR, ["old.md"]);
     addFile(join(HANDOFF_DIR, "old.md"), {
-      mtime: new Date("2026-04-01"),
-      content: makeHandoff("legacy-sess", "Legacy purpose"),
+      mtime: new Date("2026-06-01"),
+      content: makeHandoff("legacy-sess", "Legacy purpose", "2026-03-01"),
     });
-    // Bon handoff
+    // Bon handoff — newer header date, older mtime
     const bonHandoffDir = join(FOLDER, ".bon", "handoffs");
-    addDir(bonHandoffDir, ["2026-03-15-abc12345.md"]);
-    addFile(join(bonHandoffDir, "2026-03-15-abc12345.md"), {
+    addDir(bonHandoffDir, ["2026-04-01-abc12345.md"]);
+    addFile(join(bonHandoffDir, "2026-04-01-abc12345.md"), {
       mtime: new Date("2026-03-15"),
-      content: makeHandoff("bon-sess", "Bon purpose"),
+      content: makeHandoff("bon-sess", "Bon purpose", "2026-04-01"),
     });
 
     const result = await getLatestHandoff(FOLDER);
     expect(result?.sessionId).toBe("bon-sess");
     expect(result?.purpose).toBe("Bon purpose");
+  });
+
+  it("finds handoff in visible handoffs/ (no .bon/)", async () => {
+    const visibleDir = join(FOLDER, "handoffs");
+    const mtime = new Date("2026-05-10");
+    addDir(visibleDir, ["2026-05-10-vis.md"]);
+    addFile(join(visibleDir, "2026-05-10-vis.md"), {
+      mtime,
+      content: makeHandoff("vis-only", "Visible only"),
+    });
+
+    const result = await getLatestHandoff(FOLDER);
+    expect(result).toEqual({
+      sessionId: "vis-only",
+      purpose: "Visible only",
+      mtime,
+    });
+  });
+
+  it("prefers visible handoffs/ over .bon/handoffs/ (newer header date)", async () => {
+    // Visible handoffs/ — newer header date, older mtime
+    const visibleDir = join(FOLDER, "handoffs");
+    addDir(visibleDir, ["2026-06-01-visible1.md"]);
+    addFile(join(visibleDir, "2026-06-01-visible1.md"), {
+      mtime: new Date("2026-06-01"),
+      content: makeHandoff("visible-sess", "Visible purpose", "2026-06-01"),
+    });
+    // Legacy .bon/handoffs/ — older header date but NEWER mtime
+    const bonHandoffDir = join(FOLDER, ".bon", "handoffs");
+    addDir(bonHandoffDir, ["2026-05-01-bon1.md"]);
+    addFile(join(bonHandoffDir, "2026-05-01-bon1.md"), {
+      mtime: new Date("2026-07-01"),
+      content: makeHandoff("bon-sess", "Bon purpose", "2026-05-01"),
+    });
+
+    const result = await getLatestHandoff(FOLDER);
+    expect(result?.sessionId).toBe("visible-sess");
+    expect(result?.purpose).toBe("Visible purpose");
+  });
+
+  it("ranks by header date even when an older handoff has a newer mtime", async () => {
+    // The tube fresh-clone failure mode: mtimes flatten to checkout time, so
+    // mtime-first would pick the wrong (older) handoff. Files sit in
+    // .bon/handoffs/ (which the old mtime-ranking code read too), so this
+    // isolates the ranking change rather than the visible-dir change.
+    const dir = join(FOLDER, ".bon", "handoffs");
+    addDir(dir, ["stale.md", "fresh.md"]);
+    // Older handoff by header date, but touched more recently
+    addFile(join(dir, "stale.md"), {
+      mtime: new Date("2026-07-01"),
+      content: makeHandoff("stale-sess", "Stale", "2026-01-01"),
+    });
+    // Newer handoff by header date, older mtime
+    addFile(join(dir, "fresh.md"), {
+      mtime: new Date("2026-02-01"),
+      content: makeHandoff("fresh-sess", "Fresh", "2026-06-01"),
+    });
+
+    const result = await getLatestHandoff(FOLDER);
+    expect(result?.sessionId).toBe("fresh-sess");
+  });
+
+  it("breaks same-header-date ties by mtime", async () => {
+    const dir = join(FOLDER, "handoffs");
+    addDir(dir, ["a.md", "b.md"]);
+    addFile(join(dir, "a.md"), {
+      mtime: new Date("2026-05-01"),
+      content: makeHandoff("older-mtime", "A", "2026-05-10"),
+    });
+    addFile(join(dir, "b.md"), {
+      mtime: new Date("2026-05-05"),
+      content: makeHandoff("newer-mtime", "B", "2026-05-10"),
+    });
+
+    const result = await getLatestHandoff(FOLDER);
+    expect(result?.sessionId).toBe("newer-mtime");
+  });
+
+  it("a header-less file never outranks a dated handoff, even with newer mtime", async () => {
+    const dir = join(FOLDER, "handoffs");
+    addDir(dir, ["dated.md", "nohdr.md"]);
+    addFile(join(dir, "dated.md"), {
+      mtime: new Date("2026-01-01"),
+      content: makeHandoff("dated-sess", "Dated", "2026-03-01"),
+    });
+    addFile(join(dir, "nohdr.md"), {
+      mtime: new Date("2026-09-01"),
+      content: makeHandoff("nohdr-sess", "No header").replace(
+        /^# Handoff.*\n/,
+        "# not a handoff header\n",
+      ),
+    });
+
+    const result = await getLatestHandoff(FOLDER);
+    expect(result?.sessionId).toBe("dated-sess");
   });
 });
 
