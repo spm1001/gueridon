@@ -33,6 +33,21 @@ function hasVertexMarker(text: string): boolean {
 }
 
 /**
+ * True if a /proc cmdline is the Claude Code daemon (`claude daemon run …`), not a session
+ * (gdn-mimije). /proc/<pid>/cmdline is NUL-separated argv; the daemon's argv[1] is `daemon`
+ * (e.g. `/…/claude\0daemon\0run\0--origin\0transient\0…`), and it can be spawned transiently
+ * by any session — so it shares comm=="claude" and would otherwise show as an End-able roster
+ * row (tapping End would SIGTERM the daemon, not a session). No interactive/-p/RC session has
+ * `daemon` as its subcommand (they are `claude`, `claude --resume …`, `claude -p …`,
+ * `claude --remote-control …`, `claude /open`, `claude --settings …`), so this never excludes
+ * a real session. Empty/unreadable cmdline → not a daemon (fail open: keep the row).
+ */
+export function isDaemonCmdline(cmdlineRaw: string): boolean {
+  const argv = cmdlineRaw.split("\0").filter(Boolean);
+  return argv[1] === "daemon";
+}
+
+/**
  * Find live `claude` MAIN processes with their working directory and elapsed seconds.
  *
  * Identifies sessions by `comm === "claude"` (CC sets its process title) — this catches RC,
@@ -82,14 +97,21 @@ export async function scanClaudeSessions(): Promise<ClaudeProc[]> {
     } catch {
       continue; // can't resolve cwd (process gone / permissions) — skip it
     }
-    // Vertex detection: environ (systemd/-p lane, env-var launch) OR cmdline (wrapper --settings).
-    let vertexBilled = false;
-    for (const src of ["environ", "cmdline"]) {
+    // Read cmdline once: it lets us (a) exclude the CC daemon (`claude daemon run …`,
+    // gdn-mimije — infrastructure, not a session; an End on it would kill the daemon), and
+    // (b) detect Vertex billing for wrapper-launched sessions (--settings JSON on the cmdline).
+    let cmdline = "";
+    try { cmdline = await readFile(`/proc/${pid}/cmdline`, "utf-8"); } catch { /* unreadable — treat as session */ }
+    if (isDaemonCmdline(cmdline)) continue; // the daemon is not a session — keep it out of the roster
+
+    // Vertex detection: cmdline (wrapper --settings) OR environ (systemd/-p lane, env-var launch).
+    let vertexBilled = hasVertexMarker(cmdline);
+    if (!vertexBilled) {
       try {
-        const raw = await readFile(`/proc/${pid}/${src}`, "utf-8");
-        if (hasVertexMarker(raw)) { vertexBilled = true; break; }
+        const environ = await readFile(`/proc/${pid}/environ`, "utf-8");
+        if (hasVertexMarker(environ)) vertexBilled = true;
       } catch {
-        /* unreadable (race / permissions) — leave as not-detected on this source */
+        /* unreadable (race / permissions) — leave as not-detected */
       }
     }
     procs.push({ pid, cwd, ageSec: ageByPid.get(pid) ?? 0, vertexBilled });
