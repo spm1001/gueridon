@@ -104,6 +104,24 @@ process self-exited before the SIGTERM test could run — desktop-app agents are
 Also filed **gdn-botife**: `folders.test.ts` fails 16/39 on clean `main` (pre-existing,
 `scanFolders` returns `[]`; NOT from this session) — so `npm test` isn't fully green.
 
+**2026-07-19 — gueridon now runs on node 22 (restart done + verified live).** The
+prior (abandoned) session `15d19952` upgraded tube's system node Debian-20 →
+NodeSource **v22.23.1** and rebuilt gueridon's `pty.node` in BOTH `/opt` and dev
+against node 22 (N-API): the on-disk `pty.node` now links **no `libnode.so.115`**
+(Debian node's shared lib that NodeSource's *static* node doesn't ship) — un-rebuilt,
+the next 04:00 reboot would have crashed the whole bridge, since node-pty is a
+top-level import. The live bridge kept running node 20 **in-memory** (inode retention)
+until this session. **This session (Sameer's ask):** restarted gueridon → bridge now
+on node v22.23.1 (both processes), single clean start, :3001 listening, `/repos`
+responds, `pty.node` import proven (the bridge booted). No code change — pure
+node-swap; `/opt` stayed at `bd6f7c5` so gdn-racuca stays HELD. Node runbook lives in
+infra (`machines/tube/README.md` + OPERATIONS `libnode.so.115` gotcha, commit
+`bdae9c2`); tube auto-patches 22.x via its `origin=*` unattended policy. The restart's
+live-session cost surfaced the **salvage** gap (recovering + `--resume`-ing the 5 live
+cgroup sessions into login shells before the restart) — captured as gdn-cepalu's third
+lifecycle verb; the one-driver invariant applies to a terminal `--resume` too (end the
+bridge's copy first).
+
 **AskUserQuestion crash fixed 2026-06-29.** The overlay crashed on mobile
 (`questions.forEach is not a function`) when the model emitted the tool input
 with a non-array `questions`; `state-builder.ts`'s `args.questions || []` only
