@@ -336,7 +336,15 @@ function sseConnect() {
       ssePostSession(sseCurrentFolder);
     } else if (location.hash.length > 1) {
       liveState.connection = 'loading';
-      ssePostSession(location.hash.slice(1));
+      const hashFolder = location.hash.slice(1);
+      // Fresh-launch intent from the launcher (gdn-duhino / Symptom 2): a deliberate
+      // "new session" launch sets this one-shot flag. Consume it so the bridge starts
+      // FRESH (sessionId:"new") instead of resuming this folder's last session. Cleared
+      // immediately → one-shot: a reload/reconnect reconnects to the (now-live) session,
+      // never re-freshes. Only fires when the stored folder matches the one we're opening.
+      let freshLaunch = null;
+      try { freshLaunch = sessionStorage.getItem('gdnFreshLaunch'); sessionStorage.removeItem('gdnFreshLaunch'); } catch {}
+      ssePostSession(hashFolder, freshLaunch === hashFolder ? 'new' : undefined);
     } else {
       goHome();
     }

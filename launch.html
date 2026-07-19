@@ -355,6 +355,15 @@
   function launchVertex(e) {
     if (e) e.preventDefault();
     if (!selected) return;
+    // Signal a FRESH session for this launch (gdn-duhino / Symptom 2). The conversation
+    // page reads this one-shot flag on its first connect and asks the bridge for a NEW
+    // session (sessionId:"new") instead of resuming the folder's last one. Carried via
+    // sessionStorage (NOT the hash/query) so the raw "/#owner/repo" contract stays
+    // untouched (structural lesson #1); cleared on read → one-shot, so a later reload
+    // reconnects to the now-live session rather than re-freshing. Roster "Open" (which
+    // navigates to "/#folder" without setting this flag) still resumes — the two intents
+    // are cleanly separated.
+    try { sessionStorage.setItem("gdnFreshLaunch", selected); } catch {}
     location.href = "/#" + selected;
   }
 

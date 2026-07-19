@@ -304,6 +304,44 @@ describe("bridge HTTP smoke tests", () => {
     expect(data.warnings[0]).toMatch(/deposited as binary/);
   });
 
+  // -- Fresh-vs-resume session intent (gdn-duhino / Symptom 2) --
+
+  it("POST /session with sessionId 'new' starts fresh even when a recent session is resumable", async () => {
+    const folderName = "test-fresh-vs-resume";
+    const folderPath = join(tempDir, folderName);
+    mkdirSync(folderPath, { recursive: true });
+
+    // Seed a recent, resumable session on disk in the CC projects layout
+    // (HOME/.claude/projects/<encodedPath>/<uuid>.jsonl). encodePath = non-alnum → "-";
+    // getLatestSession derives the id from the filename and lastActive from mtime, so an
+    // empty file written now is a valid, recent, resumable session.
+    const encoded = folderPath.replace(/[^a-zA-Z0-9-]/g, "-");
+    const projDir = join(tempDir, ".claude", "projects", encoded);
+    mkdirSync(projDir, { recursive: true });
+    const seededId = "11111111-2222-3333-4444-555555555555";
+    writeFileSync(join(projDir, `${seededId}.jsonl`), "");
+
+    // Default (no sessionId) → resumes the seeded session (this is the Symptom-2 behaviour
+    // every Vertex launch used to get, because the launcher sent no intent).
+    const resumeRes = await fetch(`${baseUrl}/session/${folderName}`, { method: "POST" });
+    expect(resumeRes.status).toBe(200);
+    const resumed = await resumeRes.json();
+    expect(resumed.sessionId).toBe(seededId);
+    expect(resumed.resumable).toBe(true);
+
+    // Explicit "new" → a FRESH session, NOT the seeded one (the fix: the launcher now
+    // sends sessionId:"new" for a deliberate new launch).
+    const newRes = await fetch(`${baseUrl}/session/${folderName}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "new" }),
+    });
+    expect(newRes.status).toBe(200);
+    const fresh = await newRes.json();
+    expect(fresh.sessionId).not.toBe(seededId);
+    expect(fresh.resumable).toBe(false);
+  });
+
   // -- Share-sheet upload (gdn-rovole) --
 
   it("POST /upload with new-session creates folder and deposits files", async () => {
