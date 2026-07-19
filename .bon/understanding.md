@@ -287,6 +287,74 @@ favour of B being viable:**
     Vertex is silently inert. De-Vertexing the Guéridon spawns is the gating
     change for the *Teams* lane.
 
+## Substrate watch — 2026-07-19 update: `claude agents` closed the roster gap
+
+The 2026-06-10 read (above) predicted Anthropic's stack would overtake gueridon's
+process-plumbing back-half piece by piece. As of 2026-07-19 that has largely
+happened for **session management** — verified live this session:
+
+- **`claude agents` is now a full session manager**, not a daemon-only list. Its
+  `--json` and TUI enumerate EVERY live `claude` session — interactive, background,
+  AND headless `claude -p` (proven: a faithful bridge-style `-p` spawn made the count
+  go 8→9). The TUI shows rich per-session status (`aiTitle`, last-message preview,
+  state `awaiting/working/completed`, age) and offers **return / reply / delete +
+  the `claude --resume <uuid>` command** for each. It even titles + surfaces this
+  very session.
+- **What `claude agents` does NOT do** (gueridon's durable residual):
+  1. **Billing lane** — it labels everything `kind:interactive`, no Vertex/Teams tag.
+  2. **Release a bridge-OWNED process** — a live `-p`/RC session's stdin is held by
+     the bridge; `claude agents` resuming it live would collide on the one-driver
+     invariant. Only gueridon can gracefully release its own grip (SIGTERM, resumable
+     — the gdn-racuca End-by-pid primitive shipped 2026-07-19).
+  3. **Launch from a phone** — the moat, unchanged.
+
+**Consequence for the roadmap:** do NOT build a gdn session-enumerator (`gdn ls`)
+or the salvage UUID-archaeology — `claude agents` is richer AND is a surface Sameer
+already lives in (building our own would ADD a Claude surface, violating his core
+"don't make me accumulate surfaces" constraint, and `--json` hands you the uuid the
+archaeology used to dig for). Gueridon's job narrows to: **launch (moat) → release
+for adopt → label its own launches so they're findable in `claude agents`.**
+
+## Plan frame — session graduation (2026-07-19, gdn-cepalu descoped)
+
+Sameer's driving scenario: launch a repo session from the **phone** (in bed / on a
+train, off a link), let it **percolate**, then at the **desk** graduate it into a
+first-class **terminal** session alongside his ~10 tmux claudes — WITHOUT opening
+gueridon-in-a-browser (which would be yet another surface). Gueridon is the igniter;
+the terminal (via `claude agents`) is where the work lives.
+
+The Field Report's **three-axis model** is the conceptual frame for the residual
+lifecycle bugs (each surviving piece maps to one axis):
+- **navigation** (lobby ↔ in-session) — Symptom 2 lives here.
+- **billing** (a launch PARAMETER, never a navigation mutator) — the `--name` labelling.
+- **session-kind** (gdn-owned/adoptable ↔ foreign/observe-only) — adopt.
+
+**Scope boundaries — NOT building** (substrate owns them, or over-engineering):
+- `gdn ls` / bespoke enumerator — `claude agents` is richer + an existing surface.
+- salvage UUID-archaeology — `claude agents --json` gives the sessionId directly.
+- a full state-machine REFACTOR — the substrate removed most symptoms (Symptom 1 →
+  gdn-racuca done; salvage/enumeration → `claude agents`); targeted fixes suffice.
+  Keep the three-axis model as the *frame*, not as a mandate to rewrite.
+
+**Key seams (verified this session):**
+- **Symptom 2** — `launch.html` `launchVertex()` does `location.href = "/#"+selected`,
+  carrying NO fresh-vs-resume intent; the conversation page → `resolveSessionForFolder`
+  then resolves to *resume* whatever that folder last had. Billing-selection IS a bare
+  navigation with no way to say "new." Fix = carry explicit "new" intent through the
+  hash → session resolution (do NOT rebuild a state machine; thread the one bit).
+- **Adopt** — `End` (SIGTERM, graceful, resumable — shipped gdn-racuca) → the session
+  should appear in `claude agents` with its resume command → `return`. PROVEN for
+  *terminal* sessions (the screenshot shows ended ones with `resume with: claude
+  --resume …`); the load-bearing UNVERIFIED seam is whether a **bridge-owned `-p`/RC**
+  session ended via gdn's SIGTERM lands there the same way. Test with ONE real
+  gueridon session before building on it.
+- **Labelling** — `claude -n/--name "<marker> owner/repo"` sets the display name
+  (picker + terminal title); overrides the auto `aiTitle` (JSONL first-line keys:
+  `aiTitle,sessionId,type`). RC already names via the `--remote-control` positional
+  (currently bare `folderName`) — prefix it. Marker encodes billing (📱vertex / 📱teams),
+  giving billing-visibility inside `claude agents` for gdn-launched sessions. VERIFY a
+  `-p` session actually shows the `--name` in the agents view (untested for headless).
+
 ## Billing lanes — Vertex vs Teams (verified 2026-06-30)
 
 **Vertex and RC are mutually exclusive, and that makes the streaming back-half
