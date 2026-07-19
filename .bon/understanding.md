@@ -337,11 +337,18 @@ lifecycle bugs (each surviving piece maps to one axis):
   Keep the three-axis model as the *frame*, not as a mandate to rewrite.
 
 **Key seams (verified this session):**
-- **Symptom 2** — `launch.html` `launchVertex()` does `location.href = "/#"+selected`,
-  carrying NO fresh-vs-resume intent; the conversation page → `resolveSessionForFolder`
-  then resolves to *resume* whatever that folder last had. Billing-selection IS a bare
-  navigation with no way to say "new." Fix = carry explicit "new" intent through the
-  hash → session resolution (do NOT rebuild a state machine; thread the one bit).
+- **Symptom 2 — DONE (gdn-duhino, 2026-07-19).** `launch.html` `launchVertex()` did
+  `location.href = "/#"+selected`, carrying NO fresh-vs-resume intent; the conversation page →
+  `resolveSessionForFolder` resolved to *resume* whatever that folder last had. Root cause: the
+  bridge's `handleSession` ALREADY had a `"new"` mode (`sessionId:"new"` → fresh, no resume) —
+  its trigger was orphaned when the switcher was retired (gdn-deloce). Fix (grep-the-substrate
+  win, NOT a state machine): re-connect the trigger — `launchVertex` sets a one-shot
+  `sessionStorage` `gdnFreshLaunch` flag; `index.html` consumes it on first hash-connect →
+  `sessionId:"new"`. Carried via sessionStorage (not the hash) so the raw `/#owner/repo` contract
+  stays untouched. Roster "Open" (no flag) still resumes. Live-verified with a controlled twin
+  (control resumes, launcher goes fresh). The bridge `"new"` path is regression-tested
+  (bridge.integration.test.ts); the client wiring is untested inline JS (the gdn-pefipi blind
+  spot) — verified live only.
 - **Adopt** — `End` (SIGTERM, graceful, resumable — shipped gdn-racuca) → the session
   should appear in `claude agents` with its resume command → `return`. PROVEN for
   *terminal* sessions (the screenshot shows ended ones with `resume with: claude
