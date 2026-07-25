@@ -342,9 +342,24 @@ infra `machines/tube/OPERATIONS.md` §2, `machines/tube/claude-remote@.service`,
   prompts in one session) and `claude agents` listed it as `kind:"interactive"`. So the empty
   session simply had nothing to write. **Lesson for the next probe: a fresh RC-server session
   is an empty-set trap — always put a turn through it before concluding anything about
-  persistence.** Still untested (needs one step): an actual `claude --resume` *after* the
-  phone ends the session — the server holds its children, so the one-driver invariant says
-  graduation is end-then-resume, never resume-alongside.
+  persistence.**
+- **GRADUATION PROVEN END-TO-END (2026-07-25) — gdn-pizoke's seam, closed.** Phone creates a
+  session → real work → **Archive** from the phone (the app offers no `/exit` for these) →
+  `claude --resume <id>` at the desk answered from the conversation's own history. **Archive
+  is a clean end**: the session child exited, no orphan under the server, `claude agents`
+  dropped it. So the native path is *end-then-resume* — exactly what the one-driver invariant
+  demands — and **Sameer's driving scenario (bed → percolate → desk) now works with no
+  Guéridon involvement at all** for Teams-billed work. The Vertex-lane equivalent is still
+  ours to prove.
+- **Roster seam, if the Teams lane survives:** an RC-server session child is identifiable from
+  `/proc` by `CLAUDE_CODE_ENVIRONMENT_KIND=bridge` + `ENTRYPOINT=sdk-cli` + `CHILD_SESSION=1`
+  (`TERM=dumb`). That would be a 5th `buildSessionRoster` kind. Deliberately NOT filed as a
+  bon — it is only worth building if gdn-sudacu decides the Teams lane stays.
+- **⚠ Posture, worth carrying into any "more servers" decision:** an always-on server is a
+  standing full-reach shell (no sandbox by default; global settings allowlist bare tool names
+  plus `additionalDirectories:['~']` and `skipAutoPermissionPrompt:true`), permanent and
+  reboot-surviving where RC used to live only as long as an open terminal. `--sandbox` exists
+  as the lever (documented, accepted by the binary, hidden from `--help`).
 - **Vertex is a hard refusal** — matched pair, same dir + command, `CLAUDE_CODE_USE_VERTEX=1`
   → immediate exit: *"Remote Control is only available when using Claude via
   api.anthropic.com."* The claude.ai login was present in **both** runs, so the gate is the
