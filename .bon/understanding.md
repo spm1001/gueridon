@@ -250,13 +250,16 @@ layer. Cornichon is the architectural sibling (UI shell ↔ dumb pipe ↔
 folder-scoped agent host speaking NDJSON over stdio); its 10:1 deletion when
 the SDK ate the parsing layer is the precedent.
 
-**The /rc question, settled 2026-06-29 (claude-code-guide agent + the running
-`~/.claude/remote/srv` daemon).** `/rc` (Remote Control) is **attach-only, and
+**The /rc question, settled 2026-06-29 — the "no remote launch" half is now DEAD
+(superseded 2026-07-25, see "Remote launch shipped" below; `~/.claude/remote/srv`
+no longer exists either).** `/rc` (Remote Control) is **attach-only, and
 only to *interactive TTY* sessions** — it explicitly cannot attach to a headless
-`claude -p` process (open feature requests, nothing shipped), and there is **no
-remote-LAUNCH capability anywhere** in Anthropic's stack. So the launcher
-front-half is *more* durable than "shrink to launcher" implies: `/rc` can't
-take a handoff from Guéridon's `claude -p` sessions at all. Two coherent futures, forked by gdn-hocede — **spiked & RESOLVED 2026-06-29 in
+`claude -p` process (open feature requests, nothing shipped) — and, as read in June,
+there was **no remote-LAUNCH capability anywhere** in Anthropic's stack. That last
+clause was the load-bearing premise under "the launcher front-half is the moat", and
+`claude remote-control` **server mode** has since falsified it. Do not reason from it.
+What survives from this paragraph: `/rc` still can't take a handoff from Guéridon's
+`claude -p` sessions. Two coherent futures, forked by gdn-hocede — **spiked & RESOLVED 2026-06-29 in
 favour of B being viable:**
 - **A — stays the full mobile client (status quo).** Launches *and* drives.
   Works today; cost is maintaining the hand-rolled stream-json layer (already
@@ -315,7 +318,76 @@ already lives in (building our own would ADD a Claude surface, violating his cor
 archaeology used to dig for). Gueridon's job narrows to: **launch (moat) → release
 for adopt → label its own launches so they're findable in `claude agents`.**
 
+## Substrate watch — 2026-07-25: remote launch shipped, and it eats the Teams lane
+
+**The moat premise is dead.** `claude remote-control` (alias `claude remote`) in **server
+mode** is a persistent supervisor that registers a **directory** with claude.ai; the Claude
+mobile app then creates sessions in it **on demand**, up to `--capacity` (default 32).
+That is *remote launch* — the exact capability the June read declared absent everywhere.
+Verified live on tube, CC v2.1.220 (full fact list + the systemd unit:
+infra `machines/tube/OPERATIONS.md` §2, `machines/tube/claude-remote@.service`, commit 904cc77):
+
+- **Headless works** — runs under systemd with no TTY and stdin closed. Now live as
+  `claude-remote@home-modha-notes` (~106 MB idle, `Restart=always`).
+- **ONE device, N directories** (Sameer's phone, two servers on tube): each server is a
+  directory tile on a single "tube" device. So "a server per hot repo" is a coherent
+  architecture, not a dead end.
+- **`--no-create-session-in-dir`** still registers the tile ("0 of 32") → the pre-created
+  ~300 MB session child is pure waste for an always-on server.
+- **Sessions it creates are ordinary local sessions** — they appear in `claude agents` and
+  resume at the desk.
+- **Vertex is a hard refusal** — matched pair, same dir + command, `CLAUDE_CODE_USE_VERTEX=1`
+  → immediate exit: *"Remote Control is only available when using Claude via
+  api.anthropic.com."* The claude.ai login was present in **both** runs, so the gate is the
+  **inference endpoint**, not identity. Stronger evidence than June's silent-inertness spike,
+  and it settles the question: **no configuration gets Vertex billing onto a phone except
+  Guéridon's `-p` lane.**
+
+**What this does to the roadmap** (the third time the substrate has eaten a Guéridon plan —
+after `claude agents` on 2026-07-19 and the `/rc` flag on 2026-06-29):
+
+- **The Teams lane is now redundant, and beaten on its own terms.** Server mode + the app
+  natively provide launch, drive, roster (with aiTitles, per-device grouping, mid-turn
+  previews), push, and phone→machine file attachments as `@` refs. Candidates for deletion
+  when the time comes: `spawnRemoteControl`, `POST /launch`, `DELETE /launch`, `GET /rc`,
+  `rcSessions`, `pushLaunchReady`, `isSessionReadyFromTail`/`isRcSessionReady`, the roster's
+  `rc` kind, and `bridge-rc.test.ts`.
+- **gdn-ruvegu (session graduation) is largely dissolved for the Teams lane** — an RC-server
+  session *is* a normal local session, so `claude agents` + `--resume` is the graduation path
+  with no Guéridon involvement. Its children shrink with it: **gdn-kozoha** (billing-lane
+  labelling) matters only for sessions Guéridon still owns, i.e. the Vertex lane; **gdn-pizoke**
+  (adopt) survives only as the one-driver question in new clothes — *the server* holds its
+  session children, so a desk `--resume` still needs a release, now performed by ending the
+  session from the phone's native UI.
+- **What is still uniquely ours:** the **Vertex lane** (structurally unavailable anywhere
+  else), **folder creation**, and **any-repo-on-demand** — a server is cwd-bound, so covering
+  the long tail of ~38 repos would need a server each (~106 MB apiece; a hot set of 3–5 is
+  fine, 38 is not).
+- **Proposed shape, NOT yet decided:** systemd servers for the hot set (notes ✓, gueridon,
+  infra) + repoint `POST /launch` to spawn a *server* rather than a single session, giving the
+  long tail 32-capacity multi-session launches. **Means-commitment: live with it for a week
+  before deleting anything** — migrate-don't-big-bang is this repo's own doctrine, and one
+  evening's research is not daily-use evidence.
+
+**Two seams still UNVERIFIED, both cheap, one security-relevant:**
+1. Does `--permission-mode bypassPermissions` on the *server* actually give phone-created
+   sessions full freedom? The flag exists in `claude remote --help` but is **absent from the
+   docs**, while `mobile.md` says the app itself cannot select Bypass or Auto for an RC
+   session. Answer this before pointing a bypass-mode server at a live repo.
+2. Can a phone-created session be `--resume`d at the desk **while its server still holds it**,
+   or must it be ended first? (The one-driver invariant — see the structural lesson above.)
+
+**Docs posture, for whoever hunts this next:** `remote-control` is **not** in `claude --help`'s
+Commands list, `claude remote` appears nowhere in the docs, and no weekly release note
+announced server mode — which is why we had it as "doesn't exist" for a month. The page
+(<https://code.claude.com/docs/en/remote-control>) is thorough on the feature and silent on
+running it as a service; the device/directory model is undocumented entirely.
+
 ## Plan frame — session graduation (2026-07-19, gdn-cepalu descoped)
+
+**Read the 2026-07-25 section above first — for the TEAMS lane this whole frame is now
+substrate-provided.** What follows still applies to the **Vertex lane**, which no Anthropic
+surface can reach.
 
 Sameer's driving scenario: launch a repo session from the **phone** (in bed / on a
 train, off a link), let it **percolate**, then at the **desk** graduate it into a
