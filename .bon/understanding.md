@@ -334,8 +334,17 @@ infra `machines/tube/OPERATIONS.md` §2, `machines/tube/claude-remote@.service`,
   architecture, not a dead end.
 - **`--no-create-session-in-dir`** still registers the tile ("0 of 32") → the pre-created
   ~300 MB session child is pure waste for an always-on server.
-- **Sessions it creates are ordinary local sessions** — they appear in `claude agents` and
-  resume at the desk.
+- **Sessions it creates appear in `claude agents`** (verified) — but **local resume is NOT
+  verified, and this is load-bearing.** A server-created session runs as `--print --sdk-url
+  …/v1/code/sessions/cse_…` with its transcript stored Anthropic-side; `claude --resume` on a
+  freshly-created one returned *"No conversation found"* with no JSONL on disk. That is
+  consistent with *"an empty session has nothing to write"* **and** with *"server-hosted
+  sessions never land locally"* — and the two readings point opposite ways: if it is the
+  latter, the phone→desk graduation Sameer actually wants is BROKEN in the native path, which
+  would hand the Teams lane a real advantage worth keeping (Guéridon's own RC spawns are
+  interactive `claude --remote-control`, which do write local JSONLs). **Distinguishing test:
+  one real turn from the phone into a server session, then look for the JSONL.** Run it before
+  deciding gdn-sudacu.
 - **Vertex is a hard refusal** — matched pair, same dir + command, `CLAUDE_CODE_USE_VERTEX=1`
   → immediate exit: *"Remote Control is only available when using Claude via
   api.anthropic.com."* The claude.ai login was present in **both** runs, so the gate is the
