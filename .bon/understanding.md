@@ -213,6 +213,22 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   function — never read from the (racing) session objects. Applies to any
   future "what was CC doing when we died" feature.
 
+- **The substrate eats session-management plans — check its HIDDEN surface before building
+  (standing instruction as of 2026-07-25).** Three consecutive Guéridon plans were obsoleted by
+  capabilities Anthropic had already shipped: the `--remote-control` flag (2026-06-29),
+  `claude agents` (2026-07-19), remote launch via `claude remote-control` server mode
+  (2026-07-25). Before building ANY session-management or launch feature here, spend ten
+  minutes checking whether the substrate already provides it — **including surfaces that don't
+  advertise themselves**: `remote-control` is absent from `claude --help`'s Commands list,
+  `claude remote` appears nowhere in the docs, and no release note announced server mode, so a
+  diligent changelog-and-`--help` sweep missed it for a month. The method that works: (1) treat
+  the docs site index (`llms.txt`) as more complete than the CLI's own help, and DIFF the two —
+  that diff surfaced `--sandbox` (documented, hidden from `--help`; the security lever) and
+  `--permission-mode` (in `--help`, absent from docs); (2) periodically run
+  `<tool> <subcommand> --help` for subcommands you only half-know, rather than trusting the
+  top-level help to enumerate them. Each time the check ran, it deleted more work than it
+  created — and shipping less was the right outcome, not a disappointment.
+
 - **Observe CC from outside via structured substrate, never the TUI.** When the
   bridge needs to know what a `claude` session is doing without driving it, read
   a structured signal, not the rendered view. Three primitives the launcher rests
