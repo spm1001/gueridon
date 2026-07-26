@@ -40,7 +40,7 @@ The Vertex/streaming lane is in **maintenance mode** — nips and tucks fine (e.
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~741 tests, ~6s)
+npm test                     # Run all tests (~777 tests, ~7s)
 npm run test:watch           # Watch mode
 ```
 

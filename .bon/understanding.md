@@ -102,7 +102,9 @@ no auto-resume), and Sameer's other live sessions were alive, so gdn-racuca is p
 restart gueridon`, then tap-test End on a foreign row. (The original batterie-de-savoir
 process self-exited before the SIGTERM test could run — desktop-app agents are ephemeral.)
 Also filed **gdn-botife**: `folders.test.ts` fails 16/39 on clean `main` (pre-existing,
-`scanFolders` returns `[]`; NOT from this session) — so `npm test` isn't fully green.
+`scanFolders` returns `[]`; NOT from this session). RESOLVED since: 2026-07-26's session
+baselined `npm test` fully green (772/772 before that night's work, 777/777 after) — if
+the suite looks green, believe it.
 
 **2026-07-19 — gueridon now runs on node 22 (restart done + verified live).** The
 prior (abandoned) session `15d19952` upgraded tube's system node Debian-20 →
