@@ -33,18 +33,34 @@ function hasVertexMarker(text: string): boolean {
 }
 
 /**
- * True if a /proc cmdline is the Claude Code daemon (`claude daemon run …`), not a session
- * (gdn-mimije). /proc/<pid>/cmdline is NUL-separated argv; the daemon's argv[1] is `daemon`
- * (e.g. `/…/claude\0daemon\0run\0--origin\0transient\0…`), and it can be spawned transiently
- * by any session — so it shares comm=="claude" and would otherwise show as an End-able roster
- * row (tapping End would SIGTERM the daemon, not a session). No interactive/-p/RC session has
- * `daemon` as its subcommand (they are `claude`, `claude --resume …`, `claude -p …`,
- * `claude --remote-control …`, `claude /open`, `claude --settings …`), so this never excludes
- * a real session. Empty/unreadable cmdline → not a daemon (fail open: keep the row).
+ * `claude` subcommands that are INFRASTRUCTURE, not sessions (gdn-mimije, gdn-caguga):
+ * - `daemon` — the CC daemon (`claude daemon run …`), spawned transiently by any session.
+ * - `remote-control` — a Remote Control SERVER (registers a directory with claude.ai; the
+ *   phone creates sessions in it on demand — e.g. tube's `claude-remote@` systemd units).
+ *   Always-on: a roster row for it would offer End on a `Restart=always` service, and its
+ *   permanent liveness would hide its repo from the launcher's repo list forever via the
+ *   live-session filter (gdn-wuvujo).
+ * - `remote` — the server alias. The binary rewrites it to `remote-control` in /proc
+ *   (verified live 2026-07-25), so this entry is belt-and-braces for versions that don't.
  */
-export function isDaemonCmdline(cmdlineRaw: string): boolean {
+const INFRA_SUBCOMMANDS = new Set(["daemon", "remote-control", "remote"]);
+
+/**
+ * True if a /proc cmdline is Claude Code INFRA rather than a session — the daemon or a
+ * Remote Control server. /proc/<pid>/cmdline is NUL-separated argv; infra carries its
+ * subcommand at argv[1] (e.g. `/…/claude\0daemon\0run\0…`, `/…/claude\0remote-control\0
+ * --no-create-session-in-dir\0`). Both share comm=="claude" and would otherwise show as
+ * End-able roster rows. No real session has an INFRA_SUBCOMMANDS argv[1] — sessions are
+ * `claude`, `claude --resume …`, `claude -p …`, `claude /open`, `claude --settings …`, and
+ * critically the Teams lane's FLAG form `claude --remote-control <name>` (dashes, so it
+ * does not match the `remote-control` subcommand) — so this never excludes a real session.
+ * A server's session CHILDREN are real sessions and deliberately stay in the roster
+ * (gdn-caguga: they are live work; End on them is the same graceful SIGTERM as any foreign
+ * session). Empty/unreadable cmdline → not infra (fail open: keep the row).
+ */
+export function isInfraCmdline(cmdlineRaw: string): boolean {
   const argv = cmdlineRaw.split("\0").filter(Boolean);
-  return argv[1] === "daemon";
+  return INFRA_SUBCOMMANDS.has(argv[1] ?? "");
 }
 
 /**
@@ -97,12 +113,13 @@ export async function scanClaudeSessions(): Promise<ClaudeProc[]> {
     } catch {
       continue; // can't resolve cwd (process gone / permissions) — skip it
     }
-    // Read cmdline once: it lets us (a) exclude the CC daemon (`claude daemon run …`,
-    // gdn-mimije — infrastructure, not a session; an End on it would kill the daemon), and
-    // (b) detect Vertex billing for wrapper-launched sessions (--settings JSON on the cmdline).
+    // Read cmdline once: it lets us (a) exclude claude INFRA — the CC daemon (gdn-mimije)
+    // and Remote Control servers (gdn-caguga) — which share comm=="claude" but are not
+    // sessions, and (b) detect Vertex billing for wrapper-launched sessions (--settings
+    // JSON on the cmdline).
     let cmdline = "";
     try { cmdline = await readFile(`/proc/${pid}/cmdline`, "utf-8"); } catch { /* unreadable — treat as session */ }
-    if (isDaemonCmdline(cmdline)) continue; // the daemon is not a session — keep it out of the roster
+    if (isInfraCmdline(cmdline)) continue; // daemon / RC server — infra, not a session
 
     // Vertex detection: cmdline (wrapper --settings) OR environ (systemd/-p lane, env-var launch).
     let vertexBilled = hasVertexMarker(cmdline);
