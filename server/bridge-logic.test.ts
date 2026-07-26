@@ -7,6 +7,7 @@ import {
   isHandoffStale,
   validateFolderPath,
   buildCCArgs,
+  pluginMcpAllowRules,
   buildSystemPrompt,
   getActiveSessions,
   parseSessionJSONL,
@@ -393,6 +394,28 @@ describe("validateFolderPath", () => {
   });
 });
 
+// --- pluginMcpAllowRules ---
+
+describe("pluginMcpAllowRules (gdn-lometu — per-server rules from the plugin registry)", () => {
+  it("mangles plugin+server into the live tool-namespace form", () => {
+    // Observed live: plugin `mise` server `mise` → tools mcp__plugin_mise_mise__<tool>.
+    expect(
+      pluginMcpAllowRules([
+        { plugin: "mise", servers: ["mise"] },
+        { plugin: "sonnette", servers: ["sonnette"] },
+      ]),
+    ).toEqual(["mcp__plugin_mise_mise__*", "mcp__plugin_sonnette_sonnette__*"]);
+  });
+
+  it("handles multi-server plugins and empty input", () => {
+    expect(pluginMcpAllowRules([{ plugin: "suite", servers: ["a", "b"] }])).toEqual([
+      "mcp__plugin_suite_a__*",
+      "mcp__plugin_suite_b__*",
+    ]);
+    expect(pluginMcpAllowRules([])).toEqual([]);
+  });
+});
+
 // --- buildCCArgs ---
 
 describe("buildCCArgs", () => {
@@ -422,10 +445,27 @@ describe("buildCCArgs", () => {
     expect(args).toContain("--allowed-tools");
     expect(args).toContain("--permission-mode");
     expect(args).toContain("default");
-    expect(args).toContain("--mcp-config");
     expect(args).toContain("--append-system-prompt");
     // Must NOT include dangerous bypass
     expect(args).not.toContain("--dangerously-skip-permissions");
+    // --mcp-config is GONE (gdn-lometu): it only ever pointed at a file whose
+    // mcpServers was {}, registering nothing; plugin MCP servers load without it.
+    expect(args).not.toContain("--mcp-config");
+  });
+
+  it("carries per-server MCP allow rules, never the rejected bare mcp__* (gdn-lometu)", () => {
+    const rules = ["mcp__plugin_mise_mise__*", "mcp__plugin_sonnette_sonnette__*"];
+    const args = buildCCArgs("x", false, undefined, undefined, rules);
+    const allowed = args[args.indexOf("--allowed-tools") + 1];
+    expect(allowed).toContain("mcp__plugin_mise_mise__*");
+    expect(allowed).toContain("mcp__plugin_sonnette_sonnette__*");
+    // The bare wildcard CC rejects ("Ignoring --allowedTools rule mcp__*") must
+    // never reappear — check as a list member, since every rule contains "mcp__".
+    expect(allowed.split(",")).not.toContain("mcp__*");
+    // Without rules: no MCP entries at all, and still no bare wildcard.
+    const bare = buildCCArgs("x", false);
+    const bareAllowed = bare[bare.indexOf("--allowed-tools") + 1];
+    expect(bareAllowed.split(",").some((t) => t.startsWith("mcp__"))).toBe(false);
   });
 
   it("includes the mobile system prompt with machine context", () => {

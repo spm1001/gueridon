@@ -194,7 +194,7 @@ built if it ever revives.)
 - **Folder trust:** *no seeding needed.* CC trust **cascades from the nearest trusted ancestor dir** (empirically verified); `~/repos` is trusted and `SCAN_ROOT=~/repos`, so every launch inherits trust. Precondition for a fresh machine: trust `~/repos` once (a rebuild/setup step, not gueridon's job).
 - **Billing tradeoff:** RC sessions are non-Vertex → bill to Teams/MAX (its rate limits).
 
-## CC Process Flags (verified against CC v2.1.195, 2026-06-29; `bridge-logic.ts` is the source of truth)
+## CC Process Flags (MCP shape changed 2026-07-26 gdn-lometu, verified against CC v2.1.220; `bridge-logic.ts` is the source of truth)
 
 ```bash
 claude -p --verbose \
@@ -202,20 +202,18 @@ claude -p --verbose \
   --output-format stream-json \
   --include-partial-messages \
   --replay-user-messages \
-  --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,WebSearch,Task,TaskOutput,TaskStop,Skill,AskUserQuestion,EnterPlanMode,ExitPlanMode,EnterWorktree,ExitWorktree,ToolSearch,mcp__*" \
+  --allowed-tools "Bash,Read,Edit,Write,Glob,Grep,WebSearch,Task,TaskOutput,TaskStop,Skill,AskUserQuestion,EnterPlanMode,ExitPlanMode,EnterWorktree,ExitWorktree,ToolSearch,mcp__plugin_mise_mise__*,..." \
   --disallowedTools "WebFetch,TodoWrite,NotebookEdit" \
   --permission-mode default \
-  --mcp-config ~/.claude/settings.json \
   --model opus[1m] \                      # optional, from CC_MODEL env var
   --session-id <uuid> \
   --append-system-prompt "The user is on a mobile device using Guéridon. ..."
 ```
 
 - `--verbose` is mandatory for stream-json mode.
-- `--allowed-tools` lists all tools permissively, including `mcp__*` for all MCP tools. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
+- `--allowed-tools` lists all tools permissively. MCP tools are appended as **per-server rules derived from the plugin registry at spawn time** (`readPluginMcpAllowRules` in `bridge.ts` → `pluginMcpAllowRules` in `bridge-logic.ts`, gdn-lometu): CC **rejects a bare `mcp__*` allow rule** (globs are only accepted after a literal `mcp__<server>__` prefix; v2.1.195 warned on stderr, v2.1.220 ignores it silently), so for years the wildcard did nothing and non-mise MCP calls were denied in headless `-p`. Plugin-provided servers namespace as `mcp__plugin_<plugin>_<server>__<tool>`. Task subagents bypass `--allowed-tools` entirely (CC [#27099](https://github.com/anthropics/claude-code/issues/27099)), so restricting the parent without restricting Task is ineffective. We list explicitly instead of `--dangerously-skip-permissions` for auditability.
 - **VertexAI tool restrictions:** When `CLAUDE_CODE_USE_VERTEX` is set, `WebSearch` is automatically moved from `--allowed-tools` to `--disallowedTools`. Vertex blocks WebSearch server-side; hiding it prevents wasted tool calls. The toggle is in `buildBaseFlags()` in `bridge-logic.ts`.
-- `--mcp-config` is required because CC in `-p` mode does not auto-load MCP servers from `~/.claude/settings.json`. **The JSON file MUST contain a `"mcpServers"` key** (even `"mcpServers": {}` is fine). If the key is missing, CC v2.1.87 hangs silently during init; CC v2.1.89+ exits with code 1 and `"Does not adhere to MCP server configuration schema"` on stderr.
-- **MCP via plugins (corrected 2026-06-29):** `settings.json`'s `mcpServers` is still `{}`, but bridge-spawned CC is **not** MCP-less — installed **plugins** register their own servers regardless of `--mcp-config`. The live session ran **mise** (the batterie plugin's `.claude-plugin/plugin.json` declares `mcpServers.mise`; its `server.py` shows in the process tree). So `-p` sessions get every enabled plugin's MCP servers. (`--mcp-config`'s file still MUST contain a `mcpServers` key or CC hangs/exits — see the bullet above — but that's separate from plugin-provided servers.) `ENABLE_CLAUDEAI_MCP_SERVERS` in `.env` gates the claude.ai-provided servers.
+- **`--mcp-config` is GONE (gdn-lometu, 2026-07-26).** It only ever pointed at `~/.claude/settings.json`, whose `mcpServers` is `{}` — registering nothing — while installed **plugins** register their own servers regardless (mise + sonnette tools verified present in a `-p` spawn, before and after the flag's removal). So `-p` sessions get every enabled plugin's MCP servers with no flag at all. Historical trap if the flag is ever reintroduced: the file it points at MUST contain a `"mcpServers"` key — missing key = silent init hang on v2.1.87, exit 1 on v2.1.89+. `ENABLE_CLAUDEAI_MCP_SERVERS` in `.env` gates the claude.ai-provided servers.
 - `--disallowedTools` hides tools from the model entirely: WebFetch (returns AI summaries, use curl instead), TodoWrite (use bon), NotebookEdit (no notebooks).
 - `--permission-mode default` respects settings.json allow/deny lists.
 - `--model` is optional, set via `CC_MODEL` env var in `.env`. Used for VertexAI billing (live: `CC_MODEL=opus[1m]`).

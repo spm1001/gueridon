@@ -20,8 +20,8 @@ export function isSubagentEvent(event: Record<string, unknown>): boolean {
   return event.parent_tool_use_id != null;
 }
 
-import { resolve, join } from "node:path";
-import { homedir, hostname } from "node:os";
+import { resolve } from "node:path";
+import { hostname } from "node:os";
 
 // --- Configuration constants ---
 
@@ -89,7 +89,9 @@ const ALLOWED_TOOLS = [
   "EnterPlanMode", "ExitPlanMode",
   "EnterWorktree", "ExitWorktree",
   "ToolSearch",
-  "mcp__*",
+  // MCP tools are appended per-spawn as per-server rules (gdn-lometu) — CC
+  // rejects a bare `mcp__*` allow rule: an allow pattern must carry a literal
+  // `mcp__<server>__` prefix before the glob.
 ];
 
 // Tools hidden from the model entirely. WebFetch returns AI summaries not
@@ -99,19 +101,37 @@ const DISALLOWED_TOOLS = ["WebFetch", "TodoWrite", "NotebookEdit"];
 // Tools unavailable on VertexAI-billed sessions (Vertex blocks them server-side).
 const VERTEX_BLOCKED_TOOLS = ["WebSearch"];
 
-// CC in -p (print) mode does not load MCP servers from ~/.claude/settings.json.
-// Pass --mcp-config explicitly so bridge-spawned sessions have MCP access.
-const MCP_CONFIG_PATH = join(homedir(), ".claude", "settings.json");
+/**
+ * Per-server MCP allow rules from the installed-plugin registry (gdn-lometu).
+ * A plugin-provided server's tools are namespaced `mcp__plugin_<plugin>_<server>__<tool>`
+ * (observed live: plugin `mise` server `mise` → `mcp__plugin_mise_mise__search`), and CC
+ * only accepts allow globs after a literal `mcp__<server>__` prefix — so each server gets
+ * its own rule. Deriving from the registry (rather than hardcoding names) is the point:
+ * the sonnette server was silently denied for weeks because a hardcoded allow rule
+ * carried its retired name. Bare user/project-scope servers (~/.claude.json) are not
+ * covered — none exist on this estate; add their names verbatim here if that changes.
+ */
+export function pluginMcpAllowRules(
+  plugins: Array<{ plugin: string; servers: string[] }>,
+): string[] {
+  return plugins.flatMap(({ plugin, servers }) =>
+    servers.map((server) => `mcp__plugin_${plugin}_${server}__*`),
+  );
+}
 
 // Whether this bridge instance routes through VertexAI billing.
 const IS_VERTEX = !!process.env.CLAUDE_CODE_USE_VERTEX;
 
 /**
- * Build base CC flags. Computed once at module load.
- * When running through VertexAI, WebSearch is moved from allowed to disallowed
- * (Vertex blocks it server-side, so offering it just wastes a tool call).
+ * Build base CC flags. When running through VertexAI, WebSearch is moved from
+ * allowed to disallowed (Vertex blocks it server-side, so offering it just
+ * wastes a tool call). `mcpAllowRules` are per-server MCP allow rules
+ * (`pluginMcpAllowRules`) appended to the allow list — deliberately NO
+ * `--mcp-config`: it only ever pointed at a file whose `mcpServers` was `{}`,
+ * registering nothing (probed live 2026-07-26: a `-p` spawn's MCP tools were
+ * all plugin-provided — mise, sonnette — which load independently of the flag).
  */
-function buildBaseFlags(): string[] {
+function buildBaseFlags(mcpAllowRules: string[] = []): string[] {
   const allowed = IS_VERTEX
     ? ALLOWED_TOOLS.filter((t) => !VERTEX_BLOCKED_TOOLS.includes(t))
     : ALLOWED_TOOLS;
@@ -128,16 +148,13 @@ function buildBaseFlags(): string[] {
     "--include-partial-messages",
     "--replay-user-messages",
     "--allowed-tools",
-    allowed.join(","),
+    [...allowed, ...mcpAllowRules].join(","),
     "--disallowedTools",
     disallowed.join(","),
     "--permission-mode",
     "default",
-    "--mcp-config",
-    MCP_CONFIG_PATH,
   ];
 }
-const CC_BASE_FLAGS = buildBaseFlags();
 
 // The Vertex AI env var set (the vars set in /etc/claude-code/vertex.env that CC
 // consumes). Two complementary uses: a Vertex `-p` spawn inherits them (→ ITV billing);
@@ -455,15 +472,18 @@ export function validateFolderPath(
  * Build the CLI arguments for spawning a CC process.
  * Uses --resume for paused sessions, --session-id for fresh ones.
  * Optional model override via CC_MODEL env var (e.g. "opus").
+ * `mcpAllowRules` — per-server MCP allow rules read from the plugin registry
+ * at spawn time (gdn-lometu; see pluginMcpAllowRules).
  */
 export function buildCCArgs(
   sessionId: string,
   resume: boolean,
   folder?: string,
   model?: string,
+  mcpAllowRules: string[] = [],
 ): string[] {
   return [
-    ...CC_BASE_FLAGS,
+    ...buildBaseFlags(mcpAllowRules),
     ...(model ? ["--model", model] : []),
     "--append-system-prompt",
     buildSystemPrompt(folder),

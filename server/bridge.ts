@@ -24,6 +24,7 @@ import { scanClaudeSessions, isLiveClaudePid } from "./sessions.js";
 
 import {
   buildCCArgs,
+  pluginMcpAllowRules,
   buildRemoteControlEnv,
   extractClaudeAiUrl,
   VERTEX_ENV_VARS,
@@ -379,6 +380,39 @@ function buildActiveSessionsMap(): Map<string, { sessionId: string; activity: "w
 
 // -- CC process lifecycle --
 
+/**
+ * Read installed plugins' MCP server names and derive per-server allow rules
+ * (gdn-lometu). Reads the registry fresh at each spawn so a newly installed
+ * plugin's tools are allowed without a bridge restart. Fail-open to []: a
+ * missing/unreadable registry means MCP tools fall back to ask (denied in
+ * headless -p), which is the pre-fix behaviour — never blocks the spawn.
+ */
+function readPluginMcpAllowRules(): string[] {
+  try {
+    const registry = JSON.parse(
+      readFileSync(join(homedir(), ".claude", "plugins", "installed_plugins.json"), "utf-8"),
+    ) as { plugins?: Record<string, Array<{ installPath?: string }>> };
+    const plugins: Array<{ plugin: string; servers: string[] }> = [];
+    for (const entries of Object.values(registry.plugins ?? {})) {
+      for (const entry of entries) {
+        if (!entry.installPath) continue;
+        try {
+          const manifest = JSON.parse(
+            readFileSync(join(entry.installPath, ".claude-plugin", "plugin.json"), "utf-8"),
+          ) as { name?: string; mcpServers?: Record<string, unknown> };
+          const servers = Object.keys(manifest.mcpServers ?? {});
+          if (manifest.name && servers.length > 0) {
+            plugins.push({ plugin: manifest.name, servers });
+          }
+        } catch { /* one unreadable plugin manifest never blocks the rest */ }
+      }
+    }
+    return pluginMcpAllowRules(plugins);
+  } catch {
+    return [];
+  }
+}
+
 function spawnCC(session: Session): void {
   // Billing mode: read .gueridon-billing from project folder.
   // "max" → claude.ai billing (enables Channels, 1M context).
@@ -389,7 +423,10 @@ function spawnCC(session: Session): void {
     if (raw === "max") billingMode = "max";
   } catch { /* absent or unreadable → default to vertex */ }
 
-  const args = buildCCArgs(session.id, session.resumable, session.folder, process.env.CC_MODEL);
+  const args = buildCCArgs(
+    session.id, session.resumable, session.folder, process.env.CC_MODEL,
+    readPluginMcpAllowRules(),
+  );
 
   // Start from process.env, stripping CC internal vars
   const baseEnv = Object.fromEntries(
