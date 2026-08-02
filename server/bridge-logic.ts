@@ -156,11 +156,12 @@ function buildBaseFlags(mcpAllowRules: string[] = []): string[] {
   ];
 }
 
-// The Vertex AI env var set (the vars set in /etc/claude-code/vertex.env that CC
-// consumes). Two complementary uses: a Vertex `-p` spawn inherits them (→ ITV billing);
+// The Vertex AI env var set (the vars set in ~/.dotfiles/shell/gueridon.env — the
+// unit's second EnvironmentFile; was /etc/claude-code/vertex.env until 2026-08-02).
+// Two complementary uses: a Vertex `-p` spawn inherits them (→ ITV billing);
 // a `claude --remote-control` spawn STRIPS them via buildRemoteControlEnv (→ Teams/
 // claude.ai billing, which the claude.ai relay attaches to — folds in gdn-rosara's
-// contamination guard). ANTHROPIC_MODEL is in the live vertex.env, so it belongs here.
+// contamination guard). ANTHROPIC_MODEL is in the live gueridon.env, so it belongs here.
 export const VERTEX_ENV_VARS = [
   "CLAUDE_CODE_USE_VERTEX",
   "CLOUD_ML_REGION",

@@ -20,8 +20,9 @@ export interface ClaudeProc {
   /**
    * True when the session is Vertex-billed (gdn-kuhaku). The marker lives in one of two
    * places depending on how it was launched: the systemd/`-p` lane inherits
-   * `CLAUDE_CODE_USE_VERTEX=1` in its ENVIRON; the `claudev`/`claudefv` shell wrappers pass
-   * it inside the `--settings` JSON on the CMDLINE. So we check both.
+   * `CLAUDE_CODE_USE_VERTEX=1` in its ENVIRON; the `claudev`/`claudefv` shell wrappers
+   * (the mit-commons block since 2026-08-02) set BOTH — an env prefix and `--settings`
+   * JSON on the CMDLINE. Either surface suffices, so we check both.
    */
   vertexBilled: boolean;
 }
