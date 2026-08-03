@@ -28,8 +28,11 @@ phone → launcher (/) ──┤
 > the inference endpoint, not identity), so `claude -p` streaming remains the only Vertex-billed
 > mobile path. The retirement decision, its deletion inventory, and the commitment to a week of
 > real use first all live in **gdn-sudacu**; full evidence in `.bon/understanding.md` →
-> **Substrate watch — 2026-07-25**. Before adding a `claude-remote@` server for any repo under
-> `SCAN_ROOT`, see **gdn-caguga** — such a server currently hides its own repo from the launcher.
+> **Substrate watch — 2026-07-25**. Adding a `claude-remote@` server for a repo under `SCAN_ROOT`
+> is **safe since 2026-07-26** (gdn-caguga, commit 97cf79b): such a server used to appear as a live
+> session and so permanently hid its own repo from the launcher. **The week of real use has now
+> started — servers went live for `infra` and `gueridon` on 2026-08-03** (gdn-sudacu step 3), so
+> gdn-sudacu's decision is due once they have been used in anger.
 
 **Route by billing intent BEFORE spawning — never detect-and-fallback.** A Vertex `--remote-control` spawn comes up *silently inert* (no attach URL, no error), so "spawn RC, fall back to streaming" would only ever hang. The launcher's two buttons make the choice explicit per launch. Mechanism + the matched-pair spike that proved it: `.bon/understanding.md` → **Billing lanes**.
 
