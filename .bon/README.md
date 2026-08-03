@@ -12,8 +12,10 @@ Tool and docs: https://github.com/spm1001/bon
 
 - `items.jsonl` — one self-describing JSON object per line. Key fields:
   `id`, `type` (outcome|action), `title`, `brief{why,how,what,done}`,
-  `status` (open|done), `parent`, `waiting_for` (list of blocker ids).
-- "Ready" = status open with empty/absent `waiting_for`.
+  `status` (open|done), `parent`, `waiting_for` (list of blocker ids),
+  `someday` (revisit condition — item is parked, not ready).
+- "Ready" = status open, empty/absent `waiting_for`, no `someday` (own or
+  parent's).
 - If `.bon/backend` contains `dolt`, items live in a shared database this
   clone can't reach — orient from prose instead (below); an items.jsonl
   here is a stale pre-migration ghost, not the board.
