@@ -392,6 +392,28 @@ describe("validateFolderPath", () => {
     // is not within the scan root — the "/" check prevents this.
     expect(validateFolderPath("/Users/test/Repos-evil/hack", scanRoot)).toBe(false);
   });
+
+  it("accepts an extra folder by exact match (gdn-seroba)", () => {
+    expect(
+      validateFolderPath("/Users/test/notes", scanRoot, ["/Users/test/notes"]),
+    ).toBe(true);
+  });
+
+  it("rejects traversal riding an extra folder", () => {
+    expect(
+      validateFolderPath("/Users/test/notes/../secrets", scanRoot, ["/Users/test/notes"]),
+    ).toBe(false);
+  });
+
+  it("rejects a subfolder of an extra folder (exact match only)", () => {
+    expect(
+      validateFolderPath("/Users/test/notes/sub", scanRoot, ["/Users/test/notes"]),
+    ).toBe(false);
+  });
+
+  it("rejects an extra-folder path when none are configured", () => {
+    expect(validateFolderPath("/Users/test/notes", scanRoot)).toBe(false);
+  });
 });
 
 // --- pluginMcpAllowRules ---

@@ -70,6 +70,7 @@ import {
   hasBonContext,
   isRcSessionReady,
   SCAN_ROOT,
+  EXTRA_FOLDERS,
 } from "./folders.js";
 
 import { StateBuilder, type StateSignal } from "./state-builder.js";
@@ -1093,8 +1094,12 @@ function deriveFolderName(folderPath: string): string {
 function resolveFolder(folderParam: string): string | null {
   // Accept both full paths and folder names
   if (folderParam.startsWith("/")) {
-    return validateFolderPath(folderParam, SCAN_ROOT) ? folderParam : null;
+    return validateFolderPath(folderParam, SCAN_ROOT, EXTRA_FOLDERS) ? folderParam : null;
   }
+  // An extra folder's basename (e.g. "notes" — gdn-seroba), matching the name
+  // collectRepoCandidates lists it under
+  const extra = EXTRA_FOLDERS.find((p) => basename(p) === folderParam);
+  if (extra) return extra;
   // Treat as basename under SCAN_ROOT
   const fullPath = `${SCAN_ROOT}/${folderParam}`;
   return validateFolderPath(fullPath, SCAN_ROOT) ? fullPath : null;

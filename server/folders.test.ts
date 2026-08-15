@@ -442,6 +442,38 @@ describe("scanFolders", () => {
     expect(result.map((f) => f.name)).toEqual(["visible"]);
   });
 
+  it("includes an extra folder under its basename (gdn-seroba)", async () => {
+    addDir(REPOS, []);
+    addDir("/test-home/notes");
+
+    const result = await scanFolders(new Map(), ["/test-home/notes"]);
+    expect(result.map((f) => f.name)).toEqual(["notes"]);
+    expect(result[0].path).toBe("/test-home/notes");
+  });
+
+  it("skips a configured extra folder that does not exist", async () => {
+    addDir(REPOS, []);
+
+    const result = await scanFolders(new Map(), ["/test-home/gone"]);
+    expect(result).toEqual([]);
+  });
+
+  it("dedupes an extra folder already under SCAN_ROOT", async () => {
+    addDir(REPOS, ["visible"]);
+    addFolder("visible");
+
+    const result = await scanFolders(new Map(), [join(REPOS, "visible")]);
+    expect(result.map((f) => f.name)).toEqual(["visible"]);
+  });
+
+  it("lists extra folders even when SCAN_ROOT is unreadable", async () => {
+    // Don't add REPOS to the VFS — the scan errors, extras survive.
+    addDir("/test-home/notes");
+
+    const result = await scanFolders(new Map(), ["/test-home/notes"]);
+    expect(result.map((f) => f.name)).toEqual(["notes"]);
+  });
+
   it("skips non-directory entries", async () => {
     addDir(REPOS, ["readme.txt", "project"]);
     addFile(join(REPOS, "readme.txt"));

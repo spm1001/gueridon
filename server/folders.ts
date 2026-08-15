@@ -60,6 +60,16 @@ export interface FolderInfo {
 
 export const SCAN_ROOT =
   process.env.SCAN_ROOT || join(homedir(), "Repos");
+/**
+ * Extra folders offered in the launcher besides the SCAN_ROOT tree (gdn-seroba).
+ * Colon-separated ABSOLUTE paths, each listed as-is under its basename. They are
+ * launchable but are NOT scan roots — never recursed into — and new-folder
+ * creation stays under SCAN_ROOT. First user: /home/modha/notes.
+ */
+export const EXTRA_FOLDERS: string[] = (process.env.EXTRA_FOLDERS || "")
+  .split(":")
+  .map((p) => p.replace(/\/+$/, ""))
+  .filter(Boolean);
 export const CC_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 const HANDOFFS_DIR = join(homedir(), ".claude", "handoffs");
 
@@ -526,13 +536,15 @@ async function classifyDir(dirPath: string): Promise<"project" | "container"> {
  * plus one level into container dirs (e.g. spm1001/, itv/). Shared by scanFolders
  * (session-decorated) and listRepos (lean) so the membership logic lives once.
  */
-export async function collectRepoCandidates(): Promise<{ name: string; fullPath: string }[]> {
-  let entries: string[];
+export async function collectRepoCandidates(
+  extraFolders: string[] = EXTRA_FOLDERS,
+): Promise<{ name: string; fullPath: string }[]> {
+  let entries: string[] = [];
   try {
     entries = await readdir(SCAN_ROOT);
   } catch (err) {
     emit({ type: "folders:scan-error", scanRoot: SCAN_ROOT, error: errorDetail(err) });
-    return [];
+    // Fall through — extra folders are independent of the scan root.
   }
   const visible = entries.filter((name) => !name.startsWith("."));
   const candidates: { name: string; fullPath: string }[] = [];
@@ -566,6 +578,20 @@ export async function collectRepoCandidates(): Promise<{ name: string; fullPath:
       }
     }),
   );
+  // Extra folders (gdn-seroba): listed as-is, existence-checked, deduped against
+  // anything the scan already found.
+  await Promise.allSettled(
+    extraFolders.map(async (path) => {
+      try {
+        const s = await stat(path);
+        if (!s.isDirectory()) return;
+      } catch {
+        return;
+      }
+      if (candidates.some((c) => c.fullPath === path)) return;
+      candidates.push({ name: basename(path), fullPath: path });
+    }),
+  );
   return candidates;
 }
 
@@ -582,8 +608,10 @@ export interface RepoInfo {
  * subagent sessions never surface because we never read sessions (Sameer #1). Falls
  * back to dir mtime when a repo has no commits.
  */
-export async function listRepos(): Promise<RepoInfo[]> {
-  const candidates = await collectRepoCandidates();
+export async function listRepos(
+  extraFolders: string[] = EXTRA_FOLDERS,
+): Promise<RepoInfo[]> {
+  const candidates = await collectRepoCandidates(extraFolders);
   const repos = await Promise.all(
     candidates.map(async ({ name, fullPath }): Promise<RepoInfo> => {
       let lastCommit: number | null = null;
@@ -613,9 +641,10 @@ export async function listRepos(): Promise<RepoInfo[]> {
  */
 export async function scanFolders(
   activeSessions: Map<string, ActiveSessionInfo>,
+  extraFolders: string[] = EXTRA_FOLDERS,
 ): Promise<FolderInfo[]> {
   // Membership logic shared with listRepos (collectRepoCandidates).
-  const candidates = await collectRepoCandidates();
+  const candidates = await collectRepoCandidates(extraFolders);
 
   // Process all folders concurrently (gdn-fisimu). Each folder's stat,
   // session lookup, handoff, and exit marker checks run in parallel.

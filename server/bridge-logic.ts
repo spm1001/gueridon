@@ -462,8 +462,12 @@ export function isHandoffStale(
 export function validateFolderPath(
   path: string,
   scanRoot: string,
+  extraFolders: string[] = [],
 ): boolean {
   const normalized = resolve(path);
+  // Extra folders (gdn-seroba) are exact-match only — normalization first, so a
+  // traversal like extra/../elsewhere cannot ride an allowed prefix.
+  if (extraFolders.includes(normalized)) return true;
   return normalized.startsWith(scanRoot + "/");
 }
 
