@@ -20,7 +20,7 @@ export function isSubagentEvent(event: Record<string, unknown>): boolean {
   return event.parent_tool_use_id != null;
 }
 
-import { resolve } from "node:path";
+import { resolve, basename } from "node:path";
 import { hostname } from "node:os";
 
 // --- Configuration constants ---
@@ -864,8 +864,18 @@ export interface VertexRosterInfo {
 /**
  * Human-readable name for a session's working directory: relative to SCAN_ROOT for repos
  * (e.g. "spm1001/gueridon"), "~" / "~/sub" for the home tree, else the absolute path.
+ * An EXTRA_FOLDERS entry names as its basename — the same name collectRepoCandidates
+ * lists it under, so the launcher's live-session hiding (gdn-wuvujo) matches: without
+ * this a session in ~/notes rostered as "~/notes" while the repo listed as "notes",
+ * the names never matched, and the folder stayed launchable with a live driver in it.
  */
-export function sessionDisplayName(cwd: string, scanRoot: string, homeDir: string): string {
+export function sessionDisplayName(
+  cwd: string,
+  scanRoot: string,
+  homeDir: string,
+  extraFolders: string[] = [],
+): string {
+  if (extraFolders.includes(cwd)) return basename(cwd);
   if (cwd === scanRoot) return scanRoot;
   if (cwd.startsWith(scanRoot + "/")) return cwd.slice(scanRoot.length + 1);
   if (cwd === homeDir) return "~";
@@ -891,6 +901,7 @@ export function buildSessionRoster(
   vertexByPid: Map<number, VertexRosterInfo>,
   scanRoot: string,
   homeDir: string,
+  extraFolders: string[] = [],
 ): RosterEntry[] {
   const roster: RosterEntry[] = procs.map((p) => {
     const rc = rcByPid.get(p.pid);
@@ -912,12 +923,12 @@ export function buildSessionRoster(
     // Takeover is gdn-kidowe (baton-pass). Own-vertex above wins over this generic detection.
     if (p.vertexBilled) {
       return {
-        pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir), cwd: p.cwd,
+        pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
         ageSec: p.ageSec, kind: "vertex-terminal" as const, attachable: false, url: null, ready: true,
       };
     }
     return {
-      pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir), cwd: p.cwd,
+      pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
       ageSec: p.ageSec, kind: "local" as const, attachable: false, url: null, ready: true,
     };
   });

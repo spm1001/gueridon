@@ -1802,6 +1802,16 @@ describe("sessionDisplayName", () => {
   it("returns the absolute path for anywhere else", () => {
     expect(sessionDisplayName("/tmp/whatever", ROOT, HOME)).toBe("/tmp/whatever");
   });
+
+  it("returns the basename for an extra folder — matching its launcher name (gdn-seroba)", () => {
+    // Without this, a ~/notes session rostered as "~/notes" while the repo listed
+    // as "notes" — the wuvujo live-session hiding never matched.
+    expect(sessionDisplayName("/home/modha/notes", ROOT, HOME, ["/home/modha/notes"])).toBe("notes");
+  });
+
+  it("keeps the ~/sub form for a home path that is not a configured extra", () => {
+    expect(sessionDisplayName("/home/modha/notes", ROOT, HOME)).toBe("~/notes");
+  });
 });
 
 describe("buildSessionRoster", () => {

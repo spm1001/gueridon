@@ -1758,7 +1758,7 @@ const server = createServer((req, res) => {
       const pid = s.process?.pid;
       if (pid && s.process!.exitCode === null) vertexByPid.set(pid, { folderName: s.folderName });
     }
-    const roster = buildSessionRoster(procs, rcByPid, vertexByPid, SCAN_ROOT, homedir());
+    const roster = buildSessionRoster(procs, rcByPid, vertexByPid, SCAN_ROOT, homedir(), EXTRA_FOLDERS);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions: roster }));
     return;
