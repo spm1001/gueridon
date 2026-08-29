@@ -1,0 +1,229 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Guéridon switchboard — design mock</title>
+<style>
+  :root {
+    --bg: #111; --page: #161616; --frame-bg: #1a1a1a; --surface: #242424; --surface-raised: #2a2a2a;
+    --border: #333; --text: #e8e8e8; --dim: #777; --mid: #aaa;
+    --accent: #d97757; --red: #ce3931; --amber: #fbbf24; --green: #4caf7d; --blue: #6aa9f4;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; padding: 2rem 1rem 4rem; }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; margin-bottom: 0.2rem; }
+  .sub { color: var(--dim); margin-bottom: 1.6rem; }
+  .sub b { color: var(--mid); }
+  h2 { font-size: 1.05rem; margin: 2.2rem 0 0.8rem; color: var(--accent); }
+
+  .frames { display: flex; gap: 2rem; flex-wrap: wrap; align-items: flex-start; }
+  .phone { width: 375px; background: var(--frame-bg); border: 2px solid #3a3a3a; border-radius: 24px; overflow: hidden; flex: 0 0 auto; box-shadow: 0 8px 40px rgba(0,0,0,0.5); }
+  .phone .titlebar { text-align: center; color: var(--dim); font-size: 0.75rem; padding: 0.5rem 0 0.2rem; }
+  .phone header { padding: 0.6rem 1rem 0.4rem; display: flex; align-items: baseline; gap: 0.5rem; }
+  .phone header h3 { font-size: 1rem; }
+  .phone header .s { color: var(--dim); font-size: 0.78rem; }
+  .caption { width: 375px; color: var(--mid); font-size: 0.85rem; margin-top: 0.7rem; }
+
+  /* health strip */
+  .health { display: flex; gap: 0.45rem; padding: 0.35rem 1rem 0.55rem; flex-wrap: wrap; }
+  .lane-pill { font-size: 0.7rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.12rem 0.55rem; color: var(--mid); background: var(--surface); }
+  .lane-pill .ok { color: var(--green); } .lane-pill .warn { color: var(--amber); } .lane-pill .soon { color: var(--dim); }
+
+  .label { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); padding: 0.55rem 1rem 0.25rem; }
+  .row { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; border-top: 1px solid #222; position: relative; }
+  .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; }
+  .dot.busy { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.idle { background: #555; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .body { flex: 1 1 auto; min-width: 0; }
+  .t { display: block; font-weight: 600; font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .m { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.15rem; font-size: 0.72rem; color: var(--dim); white-space: nowrap; overflow: hidden; }
+  .chip { font-size: 0.66rem; font-weight: 600; border-radius: 5px; padding: 0.05rem 0.4rem; border: 1px solid; }
+  .chip.vertex { color: var(--blue); border-color: #2c4a75; background: #17233a44; }
+  .chip.sameer { color: var(--accent); border-color: #6b3a28; background: #3a221744; }
+  .chip.family { color: var(--green); border-color: #2c5a41; background: #17352444; }
+  .chip.seat3 { color: var(--dim); border-color: #444; }
+  .chip.unknown { color: var(--dim); border-color: #444; font-weight: 400; }
+  .mini { flex: 0 0 auto; font-size: 0.76rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.28rem 0.6rem; color: var(--mid); background: var(--surface-raised); text-decoration: none; }
+  .mini.end { color: var(--red); border-color: #4a2725; }
+  .mini.pick { color: var(--accent); border-color: #6b3a28; }
+  .note-inline { color: var(--dim); font-size: 0.72rem; padding: 0.4rem 1rem 0.8rem; }
+
+  .search { margin: 0.4rem 1rem 0.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--dim); font-size: 0.85rem; padding: 0.5rem 0.7rem; }
+
+  .callout { position: absolute; right: -14px; top: 50%; transform: translate(100%, -50%); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--amber); color: #1a1a1a; font-weight: 700; font-size: 0.8rem; flex: 0 0 auto; }
+  .row .badge { position: absolute; left: -11px; top: 50%; transform: translateY(-50%); z-index: 2; }
+
+  /* wallet sheet frame */
+  .sheet { padding: 0.6rem 1rem 1.2rem; }
+  .sheet .head { font-weight: 700; font-size: 1rem; margin: 0.4rem 0 0.1rem; }
+  .sheet .prov { color: var(--dim); font-size: 0.78rem; margin-bottom: 0.9rem; }
+  .lanebtn { display: flex; align-items: center; gap: 0.6rem; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; color: var(--text); padding: 0.7rem 0.9rem; margin: 0.4rem 0; text-align: left; font-size: 0.92rem; }
+  .lanebtn .fork { margin-left: auto; color: var(--dim); font-size: 0.72rem; }
+  .lanebtn.dimmed { opacity: 0.45; }
+  .sheetnote { color: var(--dim); font-size: 0.76rem; margin-top: 0.8rem; }
+  .sheetnote b { color: var(--mid); }
+
+  /* state machine */
+  .machine { display: flex; gap: 0.8rem; flex-wrap: wrap; align-items: stretch; margin-top: 0.6rem; }
+  .state { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem 1rem; flex: 1 1 260px; }
+  .state h4 { font-size: 0.85rem; letter-spacing: 0.04em; margin-bottom: 0.3rem; }
+  .state.cold h4 { color: var(--blue); } .state.hl h4 { color: var(--accent); } .state.hr h4 { color: var(--amber); }
+  .state p { font-size: 0.8rem; color: var(--mid); }
+  .state .verb { display: inline-block; margin: 0.4rem 0.3rem 0 0; font-size: 0.72rem; border: 1px solid var(--border); border-radius: 6px; padding: 0.1rem 0.45rem; color: var(--text); background: var(--surface-raised); }
+  .rule { margin-top: 0.8rem; color: var(--mid); font-size: 0.85rem; }
+  .rule b { color: var(--text); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin-top: 0.6rem; }
+  th, td { text-align: left; padding: 0.5rem 0.7rem; border: 1px solid #2a2a2a; vertical-align: top; }
+  th { color: var(--dim); font-weight: 600; background: #1d1d1d; }
+  td:first-child { color: var(--mid); font-style: italic; width: 42%; }
+
+  .legend { margin-top: 0.6rem; }
+  .legend li { list-style: none; display: flex; gap: 0.6rem; margin: 0.45rem 0; color: var(--mid); font-size: 0.87rem; align-items: baseline; }
+  .fine { color: var(--dim); font-size: 0.78rem; margin-top: 1.4rem; }
+</style>
+
+<div class="wrap">
+  <h1>Guéridon switchboard — the design, wearing pixels</h1>
+  <p class="sub">Every row under SESSIONS is a <b>real process running on tube this morning</b> (the 11:10 fixture). Yellow badges ①–⑤ mark where each design decision lands — legend below. Nothing here is built yet; this is the thing to poke.</p>
+
+  <div class="frames">
+    <!-- FRAME 1: the launcher -->
+    <div>
+      <div class="phone">
+        <div class="titlebar">tube · Guéridon</div>
+        <header><h3>Guéridon</h3><span class="s">every session, any wallet</span></header>
+        <div class="health">
+          <span class="lane-pill"><span class="ok">●</span> vertex</span>
+          <span class="lane-pill"><span class="ok">●</span> sameer@</span>
+          <span class="lane-pill"><span class="warn">▲</span> family@ 429 · ~13:00</span>
+          <span class="lane-pill"><span class="soon">○</span> new seat</span>
+        </div>
+
+        <div class="label">Sessions (6)</div>
+        <div class="row">
+          <span class="dot busy"></span>
+          <span class="body"><span class="t">Switchboard design pass</span>
+          <span class="m"><span class="chip vertex">vertex</span> ⌨️ spm1001/gueridon · busy · <i>this very session</i></span></span>
+          <a class="mini pick">Pick&nbsp;up</a><a class="mini end">End</a>
+        </div>
+        <div class="row">
+          <span class="dot busy"></span>
+          <span class="body"><span class="t">bon-d7</span>
+          <span class="m"><span class="chip vertex">vertex</span> ⌨️ spm1001/bon · busy · 40m</span></span>
+          <a class="mini pick">Pick&nbsp;up</a><a class="mini end">End</a>
+        </div>
+        <div class="row">
+          <span class="dot idle"></span>
+          <span class="body"><span class="t">mit-kg-5f</span>
+          <span class="m"><span class="chip vertex">vertex</span> ⌨️ itv/mit-kg · idle · 17h</span></span>
+          <a class="mini pick">Pick&nbsp;up</a><a class="mini end">End</a>
+        </div>
+        <div class="row">
+          <span class="badge">①</span>
+          <span class="dot busy"></span>
+          <span class="body"><span class="t">claude-50</span>
+          <span class="m"><span class="chip family">family@</span> ⌨️ ~/.claude · busy · 18h</span></span>
+          <a class="mini end">End</a>
+        </div>
+        <div class="row">
+          <span class="badge">②</span>
+          <span class="dot idle"></span>
+          <span class="body"><span class="t">notes-ff</span>
+          <span class="m"><span class="chip sameer">sameer@</span> 📱 ~/notes · idle · 2h · phone-created</span></span>
+          <a class="mini">Open</a><a class="mini end">End</a>
+        </div>
+        <div class="row">
+          <span class="dot idle"></span>
+          <span class="body"><span class="t">modha-d0</span>
+          <span class="m"><span class="chip sameer">sameer@</span> 📱 ~ · idle · 10h · phone-created</span></span>
+          <a class="mini">Open</a><a class="mini end">End</a>
+        </div>
+
+        <div class="label">Recent · last 5 days</div>
+        <input class="search" value="" placeholder="unh… the one about ▸" readonly />
+        <div class="row">
+          <span class="body"><span class="t">Teleport id → local uuid derivation</span>
+          <span class="m"><span class="chip vertex">vertex</span> ⌨️ spm1001/gueridon · 18h ago</span></span>
+          <a class="mini pick">Pick&nbsp;up</a>
+        </div>
+        <div class="row">
+          <span class="badge">③</span>
+          <span class="body"><span class="t">Mawitu pickup</span>
+          <span class="m"><span class="chip sameer">sameer@</span> 🖥 cowork · ~ · 2d ago</span></span>
+          <a class="mini pick">Pick&nbsp;up</a>
+        </div>
+        <div class="row">
+          <span class="body"><span class="t">Handoffs → visible handoffs/ migration</span>
+          <span class="m"><span class="chip vertex">vertex</span> ⌨️ spm1001/bon · 1d ago</span></span>
+          <a class="mini pick">Pick&nbsp;up</a>
+        </div>
+        <div class="row">
+          <span class="badge">④</span>
+          <span class="body"><span class="t">“Read the board and pick up the…”</span>
+          <span class="m"><span class="chip sameer">sameer@</span> 📱 ~/notes · 2d ago · untitled — first prompt shown</span></span>
+          <a class="mini pick">Pick&nbsp;up</a>
+        </div>
+        <div class="note-inline">Search reaches <b>content</b> (deja), not just titles — “the one about blah” works.</div>
+
+        <div class="label">Repos · launch new</div>
+        <div class="note-inline">…as today: recency-ordered, searchable, + new-folder-for-play. Tap → the same wallet sheet →.</div>
+      </div>
+      <p class="caption">The launcher. Live sessions keep their verbs; cold sessions finally <i>exist</i>. Wallet chips everywhere; busy/idle from the per-wallet agents registries.</p>
+    </div>
+
+    <!-- FRAME 2: wallet sheet -->
+    <div>
+      <div class="phone">
+        <div class="titlebar">after tapping “Mawitu pickup”</div>
+        <div class="sheet">
+          <div class="head">Pick up: Mawitu pickup</div>
+          <div class="prov">cowork · Desktop · ~ · last active 2d ago · last wallet sameer@</div>
+          <button class="lanebtn"><span class="chip vertex">vertex</span> ITV Vertex <span class="fork">⑂ fork — cross-wallet</span></button>
+          <button class="lanebtn"><span class="chip sameer">sameer@</span> Teams · sameer <span class="fork">resume</span></button>
+          <button class="lanebtn"><span class="chip family">family@</span> Teams · family <span class="fork">⑂ fork — cross-wallet</span></button>
+          <button class="lanebtn dimmed"><span class="chip seat3">seat 3</span> Teams · incoming <span class="fork">soon</span></button>
+          <div class="sheetnote" style="position:relative; padding-left: 30px;"><span class="badge" style="position:absolute; left:0; top:0;">⑤</span>
+            The resumed Claude gets a <b>transition preamble</b>: what surface it left, what it wakes on, which wallet, how long it slept. No gear-slip.
+          </div>
+          <div class="sheetnote">One driver per session: cold → resume · held on tube → graceful end, then resume (baton-pass) · held remotely → fork or archive-first. Cross-wallet <b>always</b> forks — the original transcript is never touched.</div>
+        </div>
+      </div>
+      <p class="caption">The wallet sheet — an open, config-driven list (a lane = a name + an env block), never two hardcoded buttons. Same sheet for pickup and for new launches.</p>
+    </div>
+  </div>
+
+  <h2>The badges — what today's UI does with each of these</h2>
+  <ul class="legend">
+    <li><span class="badge">①</span><span>Your family@ session, busy for 18 hours — today it shows as anonymous “local”, wallet invisible even to <code>claude agents</code>. Here it's a first-class lane.</span></li>
+    <li><span class="badge">②</span><span>Phone-created RC-server children — today <b>entirely invisible</b> (the scanner matches the wrong process name; live bug, fix filed as gdn-zahidu). Two of yours were missing this morning.</span></li>
+    <li><span class="badge">③</span><span>Cowork sessions have no local title anywhere the CLI looks — but the Desktop sidecar has a human one, free for the reading.</span></li>
+    <li><span class="badge">④</span><span>Teleport sessions are titleless on disk; fallback is the bridge-log title scrape, then the first user prompt. Never a bare uuid in your face.</span></li>
+    <li><span class="badge">⑤</span><span>Your merozu falsifier, both halves: the <i>model</i> is told the transition characteristics; <i>you</i> get from “the one about blah” to a live session in &lt;20s (search + one tap + one lane).</span></li>
+  </ul>
+
+  <h2>The state machine (what Pick up actually does)</h2>
+  <div class="machine">
+    <div class="state cold"><h4>COLD</h4><p>Transcript on disk, nobody holds it. The common case — and the one a pid-keyed roster can't see at all.</p><span class="verb">resume</span><span class="verb">⑂ fork (cross-wallet)</span></div>
+    <div class="state hl"><h4>HELD — on tube</h4><p>A live process holds it (terminal, Guéridon, RC child). Baton-pass: graceful end (SIGTERM = a faithful /exit), then force-resume the explicit uuid.</p><span class="verb">baton-pass</span><span class="verb">End</span></div>
+    <div class="state hr"><h4>HELD — remote</h4><p>A cloud worker holds the lease; nothing local to signal. Fork it, or archive from the phone first, then resume.</p><span class="verb">⑂ fork</span><span class="verb">archive → resume</span></div>
+  </div>
+  <p class="rule"><b>The invariant:</b> one live driver per transcript, ever. <b>The rule:</b> cross-wallet always forks. <b>The comfort:</b> End is always safe — it's subtraction, and everything stays resumable.</p>
+
+  <h2>Your --badly clauses → what answers them</h2>
+  <table>
+    <tr><th>Clause (verbatim)</th><th>Design answer</th></tr>
+    <tr><td>“I lose good thinking because I lose sight of the session”</td><td>The uuid-keyed index: existence no longer depends on a live process. RECENT is 5 days deep with topic search.</td></tr>
+    <tr><td>“the model gets confused — gear slips… transition characteristics”</td><td>Badge ⑤: transition preamble injected on every pickup (surface, wallet, host, gap).</td></tr>
+    <tr><td>“I get confused too — not knowing in under 20s how to pick up…”</td><td>Search-by-topic → one tap → wallet sheet → running. Three interactions, no archaeology.</td></tr>
+    <tr><td>“mucks up a live session”</td><td>The state machine above; verbs are gated by state, cross-wallet forks, originals untouched.</td></tr>
+    <tr><td>“doesn't let me spawn what I need when and where (in account terms)”</td><td>The wallet sheet is an open list — flip any session (and any new launch) to any billing. Third seat drops in as config.</td></tr>
+    <tr><td>“confuses me in terms of when to use which launcher”</td><td>iOS tiles = quick new session on the app's own account. Guéridon = anything involving a wallet choice — which, at 3+ seats + Vertex, is the interesting cases. The app can't multi-wallet; we can.</td></tr>
+    <tr><td>“doesn't let me create new folders for play”</td><td>REPOS band unchanged, new-folder preserved, wallet sheet applies there too.</td></tr>
+  </table>
+
+  <p class="fine">Build order: gdn-zahidu (roster tells the truth — the live bug) → gdn-vucube (session index + RECENT) → gdn-merozu (pickup + transition preamble) → gdn-vutogu (spike: can a cold session be sent into the phone app?) → gdn-miseso (wallet journal + the health strip at the top of frame 1). Full prose: <code>docs/switchboard-design.md</code>, 2026-08-29.</p>
+</div>
