@@ -250,6 +250,54 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      foreign/terminal session, not drive or kill it (why the roster is read-only
      for `kind:"local"`).
 
+## Session identity across surfaces (2026-08-28 — the switchboard's identity layer)
+
+The gdn-jibudu switchboard ("every session stays in view and can be picked up — any wallet,
+any surface") needs to *name* every session wherever it lives. That identity layer now exists:
+
+- **Teleport/RC ids are derivable offline.** A claude.ai teleport id `session_<body>` and the
+  Remote Control work id `cse_<body>` are one id with two prefixes, and the local farm UUID is
+  `uuid5("3ab19d7e-9f35-45c2-926e-75e271cc60b3", "https://api.anthropic.com/v1/code/sessions/cse_<body>")`
+  — both constants read out of the CC bundle. Verified 6/6 in-sample plus 6 out-of-sample
+  sessions whose bridge transcripts were gone. Shipped in trousse's deglacer skill:
+  `skills/deglacer/scripts/teleport-id.sh` (handle → uuid, computed, offline, any age) and
+  `remote-sessions.sh` (lists SDK-spawned sessions — 37 teleport-resolvable on tube where the
+  log-lookup route reached only 6).
+  - **Risk: the uuid5 namespace is a client constant.** A future CC could move it, and the
+    failure mode is a confidently WRONG uuid. `teleport-id.sh` cross-checks against a bridge
+    transcript whenever one exists and shouts on disagreement — that shout is the tripwire;
+    do not remove it as redundant.
+- **A v5 UUID in `~/.claude/projects` means a programmatically-spawned session** (the harness
+  hashes a caller-supplied id; a name-based hash is by definition v5). Interactive sessions
+  get v4.
+- **The `{encoded-cwd}` directory scheme is one-way** — every `/` became a `-`, so any repo
+  with a dash in its name decodes to a path that doesn't exist. Read `.cwd` from the
+  transcript instead.
+- **Cowork is ordinary Claude Code**, writing to the normal farm (`entrypoint:
+  "claude-desktop"`, v4 uuid, real cwd), plus a Desktop sidecar at
+  `~/.config/Claude/claude-code-sessions/<acct>/<workspace>/local_<uuid>.json` whose
+  `cliSessionId` **is** the farm uuid — 21/21 resolved; resumability verified end-to-end.
+  Caveats: the sidecar path shape is a sample of one at each level (one accountId, one
+  workspaceId), and **cloud Cowork is unmeasured** — the Firecracker microVM's ephemeral
+  `$HOME` almost certainly leaves no local transcript, but that is reasoned, not tested
+  (`~/.config/Claude/claude-code-vm/2.1.229` hints at the lane). Measure before anything
+  promises "all my sessions".
+- **`--fork-session` is the non-destructive probe for "does this session still resume?"** —
+  a fork proves the history loads while leaving the original byte-identical, so it's safe
+  even when the original may still have a live holder. Settled Cowork resumability in one
+  command; generalises to any resume question.
+- **Method lesson: when the artefact that computes the answer is on disk — a binary, a
+  bundle, a minified blob — read it before declaring anything unknowable.** A brute-force
+  over guessed uuid namespaces found nothing and shipped "not derivable" as fact; the CC
+  binary is a ~220MB bundled-Node ELF and `rg -a` greps its embedded JavaScript fine — the
+  whole derivation fell out of three greps. A negative result over guessed candidates is a
+  statement about your guesses, not the system.
+
+Board state after that session: **gdn-merozu** (the revived baton-pass, superseding the
+dropped gdn-kidowe) sits under gdn-jibudu and needs its `--badly` from Sameer before anyone
+builds. **gdn-himaba** (the design pass) now carries the per-surface handle table, the
+three-state model, and the Cowork answer.
+
 ## Substrate watch (2026-06-10 read, Fable first-look session)
 
 Gueridon hand-rolled, in February, what Anthropic's stack now provides natively
