@@ -21,6 +21,7 @@ import {
   extractLastToolCall,
   isSessionReadyFromTail,
   buildSessionRoster,
+  walletLabel,
   sessionDisplayName,
   type RcRosterInfo,
   type VertexRosterInfo,
@@ -1922,6 +1923,48 @@ describe("buildSessionRoster", () => {
       NO_RC, vertexByPid, ROOT, HOME);
     expect(e.kind).toBe("vertex");      // attachable own session, not the read-only terminal kind
     expect(e.attachable).toBe(true);
+  });
+
+  it("classifies an RC-server child as 'remote' — no attach, no url, uuid carried (gdn-zahidu)", () => {
+    const [e] = buildSessionRoster(
+      [{
+        pid: 500, cwd: "/home/modha/notes", ageSec: 60,
+        remoteSessionId: "cse_01BuFAtest", sessionUuid: "fd95e6bc-d28e-53f3-b615-615dae4d94d5",
+      }],
+      NO_RC, NO_VX, ROOT, HOME);
+    expect(e).toMatchObject({
+      pid: 500, kind: "remote", attachable: false, url: null, ready: true,
+      sessionUuid: "fd95e6bc-d28e-53f3-b615-615dae4d94d5", wallet: "sameer@",
+    });
+  });
+
+  it("labels every row's wallet: commis config dir → family@, default → sameer@, vertex wins (gdn-zahidu)", () => {
+    const roster = buildSessionRoster([
+      { pid: 1, cwd: "/home/modha/.claude", ageSec: 10, configDir: "/home/modha/.claude-commis" },
+      { pid: 2, cwd: "/home/modha", ageSec: 20 },
+      { pid: 3, cwd: "/home/modha/repos/itv/mit-kg", ageSec: 30, vertexBilled: true },
+    ], NO_RC, NO_VX, ROOT, HOME);
+    expect(roster.find((r) => r.pid === 1)?.wallet).toBe("family@");
+    expect(roster.find((r) => r.pid === 2)?.wallet).toBe("sameer@");
+    expect(roster.find((r) => r.pid === 3)?.wallet).toBe("vertex");
+  });
+});
+
+describe("walletLabel (gdn-zahidu — the wallet is the config dir, vertex overrides)", () => {
+  it("maps the estate's seats", () => {
+    expect(walletLabel(undefined, false)).toBe("sameer@");
+    expect(walletLabel("/home/modha/.claude", false)).toBe("sameer@");
+    expect(walletLabel("/home/modha/.claude/", false)).toBe("sameer@"); // trailing slash
+    expect(walletLabel("/home/modha/.claude-commis", false)).toBe("family@");
+  });
+
+  it("vertex wins over any config dir", () => {
+    expect(walletLabel("/home/modha/.claude-commis", true)).toBe("vertex");
+    expect(walletLabel(undefined, true)).toBe("vertex");
+  });
+
+  it("shows an unknown seat by its basename rather than mislabelling it (open set)", () => {
+    expect(walletLabel("/home/modha/.claude-seat3", false)).toBe(".claude-seat3");
   });
 });
 

@@ -842,11 +842,37 @@ export interface RosterEntry {
   // "vertex-terminal" (gdn-kuhaku): a Vertex-billed session Guéridon did NOT launch (a claudev/
   // claudefv terminal session). Shown honestly, but NOT attachable — Guéridon has no pty handle
   // and driving it would collide with the live terminal over the shared JSONL. Baton-pass
-  // takeover is the parked feature (gdn-kidowe) that will make this kind actionable.
-  kind: "rc" | "vertex" | "vertex-terminal" | "local";
+  // takeover is the parked feature (gdn-kidowe → revived as gdn-merozu) that will make this
+  // kind actionable.
+  // "remote" (gdn-zahidu): a phone-created session child under a `claude-remote@` server.
+  // Not attachable (the claude.ai app drives it), and — deliberately — NO End either until
+  // SIGTERM-on-a-server-child is measured (does the server respawn it? does the phone tile
+  // wedge?). Archive-from-phone is the known-clean end. Carries its derived transcript uuid.
+  kind: "rc" | "vertex" | "vertex-terminal" | "remote" | "local";
   attachable: boolean; // true for Guéridon-spawned sessions: rc (claude.ai URL) and vertex (/#folder)
   url: string | null;
   ready: boolean;
+  /** Which wallet the process is billing to, display-ready (gdn-zahidu): "vertex",
+   *  "sameer@", "family@", or a config-dir basename for a seat we don't know by name. */
+  wallet: string;
+  /** Local transcript uuid, where the scan could derive one (remote children today). */
+  sessionUuid?: string;
+}
+
+/**
+ * Display-ready wallet label from a process's billing markers (gdn-zahidu). Vertex wins
+ * (the Vertex env set overrides everything else about billing); otherwise the wallet IS
+ * the config dir the credential came from: default `~/.claude` = the primary seat,
+ * `~/.claude-commis` = the family seat, anything else shown by its basename so a future
+ * seat is visible (if unnamed) rather than mislabelled. Seat names will move to config
+ * when the wallet sheet lands (gdn-merozu); until then this mapping is the estate's.
+ */
+export function walletLabel(configDir: string | undefined, vertexBilled: boolean | undefined): string {
+  if (vertexBilled) return "vertex";
+  if (!configDir || configDir.replace(/\/+$/, "").endsWith("/.claude")) return "sameer@";
+  const base = basename(configDir.replace(/\/+$/, ""));
+  if (base === ".claude-commis") return "family@";
+  return base;
 }
 
 /** What the roster needs to know about an RC session, keyed by pid. */
@@ -896,7 +922,10 @@ export function sessionDisplayName(
  * handle to drive it). Sorted newest-first (smallest ageSec).
  */
 export function buildSessionRoster(
-  procs: { pid: number; cwd: string; ageSec: number; vertexBilled?: boolean }[],
+  procs: {
+    pid: number; cwd: string; ageSec: number; vertexBilled?: boolean;
+    configDir?: string; remoteSessionId?: string; sessionUuid?: string;
+  }[],
   rcByPid: Map<number, RcRosterInfo>,
   vertexByPid: Map<number, VertexRosterInfo>,
   scanRoot: string,
@@ -904,32 +933,43 @@ export function buildSessionRoster(
   extraFolders: string[] = [],
 ): RosterEntry[] {
   const roster: RosterEntry[] = procs.map((p) => {
+    const wallet = walletLabel(p.configDir, p.vertexBilled);
     const rc = rcByPid.get(p.pid);
     if (rc) {
       return {
         pid: p.pid, name: rc.folderName, cwd: p.cwd, ageSec: p.ageSec,
-        kind: "rc" as const, attachable: true, url: rc.url, ready: rc.ready,
+        kind: "rc" as const, attachable: true, url: rc.url, ready: rc.ready, wallet,
       };
     }
     const vx = vertexByPid.get(p.pid);
     if (vx) {
       return {
         pid: p.pid, name: vx.folderName, cwd: p.cwd, ageSec: p.ageSec,
-        kind: "vertex" as const, attachable: true, url: "/#" + vx.folderName, ready: true,
+        kind: "vertex" as const, attachable: true, url: "/#" + vx.folderName, ready: true, wallet,
+      };
+    }
+    // Phone-created RC-server child (gdn-zahidu): the claude.ai app drives it — not
+    // attachable here, and no End until SIGTERM-on-a-server-child is measured (see
+    // RosterEntry). Carries its derived transcript uuid for the session index (gdn-vucube).
+    if (p.remoteSessionId) {
+      return {
+        pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
+        ageSec: p.ageSec, kind: "remote" as const, attachable: false, url: null, ready: true,
+        wallet, ...(p.sessionUuid && { sessionUuid: p.sessionUuid }),
       };
     }
     // Foreign but Vertex-billed (a claudev/claudefv terminal session) — label honestly, but
     // NOT attachable: driving it would collide with the live terminal over the shared JSONL.
-    // Takeover is gdn-kidowe (baton-pass). Own-vertex above wins over this generic detection.
+    // Takeover is the baton-pass (gdn-merozu). Own-vertex above wins over this generic detection.
     if (p.vertexBilled) {
       return {
         pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
-        ageSec: p.ageSec, kind: "vertex-terminal" as const, attachable: false, url: null, ready: true,
+        ageSec: p.ageSec, kind: "vertex-terminal" as const, attachable: false, url: null, ready: true, wallet,
       };
     }
     return {
       pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
-      ageSec: p.ageSec, kind: "local" as const, attachable: false, url: null, ready: true,
+      ageSec: p.ageSec, kind: "local" as const, attachable: false, url: null, ready: true, wallet,
     };
   });
   roster.sort((a, b) => a.ageSec - b.ageSec); // newest first

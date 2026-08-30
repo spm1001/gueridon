@@ -76,6 +76,11 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .run-row .run-status { flex: 0 0 auto; font-size: 0.75rem; color: var(--text-dim); }
+  /* Wallet chip (gdn-zahidu): which billing lane the session runs on. */
+  .wchip { flex: 0 0 auto; font-size: 0.66rem; font-weight: 600; border-radius: 5px; padding: 0.05rem 0.4rem; border: 1px solid #444; color: var(--text-dim); }
+  .wchip.vertex { color: #6aa9f4; border-color: #2c4a75; }
+  .wchip.sameer { color: var(--accent); border-color: #6b3a28; }
+  .wchip.family { color: #4caf7d; border-color: #2c5a41; }
   .mini {
     flex: 0 0 auto; font-size: 0.82rem; text-decoration: none;
     border: 1px solid var(--border); border-radius: 8px;
@@ -236,6 +241,16 @@
       name.className = "run-name"; name.textContent = s.name;
       row.appendChild(name);
 
+      // Wallet chip (gdn-zahidu) — every row shows its billing lane. Class keys the colour;
+      // an unrecognised lane (a future seat) still renders, just uncoloured.
+      if (s.wallet) {
+        const w = document.createElement("span");
+        const wcls = { "vertex": "vertex", "sameer@": "sameer", "family@": "family" }[s.wallet] || "";
+        w.className = "wchip" + (wcls ? " " + wcls : "");
+        w.textContent = s.wallet;
+        row.appendChild(w);
+      }
+
       if (s.attachable) {
         if (isRc && !s.ready) {
           const st = document.createElement("span");
@@ -243,7 +258,7 @@
           row.appendChild(st);
         } else if (isVertex) {
           const st = document.createElement("span");
-          st.className = "run-status"; st.textContent = "vertex · " + ageLabel(s.ageSec);
+          st.className = "run-status"; st.textContent = ageLabel(s.ageSec);
           row.appendChild(st);
         }
         if (s.url) {
@@ -257,27 +272,32 @@
         end.addEventListener("click", () => endSession(s, end));
         row.appendChild(end);
       } else {
-        // Foreign, read-only for ATTACH (Guéridon has no pty handle — takeover = gdn-kidowe).
-        // A Vertex-billed terminal session (claudev/claudefv, gdn-kuhaku) is labelled
-        // "vertex · terminal"; everything else is "local". But foreign sessions ARE END-able
-        // by pid (gdn-racuca): SIGTERM is a graceful, resumable /exit, so you can clear a stuck
-        // desktop-app or terminal session that's holding a repo out of the launch list.
+        // Foreign, read-only for ATTACH (Guéridon has no pty handle — takeover = gdn-merozu).
+        // Kind labels: "terminal" for a Vertex-billed claudev/claudefv session (gdn-kuhaku —
+        // the wallet chip carries "vertex" now), "phone" for an RC-server child (gdn-zahidu),
+        // "local" for the rest. Foreign sessions ARE END-able by pid (gdn-racuca) — EXCEPT
+        // "remote": SIGTERM on a server's child is unmeasured (server respawn? wedged phone
+        // tile?), so those rows get no End; archive from the phone app is the clean end.
         const st = document.createElement("span");
         st.className = "run-status";
-        st.textContent = (s.kind === "vertex-terminal" ? "vertex · terminal · " : "local · ") + ageLabel(s.ageSec);
+        const kindLabel = s.kind === "vertex-terminal" ? "terminal · "
+          : s.kind === "remote" ? "phone · " : "local · ";
+        st.textContent = kindLabel + ageLabel(s.ageSec);
         row.appendChild(st);
-        const end = document.createElement("button");
-        end.className = "mini end"; end.textContent = "End";
-        // Two-tap arm (PWA-safe; native confirm() is unreliable in iOS standalone): first tap
-        // → "Sure?", a second tap within 3s ends it. Guards a fat-finger on a live foreign row.
-        end.addEventListener("click", () => {
-          if (end.dataset.armed === "1") { endSession(s, end); return; }
-          end.dataset.armed = "1"; end.textContent = "Sure?";
-          setTimeout(() => {
-            if (end.dataset.armed === "1") { end.dataset.armed = "0"; end.textContent = "End"; }
-          }, 3000);
-        });
-        row.appendChild(end);
+        if (s.kind !== "remote") {
+          const end = document.createElement("button");
+          end.className = "mini end"; end.textContent = "End";
+          // Two-tap arm (PWA-safe; native confirm() is unreliable in iOS standalone): first tap
+          // → "Sure?", a second tap within 3s ends it. Guards a fat-finger on a live foreign row.
+          end.addEventListener("click", () => {
+            if (end.dataset.armed === "1") { endSession(s, end); return; }
+            end.dataset.armed = "1"; end.textContent = "Sure?";
+            setTimeout(() => {
+              if (end.dataset.armed === "1") { end.dataset.armed = "0"; end.textContent = "End"; }
+            }, 3000);
+          });
+          row.appendChild(end);
+        }
       }
       $runningList.appendChild(row);
     }
