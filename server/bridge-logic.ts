@@ -948,14 +948,18 @@ export function buildSessionRoster(
         kind: "vertex" as const, attachable: true, url: "/#" + vx.folderName, ready: true, wallet,
       };
     }
-    // Phone-created RC-server child (gdn-zahidu): the claude.ai app drives it — not
-    // attachable here, and no End until SIGTERM-on-a-server-child is measured (see
-    // RosterEntry). Carries its derived transcript uuid for the session index (gdn-vucube).
+    // Phone-created RC-server child (gdn-zahidu): claude.ai drives it — not attachable by
+    // Guéridon, and no End until SIGTERM-on-a-server-child is measured (see RosterEntry).
+    // But it DOES get an Open: cse_<body> and session_<body> are one id, so the session's
+    // own claude.ai URL is derivable — opening it there is its native driving surface
+    // (no one-driver hazard; that surface already holds it). Carries its derived
+    // transcript uuid for the session index (gdn-vucube).
     if (p.remoteSessionId) {
       return {
         pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
-        ageSec: p.ageSec, kind: "remote" as const, attachable: false, url: null, ready: true,
-        wallet, ...(p.sessionUuid && { sessionUuid: p.sessionUuid }),
+        ageSec: p.ageSec, kind: "remote" as const, attachable: false,
+        url: "https://claude.ai/code/session_" + p.remoteSessionId.replace(/^cse_/, ""),
+        ready: true, wallet, ...(p.sessionUuid && { sessionUuid: p.sessionUuid }),
       };
     }
     // Foreign but Vertex-billed (a claudev/claudefv terminal session) — label honestly, but

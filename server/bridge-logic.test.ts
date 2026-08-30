@@ -1925,7 +1925,7 @@ describe("buildSessionRoster", () => {
     expect(e.attachable).toBe(true);
   });
 
-  it("classifies an RC-server child as 'remote' — no attach, no url, uuid carried (gdn-zahidu)", () => {
+  it("classifies an RC-server child as 'remote' — no attach, claude.ai Open url, uuid carried (gdn-zahidu)", () => {
     const [e] = buildSessionRoster(
       [{
         pid: 500, cwd: "/home/modha/notes", ageSec: 60,
@@ -1933,7 +1933,10 @@ describe("buildSessionRoster", () => {
       }],
       NO_RC, NO_VX, ROOT, HOME);
     expect(e).toMatchObject({
-      pid: 500, kind: "remote", attachable: false, url: null, ready: true,
+      pid: 500, kind: "remote", attachable: false, ready: true,
+      // cse_<body> and session_<body> are one id — the row's Open is the session's own
+      // claude.ai page (its native driving surface; no one-driver hazard).
+      url: "https://claude.ai/code/session_01BuFAtest",
       sessionUuid: "fd95e6bc-d28e-53f3-b615-615dae4d94d5", wallet: "sameer@",
     });
   });

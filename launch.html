@@ -284,6 +284,14 @@
           : s.kind === "remote" ? "phone · " : "local · ";
         st.textContent = kindLabel + ageLabel(s.ageSec);
         row.appendChild(st);
+        // A remote row's url is the session's own claude.ai page (cse_ ↔ session_ — one id,
+        // two prefixes). Open = drive it on its native surface; works per-account in the
+        // web app (Sameer's bookmark-per-wallet flow, 2026-08-30).
+        if (s.kind === "remote" && s.url) {
+          const open = document.createElement("a");
+          open.className = "mini"; open.textContent = "Open"; open.href = s.url; open.rel = "noopener";
+          row.appendChild(open);
+        }
         if (s.kind !== "remote") {
           const end = document.createElement("button");
           end.className = "mini end"; end.textContent = "End";
