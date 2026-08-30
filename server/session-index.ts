@@ -217,7 +217,9 @@ export async function scanRecentSessions(opts: {
   const projectsDir = opts.projectsDir ?? join(homedir(), ".claude/projects");
   const days = opts.days ?? 5;
   const maxFiles = opts.maxFiles ?? 60;
-  const headBytes = opts.headBytes ?? 64 * 1024;
+  // 256KB: an /open-style session start floods the head with hook output before the
+  // human says anything — 64KB missed the first prompt on real sessions (2026-08-30).
+  const headBytes = opts.headBytes ?? 256 * 1024;
   const tailBytes = opts.tailBytes ?? 16 * 1024;
   const minBytes = opts.minBytes ?? 100 * 1024;
   const cutoff = Date.now() - days * 86_400_000;
