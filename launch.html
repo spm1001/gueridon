@@ -3,9 +3,10 @@
 <title>Guéridon · Launch</title>
 
 <!--
-  Future B launcher (gdn-todidu + gdn-rilope). A FRESH, self-contained page — knows nothing
-  about index.html / the SSE+render layer (Sameer: "my worry about porting is we bring over
-  too much"). Two stacked lists, no streaming:
+  Future B launcher (gdn-todidu + gdn-rilope), grown into the estate switchboard
+  (gdn-jibudu). A FRESH, self-contained page — knows nothing about index.html / the
+  SSE+render layer (Sameer: "my worry about porting is we bring over too much").
+  Three stacked bands, no streaming:
 
     SESSIONS — roster of EVERY live claude session (GET /sessions, gdn-batogo), newest first.
                RC sessions Guéridon spawned are attachable: Open = reopen the claude.ai URL;
@@ -15,6 +16,11 @@
                Hand-started / foreign sessions (e.g. a terminal session in ~) are READ-ONLY —
                shown "local · 44m" for awareness, no Open/End (Guéridon has no pty handle to
                drive them). The clean-exit on RC sessions is the moat native apps lack.
+    RECENT   — cold sessions from the transcript farm (GET /recent, gdn-vucube): uuid-keyed,
+               titles scavenged (ai-title → Cowork sidecar → bridge log → first prompt),
+               first-prompt subtitles, 100KB substance floor. Read-only until pickup
+               (gdn-merozu) lands. The search box filters these rows too.
+
     REPOS    — every launchable repo (GET /repos), name-searchable, ordered by last git commit
                (repo recency, not session mtime). Tap → flat Launch button → POST /launch.
 

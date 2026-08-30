@@ -43,7 +43,7 @@ The Vertex/streaming lane is in **maintenance mode** — nips and tucks fine (e.
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~777 tests, ~7s)
+npm test                     # Run all tests (~811 tests, ~7s)
 npm run test:watch           # Watch mode
 ```
 
@@ -342,7 +342,7 @@ The document body scrolls (not a container element). This enables Safari Full Pa
 - Collapsible tool calls (consecutive successful calls coalesce)
 - Enter never submits (mobile newlines), submit is the button
 - Chunk-level updates (not token-level)
-- No in-conversation session switcher (retired in gdn-deloce). The launcher (`launch.html`) is the home/chooser AND the session switchboard (gdn-vagori): repo list by git-recency + a live roster of every `claude` session — Guéridon-owned entries (rc/vertex) are tappable (Open/End), foreign ones End-able-not-attachable (End by pid — `DELETE /session/:pid`, gdn-racuca, with a two-tap "Sure?" arm; a foreign Vertex session shows "vertex · terminal", gdn-kuhaku); the roster re-fetches on tab wake and polls every 20s while visible. A repo with a live session is hidden from the launch list (gdn-wuvujo) — it's already in the roster, and a 2nd launch into it would collide on the shared JSONL. Pick a repo → two lane buttons (Vertex | Teams). The conversation page is single-session; leaving it (folder-lozenge tap, `/exit`, session end, or bare `/`) returns to the launcher. Flick = launcher ⇄ tap-in/tap-out.
+- No in-conversation session switcher (retired in gdn-deloce). The launcher (`launch.html`) is the home/chooser AND the session switchboard (gdn-vagori): repo list by git-recency + a live roster of every `claude` session — Guéridon-owned entries (rc/vertex) are tappable (Open/End), foreign ones End-able-not-attachable (End by pid — `DELETE /session/:pid`, gdn-racuca, with a two-tap "Sure?" arm; a foreign Vertex session shows "terminal" with a vertex wallet chip, gdn-kuhaku; every row carries a wallet chip and phone-created RC children show as "phone" with an Open link to their claude.ai page, gdn-zahidu); the roster re-fetches on tab wake and polls every 20s while visible. Below it, a RECENT band (gdn-vucube, `GET /recent`) lists cold sessions from the farm — scavenged titles, first-prompt subtitles, 100KB substance floor, search-filterable — read-only until pickup (gdn-merozu). The whole page is body-scroll (gdn-jigepa) so Safari offers Full Page screenshots. A repo with a live session is hidden from the launch list (gdn-wuvujo) — it's already in the roster, and a 2nd launch into it would collide on the shared JSONL. Pick a repo → two lane buttons (Vertex | Teams). The conversation page is single-session; leaving it (folder-lozenge tap, `/exit`, session end, or bare `/`) returns to the launcher. Flick = launcher ⇄ tap-in/tap-out.
 - Push notifications via service worker
 - Push-to-talk: long-press anywhere on the `.btn-bar` (folder + context lozenges) activates `SpeechRecognition`. Release stops and auto-sends with `[dictated]` prefix. Send button is tap-only. Folder lozenge pulses orange (accent) during dictation. iOS system mic sounds are not suppressible.
 - Turn-complete chime: 350Hz sine wave, gain 0.06, 300ms decay. Plays when `data-busy` transitions false. Uses shared `AudioContext` (created on first user gesture for Safari).
