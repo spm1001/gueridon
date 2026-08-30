@@ -1809,6 +1809,7 @@ const server = createServer((req, res) => {
         ageSec: Math.max(0, Math.round((now - r.mtimeMs) / 1000)),
         title: r.title,
         titleSource: r.titleSource,
+        firstPrompt: r.firstPrompt,
         entrypoint: r.entrypoint,
         uuidVersion: r.uuidVersion,
       }));

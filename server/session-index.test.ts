@@ -129,7 +129,8 @@ describe("scanRecentSessions (fixture farm)", () => {
     rm(root, { recursive: true, force: true }));
 
   it("indexes the farm with titles from all three sources, drops junk", async () => {
-    const got = await scanRecentSessions({ projectsDir, sidecarRoot, logsDir });
+    // minBytes 0: these fixtures are all probe-sized; the floor gets its own test below.
+    const got = await scanRecentSessions({ projectsDir, sidecarRoot, logsDir, minBytes: 0 });
     const byUuid = new Map(got.map((r) => [r.uuid, r]));
 
     expect(byUuid.get(V4)).toMatchObject({
@@ -151,8 +152,23 @@ describe("scanRecentSessions (fixture farm)", () => {
   });
 
   it("respects maxFiles newest-first", async () => {
-    const got = await scanRecentSessions({ projectsDir, sidecarRoot, logsDir, maxFiles: 1 });
+    const got = await scanRecentSessions({ projectsDir, sidecarRoot, logsDir, maxFiles: 1, minBytes: 0 });
     expect(got.length).toBe(1);
+  });
+
+  it("substance floor drops probe-sized sessions unless a human surface titled them", async () => {
+    // Every fixture here is far under 10KB. With the floor at 10KB, only the two rows
+    // titled by a HUMAN surface survive: the Cowork-sidecar one and the bridge-log one.
+    const got = await scanRecentSessions({ projectsDir, sidecarRoot, logsDir, minBytes: 10_000 });
+    const uuids = got.map((r) => r.uuid).sort();
+    expect(uuids).toEqual([V5_REMOTE, V4_COWORK].sort());
+  });
+
+  it("carries firstPrompt as the subtitle source", async () => {
+    const got = await scanRecentSessions({ projectsDir, sidecarRoot, logsDir, minBytes: 0 });
+    const v4 = got.find((r) => r.uuid === V4);
+    expect(v4?.firstPrompt).toBe("let's fix the widget");
+    expect(v4?.sizeBytes).toBeGreaterThan(0);
   });
 });
 

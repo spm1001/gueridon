@@ -359,7 +359,7 @@
     const q = $filter.value.trim().toLowerCase();
     const shown = q
       ? recentSessions.filter((r) =>
-          ((r.title || "") + " " + r.name).toLowerCase().includes(q))
+          ((r.title || "") + " " + (r.firstPrompt || "") + " " + r.name).toLowerCase().includes(q))
       : recentSessions;
     if (!shown.length) { $recent.hidden = true; $recentList.innerHTML = ""; return; }
     $recent.hidden = false;
@@ -371,6 +371,15 @@
       const t = document.createElement("span");
       t.className = "rec-title"; t.textContent = r.title || r.name;
       row.appendChild(t);
+      // Subtitle: the human's opening words, when the title compressed them away.
+      // An ai-title like "Swaps" is enigmatic on its own (Sameer, 2026-08-30) — the
+      // first prompt is what his memory actually indexes on.
+      if (r.firstPrompt && r.title && r.titleSource !== "first-prompt") {
+        const fp = document.createElement("span");
+        fp.className = "rec-meta";
+        fp.textContent = "“" + r.firstPrompt + "”";
+        row.appendChild(fp);
+      }
       const m = document.createElement("span");
       m.className = "rec-meta";
       const glyph = SURFACE_GLYPH[r.entrypoint] || "";

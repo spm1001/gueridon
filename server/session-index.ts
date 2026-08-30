@@ -36,10 +36,13 @@ export interface RecentSession {
   uuid: string;
   cwd: string;
   mtimeMs: number;
+  sizeBytes: number;
   entrypoint: string | null;   // "cli" | "sdk-cli" | "claude-desktop" | null (old sessions)
   uuidVersion: number;         // 4 = interactive, 5 = programmatically spawned
   title: string | null;
   titleSource: "ai-title" | "cowork" | "bridge-log" | "first-prompt" | null;
+  /** The human's opening words — the subtitle that de-enigmatises a terse ai-title. */
+  firstPrompt: string | null;
 }
 
 /** Version nibble of a uuid string (position 14: "xxxxxxxx-xxxx-Vxxx-…"). */
@@ -190,6 +193,15 @@ export async function loadBridgeLogTitles(
  * `maxFiles` bounds the head-read IO per call (files are examined newest-first, so the
  * bound trims the oldest). Sessions with no human prompt AND no title are dropped —
  * warmups, empty spawns and probe shells, not conversations.
+ *
+ * `minBytes` is the SUBSTANCE FLOOR (Sameer's screenshot review, 2026-08-30): the band
+ * was filling with auto-generated probe sessions — hublot test drives, ardoise cold
+ * reads, gouteur gate probes. Measured that evening: every such probe was ≤75KB while
+ * every human session was ≥140KB, so 100KB splits them cleanly. Sessions titled from a
+ * HUMAN surface (Cowork sidecar, RC bridge log) are exempt — those were launched by a
+ * person whatever their size. Known survivor: robot SDK spawns that do real work
+ * (a 383KB marmite session) — smarter robot-tagging waits for the wallet journal
+ * (gdn-miseso).
  */
 export async function scanRecentSessions(opts: {
   projectsDir?: string;
@@ -199,18 +211,20 @@ export async function scanRecentSessions(opts: {
   maxFiles?: number;
   headBytes?: number;
   tailBytes?: number;
+  minBytes?: number;
 } = {}): Promise<RecentSession[]> {
   const projectsDir = opts.projectsDir ?? join(homedir(), ".claude/projects");
   const days = opts.days ?? 5;
   const maxFiles = opts.maxFiles ?? 60;
   const headBytes = opts.headBytes ?? 64 * 1024;
   const tailBytes = opts.tailBytes ?? 16 * 1024;
+  const minBytes = opts.minBytes ?? 100 * 1024;
   const cutoff = Date.now() - days * 86_400_000;
 
   let dirs: string[];
   try { dirs = await readdir(projectsDir); } catch { return []; }
 
-  const candidates: { path: string; uuid: string; mtimeMs: number }[] = [];
+  const candidates: { path: string; uuid: string; mtimeMs: number; sizeBytes: number }[] = [];
   for (const d of dirs) {
     let files: string[];
     try { files = await readdir(join(projectsDir, d)); } catch { continue; }
@@ -220,9 +234,11 @@ export async function scanRecentSessions(opts: {
       const path = join(projectsDir, d, f);
       try {
         const fh = await open(path, "r");
-        const mtimeMs = (await fh.stat()).mtimeMs;
+        const st = await fh.stat();
         await fh.close();
-        if (mtimeMs >= cutoff) candidates.push({ path, uuid: m[1], mtimeMs });
+        if (st.mtimeMs >= cutoff) {
+          candidates.push({ path, uuid: m[1], mtimeMs: st.mtimeMs, sizeBytes: st.size });
+        }
       } catch { continue; }
     }
   }
@@ -243,10 +259,13 @@ export async function scanRecentSessions(opts: {
     if (!head.cwd) continue; // no cwd = not a conversation transcript we understand
     const { title, titleSource } = resolveTitle(head, coworkTitles.get(c.uuid), bridgeTitles.get(c.uuid));
     if (!head.firstPrompt && !title) continue; // warmup/empty session — not worth a row
+    // Substance floor: drop probe-sized sessions unless a human surface titled them.
+    const humanSurface = titleSource === "cowork" || titleSource === "bridge-log";
+    if (c.sizeBytes < minBytes && !humanSurface) continue;
     out.push({
-      uuid: c.uuid, cwd: head.cwd, mtimeMs: c.mtimeMs,
+      uuid: c.uuid, cwd: head.cwd, mtimeMs: c.mtimeMs, sizeBytes: c.sizeBytes,
       entrypoint: head.entrypoint, uuidVersion: uuidVersionOf(c.uuid),
-      title, titleSource,
+      title, titleSource, firstPrompt: head.firstPrompt,
     });
   }
   return out;
