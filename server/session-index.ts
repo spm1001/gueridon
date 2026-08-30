@@ -82,8 +82,9 @@ export function parseHeadFields(text: string): HeadFields {
       const msg = e.message as { content?: unknown } | undefined;
       const c = msg?.content;
       // Human message = string content (tool results / injections are arrays). Skip
-      // slash-command records and the caveat preamble — neither is what the human "said".
-      if (typeof c === "string" && c.trim() && !c.startsWith("<command-") && !c.startsWith("Caveat:")) {
+      // machine wrappers — <command-name>, <local-command-stdout>, any angle-bracket
+      // opener — and the caveat preamble: none of them is what the human "said".
+      if (typeof c === "string" && c.trim() && !c.trimStart().startsWith("<") && !c.startsWith("Caveat:")) {
         out.firstPrompt = c.trim().replace(/\s+/g, " ").slice(0, 100);
       }
     }

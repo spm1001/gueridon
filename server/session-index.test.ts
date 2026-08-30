@@ -40,6 +40,7 @@ describe("parseHeadFields", () => {
              message: { role: "user", content: [{ type: "tool_result", content: "out" }] },
              toolUseResult: { stdout: "out" } }) +
       human("/home/x/repos/acme/data-tools", "<command-name>/open</command-name>") +
+      human("/home/x/repos/acme/data-tools", "<local-command-stdout>commons is already fresh</local-command-stdout>") +
       human("/home/x/repos/acme/data-tools", "  fix the   roster bug please  ") +
       line({ type: "ai-title", aiTitle: "First title" }) +
       line({ type: "ai-title", aiTitle: "Retitled later" });
