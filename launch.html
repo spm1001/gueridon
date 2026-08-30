@@ -102,9 +102,15 @@
     margin: 0.5rem 1.1rem;
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
     color: var(--text); font-size: 1rem; padding: 0.6rem 0.8rem;
+    position: sticky; top: 0.5rem; z-index: 2;
   }
   .filter:focus { outline: none; border-color: var(--accent-dim); }
-  .repos { flex: 1 1 auto; overflow-y: auto; padding: 0 1.1rem 6.5rem; -webkit-overflow-scrolling: touch; }
+  /* Body-scroll layout (gdn-jigepa): the DOCUMENT scrolls, not .repos — Safari only
+     offers Full Page screenshots (and URL-bar shrink) when the body is the scroller.
+     Same primitives as the conversation page (CLAUDE.md "Layout model — body-scroll"):
+     content flows into the document, footer stays sticky at the viewport bottom. The
+     search box goes sticky-top so it stays reachable on a long scroll. */
+  .repos { flex: 1 0 auto; padding: 0 1.1rem 1rem; }
   .repo {
     display: flex; align-items: center; gap: 0.75rem; width: 100%; text-align: left;
     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
