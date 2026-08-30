@@ -165,6 +165,31 @@ describe("scanRecentSessions (fixture farm)", () => {
     expect(uuids).toEqual([V5_REMOTE, V4_COWORK].sort());
   });
 
+  it("hunts past the head window for a buried first prompt (progressive read)", async () => {
+    // A session whose head is all hook machinery: 40 isMeta lines (~4KB), the human's
+    // opener beyond them. With a 512B head window the shallow parse misses it and the
+    // deep hunt must find it.
+    const buriedDir = join(projectsDir, "-home-x-buried");
+    await mkdir(buriedDir, { recursive: true });
+    const uuid = "eeeeeeee-ffff-4000-8111-222222222222";
+    const noise = (n: number) => {
+      let s = "";
+      for (let i = 0; i < n; i++) {
+        s += line({ type: "user", cwd: "/home/x/buried", entrypoint: "cli", isMeta: true,
+          message: { role: "user", content: [{ type: "text", text: "hook noise ".repeat(8) + i }] } });
+      }
+      return s;
+    };
+    // Prompt in the MIDDLE: past the 512B head AND shielded from the 128B tail window —
+    // otherwise the shallow parse finds it and this test could never fail.
+    await writeFile(join(buriedDir, `${uuid}.jsonl`),
+      noise(40) + human("/home/x/buried", "the buried opener about swaps") + noise(40));
+    const got = await scanRecentSessions({
+      projectsDir, sidecarRoot, logsDir, minBytes: 0, headBytes: 512, tailBytes: 128,
+    });
+    expect(got.find((r) => r.uuid === uuid)?.firstPrompt).toBe("the buried opener about swaps");
+  });
+
   it("carries firstPrompt as the subtitle source", async () => {
     const got = await scanRecentSessions({ projectsDir, sidecarRoot, logsDir, minBytes: 0 });
     const v4 = got.find((r) => r.uuid === V4);

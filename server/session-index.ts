@@ -78,18 +78,67 @@ export function parseHeadFields(text: string): HeadFields {
     if (out.cwd === null && typeof e.cwd === "string") out.cwd = e.cwd;
     if (out.entrypoint === null && typeof e.entrypoint === "string") out.entrypoint = e.entrypoint;
     if (e.type === "ai-title" && typeof e.aiTitle === "string" && e.aiTitle) out.aiTitle = e.aiTitle;
-    if (out.firstPrompt === null && e.type === "user" && (e.isMeta ?? false) !== true) {
-      const msg = e.message as { content?: unknown } | undefined;
-      const c = msg?.content;
-      // Human message = string content (tool results / injections are arrays). Skip
-      // machine wrappers — <command-name>, <local-command-stdout>, any angle-bracket
-      // opener — and the caveat preamble: none of them is what the human "said".
-      if (typeof c === "string" && c.trim() && !c.trimStart().startsWith("<") && !c.startsWith("Caveat:")) {
-        out.firstPrompt = c.trim().replace(/\s+/g, " ").slice(0, 100);
-      }
+    if (out.firstPrompt === null && e.type === "user") {
+      const p = humanPromptFromEntry(e);
+      if (p) out.firstPrompt = p;
     }
   }
   return out;
+}
+
+/** The human's words from a parsed user entry, or null for tool results / injections /
+ *  machine wrappers (<command-name>, <local-command-stdout>, any angle-bracket opener)
+ *  and the caveat preamble — none of which is what the human "said". */
+function humanPromptFromEntry(e: Record<string, unknown>): string | null {
+  if ((e.isMeta ?? false) === true) return null;
+  const msg = e.message as { content?: unknown } | undefined;
+  const c = msg?.content;
+  if (typeof c !== "string" || !c.trim()) return null;
+  if (c.trimStart().startsWith("<") || c.startsWith("Caveat:")) return null;
+  return c.trim().replace(/\s+/g, " ").slice(0, 100);
+}
+
+/**
+ * Progressive hunt for the first human prompt past `startOffset` — for sessions whose
+ * head window is all hook/command output (an /open start buries the human's opener;
+ * "Swaps" sat >256KB deep, Sameer's screenshot 2026-08-30). Reads sequential chunks,
+ * line-carries across boundaries, stops at the first human line or `maxBytes`.
+ */
+async function findFirstPromptDeep(
+  path: string,
+  startOffset: number,
+  chunkSize = 256 * 1024,
+  maxBytes = 6 * 1024 * 1024,
+): Promise<string | null> {
+  const fh = await open(path, "r");
+  try {
+    const size = (await fh.stat()).size;
+    let offset = startOffset;
+    let scanned = 0;
+    let carry = "";
+    let first = true;
+    while (offset < size && scanned < maxBytes) {
+      const buf = Buffer.alloc(Math.min(chunkSize, size - offset));
+      await fh.read(buf, 0, buf.length, offset);
+      offset += buf.length;
+      scanned += buf.length;
+      let text = carry + buf.toString("utf-8");
+      if (first) { text = text.slice(text.indexOf("\n") + 1); first = false; }
+      const lastNl = text.lastIndexOf("\n");
+      carry = text.slice(lastNl + 1);
+      for (const line of text.slice(0, lastNl + 1).split("\n")) {
+        if (!line.includes('"type":"user"')) continue;
+        let e: Record<string, unknown>;
+        try { e = JSON.parse(line); } catch { continue; }
+        if (e?.type !== "user") continue;
+        const p = humanPromptFromEntry(e);
+        if (p) return p;
+      }
+    }
+    return null;
+  } finally {
+    await fh.close();
+  }
 }
 
 /** Title precedence: the session's own ai-title, else Cowork sidecar, else bridge log, else first prompt. */
@@ -260,6 +309,10 @@ export async function scanRecentSessions(opts: {
       head = parseHeadFields(await readHeadTail(c.path, headBytes, tailBytes));
     } catch { continue; }
     if (!head.cwd) continue; // no cwd = not a conversation transcript we understand
+    // Head window all machinery? Hunt deeper for the human's opener (bounded).
+    if (!head.firstPrompt && c.sizeBytes > headBytes + tailBytes) {
+      try { head.firstPrompt = await findFirstPromptDeep(c.path, headBytes); } catch { /* keep null */ }
+    }
     const { title, titleSource } = resolveTitle(head, coworkTitles.get(c.uuid), bridgeTitles.get(c.uuid));
     if (!head.firstPrompt && !title) continue; // warmup/empty session — not worth a row
     // Substance floor: drop probe-sized sessions unless a human surface titled them.
