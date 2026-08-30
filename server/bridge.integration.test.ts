@@ -177,6 +177,11 @@ describe("bridge HTTP smoke tests", () => {
     expect(res.status).toBe(404);
   });
 
+  it("GET /recent returns 404 when RC is disabled (gdn-vucube gated like /sessions)", async () => {
+    const res = await fetch(`${baseUrl}/recent`);
+    expect(res.status).toBe(404);
+  });
+
   it("GET /repos serves even when RC is disabled (ungated read-only)", async () => {
     const res = await fetch(`${baseUrl}/repos`);
     expect(res.status).toBe(200);

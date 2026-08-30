@@ -88,6 +88,15 @@
   }
   .mini.end { color: var(--red); border-color: #4a2725; }
 
+  /* RECENT (cold sessions) list — read-only rows, gdn-vucube */
+  #recent { border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  .rec-row { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.45rem 1.1rem; }
+  .rec-row .rec-title {
+    font-weight: 600; font-size: 0.88rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .rec-row .rec-meta { font-size: 0.72rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
   /* REPO search + list */
   .filter {
     margin: 0.5rem 1.1rem;
@@ -141,6 +150,11 @@
 <div id="running" hidden>
   <div class="label" id="running-label">Sessions</div>
   <div id="running-list"></div>
+</div>
+
+<div id="recent" hidden>
+  <div class="label" id="recent-label">Recent</div>
+  <div id="recent-list"></div>
 </div>
 
 <input class="filter" id="filter" type="text" placeholder="Search repos…" autocapitalize="off" autocorrect="off" spellcheck="false" />
@@ -331,6 +345,50 @@
     setTimeout(loadSessions, 1200);
   }
 
+  // ---- RECENT list (gdn-vucube): cold sessions from the farm — read-only in v1 ----
+  // The bridge excludes anything a live registry knows about, so every row here is
+  // pick-up-able in principle; the verbs arrive with gdn-merozu. The search box filters
+  // these rows too (title + repo name, client-side; deja topic search is the next rung).
+  let recentSessions = [];
+  const $recent = document.getElementById("recent");
+  const $recentList = document.getElementById("recent-list");
+  const $recentLabel = document.getElementById("recent-label");
+  const SURFACE_GLYPH = { "cli": "⌨️", "sdk-cli": "📱", "claude-desktop": "🖥" };
+
+  function renderRecent() {
+    const q = $filter.value.trim().toLowerCase();
+    const shown = q
+      ? recentSessions.filter((r) =>
+          ((r.title || "") + " " + r.name).toLowerCase().includes(q))
+      : recentSessions;
+    if (!shown.length) { $recent.hidden = true; $recentList.innerHTML = ""; return; }
+    $recent.hidden = false;
+    $recentLabel.textContent = "Recent (" + shown.length + ")";
+    $recentList.innerHTML = "";
+    for (const r of shown) {
+      const row = document.createElement("div");
+      row.className = "rec-row";
+      const t = document.createElement("span");
+      t.className = "rec-title"; t.textContent = r.title || r.name;
+      row.appendChild(t);
+      const m = document.createElement("span");
+      m.className = "rec-meta";
+      const glyph = SURFACE_GLYPH[r.entrypoint] || "";
+      m.textContent = [r.name, (glyph ? glyph + " " : "") + ageLabel(r.ageSec) + " ago"].join(" · ");
+      row.appendChild(m);
+      $recentList.appendChild(row);
+    }
+  }
+
+  async function loadRecent() {
+    try {
+      const resp = await fetch("/recent");
+      if (!resp.ok) return; // gated off or transient — leave the band as-is
+      recentSessions = (await resp.json()).sessions || [];
+      renderRecent();
+    } catch (e) { /* offline banner is loadSessions' job; keep last render */ }
+  }
+
   // ---- REPO list ----
   function renderRepos() {
     const q = $filter.value.trim().toLowerCase();
@@ -483,9 +541,10 @@
     }, 2500);
   }
 
-  $filter.addEventListener("input", renderRepos);
+  $filter.addEventListener("input", () => { renderRepos(); renderRecent(); });
   loadRepos();
   loadSessions();
+  loadRecent();
 
   // ---- Roster freshness (gdn-hevuri) ----
   // Mobile Safari resurrects this page from cache with a stale roster; nothing above
@@ -501,9 +560,9 @@
     if (rosterTimer) { clearInterval(rosterTimer); rosterTimer = null; }
   }
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") { loadSessions(); startRosterPolling(); }
+    if (document.visibilityState === "visible") { loadSessions(); loadRecent(); startRosterPolling(); }
     else stopRosterPolling();
   });
-  window.addEventListener("pageshow", () => { loadSessions(); startRosterPolling(); });
+  window.addEventListener("pageshow", () => { loadSessions(); loadRecent(); startRosterPolling(); });
   startRosterPolling();
 </script>

@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 
 import { spawn as ptySpawn, type IPty } from "node-pty";
 import { scanClaudeSessions, isLiveClaudePid } from "./sessions.js";
+import { scanRecentSessions, agentsRegistryUuids } from "./session-index.js";
 
 import {
   buildCCArgs,
@@ -44,6 +45,7 @@ import {
   buildResumeInjection,
   extractLastToolCall,
   buildSessionRoster,
+  sessionDisplayName,
   type RcRosterInfo,
   type VertexRosterInfo,
   shouldSendEvent,
@@ -189,6 +191,12 @@ interface RCSession {
   pushOnReady: boolean;
 }
 export const rcSessions = new Map<string, RCSession>();   // keyed by folder path
+
+// GET /recent response cache (gdn-vucube) — the farm scan + two agents-registry calls
+// are too heavy to run per poll; 20s staleness is invisible for a cold-sessions band.
+const RECENT_CACHE_MS = 20_000;
+const RECENT_CAP = 15;
+let recentCache: { ts: number; body: string } | null = null;
 const RC_BUFFER_CAP = 64 * 1024;                   // keep the last 64 KB of pty output
 const RC_URL_TIMEOUT_MS = 15_000;                  // claude.ai URL prints ~8s after init (gdn-senila)
 const RC_EXIT_GRACE_MS = 8_000;                    // after /exit, force-kill if it hasn't died (gdn-rilope)
@@ -1761,6 +1769,53 @@ const server = createServer((req, res) => {
     const roster = buildSessionRoster(procs, rcByPid, vertexByPid, SCAN_ROOT, homedir(), EXTRA_FOLDERS);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions: roster }));
+    return;
+  }
+
+  // GET /recent — the uuid-keyed layer (gdn-vucube): recent COLD sessions from the farm.
+  // Cold-by-construction: anything a live registry knows about is excluded, so this band
+  // never offers a session that already has a driver. Read-only in v1 — no verbs.
+  if (req.method === "GET" && url.pathname === "/recent") {
+    if (process.env.GUERIDON_ENABLE_RC !== "1") {
+      res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
+      return;
+    }
+    const now = Date.now();
+    if (recentCache && now - recentCache.ts < RECENT_CACHE_MS) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(recentCache.body);
+      return;
+    }
+    // Liveness union (gdn-zahidu's lesson): the /proc scan sees all wallets but knows few
+    // uuids; the per-wallet agents registries know uuids but only their own seat. Together
+    // with Guéridon's own registries they name every live uuid we can know about.
+    const [indexed, procs, registryUuids] = await Promise.all([
+      scanRecentSessions(),
+      scanClaudeSessions(),
+      agentsRegistryUuids(),
+    ]);
+    const liveUuids = new Set<string>(registryUuids);
+    for (const p of procs) if (p.sessionUuid) liveUuids.add(p.sessionUuid);
+    for (const s of sessions.values()) {
+      if (s.process && s.process.exitCode === null) liveUuids.add(s.id);
+    }
+    const recent = indexed
+      .filter((r) => !liveUuids.has(r.uuid))
+      .slice(0, RECENT_CAP)
+      .map((r) => ({
+        uuid: r.uuid,
+        name: sessionDisplayName(r.cwd, SCAN_ROOT, homedir(), EXTRA_FOLDERS),
+        cwd: r.cwd,
+        ageSec: Math.max(0, Math.round((now - r.mtimeMs) / 1000)),
+        title: r.title,
+        titleSource: r.titleSource,
+        entrypoint: r.entrypoint,
+        uuidVersion: r.uuidVersion,
+      }));
+    const body = JSON.stringify({ sessions: recent });
+    recentCache = { ts: now, body };
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(body);
     return;
   }
 
