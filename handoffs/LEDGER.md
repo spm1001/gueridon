@@ -1,0 +1,32 @@
+# Handoffs ledger
+
+One line per handoff, newest first. `- [ ]` = not yet processed by an /open sweep; every close appends its line in the same change that writes the handoff.
+
+- [ ] 2026-09-09 [2026-09-09-1107-10984259.md](2026-09-09-1107-10984259.md) — Resume a credit-exhausted phone session on another wallet, find why /resume hides such sessions, and make the batterie assembler self-heal a ratchet quarantine
+- [x] 2026-08-30 [2026-08-30-2213-63d20585.md](2026-08-30-2213-63d20585.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-08-28 [2026-08-28-1703-eed2f399.md](2026-08-28-1703-eed2f399.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-08-15 [2026-08-15-849a1dc3.md](2026-08-15-849a1dc3.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-07-26 [2026-07-26-8cbafc99.md](2026-07-26-8cbafc99.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-07-25 [2026-07-25-55e7a508.md](2026-07-25-55e7a508.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-07-19 [2026-07-19-dd5a6e24.md](2026-07-19-dd5a6e24.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-07-19 [2026-07-19-baf34141.md](2026-07-19-baf34141.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-07-13 [2026-07-13-a92c6f39.md](2026-07-13-a92c6f39.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-07-09 [2026-07-09-f037dd87.md](2026-07-09-f037dd87.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-07-07 [2026-07-07-d3fbf98a.md](2026-07-07-d3fbf98a.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-06-30 [2026-06-30-7b20bdca.md](2026-06-30-7b20bdca.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-06-30 [2026-06-30-459a7d5e.md](2026-06-30-459a7d5e.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-06-29 [2026-06-29-728f667f.md](2026-06-29-728f667f.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-06-29 [2026-06-29-70228391.md](2026-06-29-70228391.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-06-29 [2026-06-29-5f8f34da.md](2026-06-29-5f8f34da.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-06-29 [2026-06-29-58d01dbc.md](2026-06-29-58d01dbc.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-06-11 [2026-06-11-6aa4fc9c.md](2026-06-11-6aa4fc9c.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-04-01 [0203591b.md](0203591b.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-30 [776844ad.md](776844ad.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-30 [70522ea5.md](70522ea5.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-30 [25b2309b.md](25b2309b.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-28 [cfa24194.md](cfa24194.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-28 [acd7f77c.md](acd7f77c.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-28 [9c921329.md](9c921329.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-28 [8e7a72e1.md](8e7a72e1.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-28 [6119ea09.md](6119ea09.md) — pre-ledger history (processed at adoption 2026-09-09)
+- [x] 2026-03-28 [6052f505.md](6052f505.md) — pre-ledger history (processed at adoption 2026-09-09)
