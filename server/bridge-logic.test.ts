@@ -2531,3 +2531,74 @@ describe("extractClaudeAiUrl", () => {
     expect(extractClaudeAiUrl(`text ${ESC}[1;32m${URL}${ESC}[0m more`)).toBe(URL);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Behind a shared front door (gdn-codowe)
+// ---------------------------------------------------------------------------
+
+import { resolveListenTarget, identityVerdict, rosterEnabled, buildAllowedOrigins } from "./bridge-logic.ts";
+
+describe("resolveListenTarget", () => {
+  it("defaults to the TCP port", () => {
+    expect(resolveListenTarget({})).toEqual({ kind: "port", port: 3001 });
+    expect(resolveListenTarget({ BRIDGE_PORT: "3002" })).toEqual({ kind: "port", port: 3002 });
+  });
+  it("prefers a Unix socket path over the port", () => {
+    expect(resolveListenTarget({ BRIDGE_SOCKET: "/run/x/http.sock", BRIDGE_PORT: "9" }))
+      .toEqual({ kind: "socket", path: "/run/x/http.sock" });
+  });
+  it("prefers systemd socket activation over everything, when LISTEN_PID is ours", () => {
+    expect(resolveListenTarget({ LISTEN_FDS: "1", LISTEN_PID: String(process.pid), BRIDGE_SOCKET: "/x" }))
+      .toEqual({ kind: "fd", fd: 3 });
+    expect(resolveListenTarget({ LISTEN_FDS: "1", BRIDGE_SOCKET: "/x" })).toEqual({ kind: "fd", fd: 3 });
+  });
+  it("ignores LISTEN_FDS addressed to another pid", () => {
+    expect(resolveListenTarget({ LISTEN_FDS: "1", LISTEN_PID: "1", BRIDGE_SOCKET: "/x" }))
+      .toEqual({ kind: "socket", path: "/x" });
+  });
+});
+
+describe("identityVerdict", () => {
+  it("is off when nothing is required", () => {
+    expect(identityVerdict(undefined, undefined)).toBe("off");
+    expect(identityVerdict("anyone", "")).toBe("off");
+  });
+  it("accepts an exact match only", () => {
+    expect(identityVerdict("sameer_modha_itv_com", "sameer_modha_itv_com")).toBe("ok");
+    expect(identityVerdict("alex_green_itv_com", "sameer_modha_itv_com")).toBe("identity-mismatch");
+    expect(identityVerdict("Sameer_modha_itv_com", "sameer_modha_itv_com")).toBe("identity-mismatch");
+  });
+  it("refuses a missing or empty header (deny by default)", () => {
+    expect(identityVerdict(undefined, "sameer_modha_itv_com")).toBe("identity-missing");
+    expect(identityVerdict("", "sameer_modha_itv_com")).toBe("identity-missing");
+  });
+  it("refuses a repeated header even when one copy matches", () => {
+    expect(identityVerdict(["sameer_modha_itv_com", "other"], "sameer_modha_itv_com")).toBe("identity-mismatch");
+  });
+});
+
+describe("rosterEnabled", () => {
+  it("opens under either flag and under neither stays shut", () => {
+    expect(rosterEnabled({})).toBe(false);
+    expect(rosterEnabled({ GUERIDON_ENABLE_RC: "1" })).toBe(true);
+    expect(rosterEnabled({ GUERIDON_ENABLE_ROSTER: "1" })).toBe(true);
+    expect(rosterEnabled({ GUERIDON_ENABLE_ROSTER: "yes" })).toBe(false);
+  });
+});
+
+describe("buildAllowedOrigins", () => {
+  it("keeps the Tailscale host and localhost", () => {
+    const o = buildAllowedOrigins({ TAILSCALE_HOSTNAME: "tube.ts.net" }, 3001);
+    expect(o.has("https://tube.ts.net")).toBe(true);
+    expect(o.has("http://localhost:3001")).toBe(true);
+    expect(o.has("http://127.0.0.1:3001")).toBe(true);
+  });
+  it("adds PUBLIC_ORIGIN normalised to its origin", () => {
+    const o = buildAllowedOrigins({ PUBLIC_ORIGIN: "https://door.run.app/some/path" }, 3001);
+    expect(o.has("https://door.run.app")).toBe(true);
+  });
+  it("drops a malformed PUBLIC_ORIGIN instead of admitting it", () => {
+    const o = buildAllowedOrigins({ PUBLIC_ORIGIN: "door.run.app" }, 3001);
+    expect([...o].some((x) => x.includes("door.run.app"))).toBe(false);
+  });
+});

@@ -85,6 +85,10 @@ journalctl -u gueridon -f          # Tail logs
 - **VAPID keys** for push notifications live at `~/.config/gueridon/vapid.json`.
 - **Session persistence** — `~/.config/gueridon/sse-sessions.json` tracks active CC PIDs so the bridge can reap orphans after restart.
 
+### Behind a shared front door (the atelier)
+
+On MIT's atelier Guéridon runs **one instance per person as a systemd user service**, answering on `/run/atelier/frontdoor/<user>/http.sock` behind the box's IAP front door, which forwards a verified `X-Atelier-User`. Four env knobs carry it, all inert when unset (design: `docs/atelier-per-user.md`, gdn-codowe): `LISTEN_FDS` (systemd socket activation, fd 3) or `BRIDGE_SOCKET=<path>` to listen on a Unix socket instead of `BRIDGE_PORT`; `GUERIDON_REQUIRE_USER=<name>` to refuse (403) any request whose `X-Atelier-User` (`GUERIDON_USER_HEADER` to rename) is missing or different; `PUBLIC_ORIGIN=https://<door>` to admit the door's origin in CORS; `GUERIDON_ENABLE_ROSTER=1` to open `/sessions`, `/recent` and `DELETE /session/:pid` without lighting the Teams lane (`/launch`, `/rc` stay `GUERIDON_ENABLE_RC`-only, and the launcher hides its Teams button when `GET /rc` is 404). The roster is per-person by kernel permission, not by code: the scan needs `readlink /proc/<pid>/cwd`, which another uid's process refuses. The atelier's Ansible role owns the units; this repo owns the behaviour.
+
 ### Self-deployment (working on guéridon from guéridon)
 
 When Claude is running as a CC child of the bridge and you deploy, the bridge restart kills the bridge process, the new bridge reaps the CC process, and the client reconnects with `--resume`. The self-deploy caveats still apply:

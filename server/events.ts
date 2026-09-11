@@ -106,7 +106,7 @@ export type BridgeEvent =
   | { type: "session:end-forced"; pid: number }
 
   // Server lifecycle
-  | { type: "server:start"; port: number; scanRoot: string }
+  | { type: "server:start"; port: number; listen?: unknown; scanRoot: string; requiredUser?: string }
   | { type: "server:shutdown"; signal: string }
   | { type: "server:shutdown-complete" }
   | { type: "server:uncaught-exception"; error: string }

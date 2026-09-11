@@ -12,7 +12,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, chmodSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -58,6 +58,10 @@ import {
   type LastToolCall,
   STALE_SESSION_MS,
   isSubagentEvent,
+  resolveListenTarget,
+  identityVerdict,
+  rosterEnabled,
+  buildAllowedOrigins,
 } from "./bridge-logic.js";
 
 import {
@@ -208,7 +212,12 @@ const allClients = new Set<SSEClient>();
 const clientsById = new Map<string, SSEClient>();
 const validPushTokens = new Set<string>(); // gdn-ricocu: tokens issued to SSE clients
 
-const PORT = parseInt(process.env.BRIDGE_PORT || "3001", 10);
+const LISTEN = resolveListenTarget(process.env);
+const PORT = LISTEN.kind === "port" ? LISTEN.port : parseInt(process.env.BRIDGE_PORT || "3001", 10);
+// Behind a shared front door (gdn-codowe, docs/atelier-per-user.md): when set, every
+// request must carry the door's verified username header equal to this value.
+const REQUIRED_USER = process.env.GUERIDON_REQUIRE_USER || undefined;
+const USER_HEADER = (process.env.GUERIDON_USER_HEADER || "X-Atelier-User").toLowerCase();
 const GRACE_MS = parseInt(process.env.GRACE_MS || "300000", 10);
 const INIT_TIMEOUT_MS = 30_000;
 let clientErrorTimestamps: number[] = [];
@@ -1650,11 +1659,7 @@ function serveStatic(pathname: string, res: ServerResponse): boolean {
 
 // CORS: only accept requests from known origins (gdn-kukohe).
 // Same-origin requests omit the Origin header — allow those unconditionally.
-const ALLOWED_ORIGINS = new Set([
-  `https://${process.env.TAILSCALE_HOSTNAME || "localhost"}`,
-  `http://localhost:${PORT}`,
-  `http://127.0.0.1:${PORT}`,
-]);
+const ALLOWED_ORIGINS = buildAllowedOrigins(process.env, PORT);
 
 function setCorsHeaders(req: IncomingMessage, res: ServerResponse): boolean {
   const origin = req.headers.origin;
@@ -1678,6 +1683,16 @@ const server = createServer((req, res) => {
   if (!setCorsHeaders(req, res)) {
     emit({ type: "request:rejected", reason: "cors-origin", method: req.method || "UNKNOWN", url: req.url || "/" });
     res.writeHead(403).end("Forbidden: origin not allowed");
+    return;
+  }
+
+  // Identity guard (gdn-codowe): behind the atelier's front door the bridge is one
+  // person's, and only requests the door verified as that person may pass. Missing
+  // header refuses too — deny by default.
+  const identity = identityVerdict(req.headers[USER_HEADER], REQUIRED_USER);
+  if (identity !== "ok" && identity !== "off") {
+    emit({ type: "request:rejected", reason: identity, method: req.method || "UNKNOWN", url: req.url || "/" });
+    res.writeHead(403).end("Forbidden: this bridge is not yours\n");
     return;
   }
 
@@ -1746,8 +1761,8 @@ const server = createServer((req, res) => {
   // Read-only: RC sessions Guéridon spawned are attachable (url/ready); hand-started/foreign
   // sessions are shown "local" for awareness, never attachable. Gated like /rc.
   if (req.method === "GET" && url.pathname === "/sessions") {
-    if (process.env.GUERIDON_ENABLE_RC !== "1") {
-      res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
+    if (!rosterEnabled(process.env)) {
+      res.writeHead(404).end(JSON.stringify({ error: "roster not enabled" }));
       return;
     }
     const procs = await scanClaudeSessions();
@@ -1776,8 +1791,8 @@ const server = createServer((req, res) => {
   // Cold-by-construction: anything a live registry knows about is excluded, so this band
   // never offers a session that already has a driver. Read-only in v1 — no verbs.
   if (req.method === "GET" && url.pathname === "/recent") {
-    if (process.env.GUERIDON_ENABLE_RC !== "1") {
-      res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
+    if (!rosterEnabled(process.env)) {
+      res.writeHead(404).end(JSON.stringify({ error: "roster not enabled" }));
       return;
     }
     const now = Date.now();
@@ -2084,8 +2099,8 @@ const server = createServer((req, res) => {
   // the POST /session/:folder route above. Gated like /sessions (its pids come from that roster).
   const sessionPidMatch = url.pathname.match(/^\/session\/(\d+)$/);
   if (req.method === "DELETE" && sessionPidMatch) {
-    if (process.env.GUERIDON_ENABLE_RC !== "1") {
-      res.writeHead(404).end(JSON.stringify({ error: "RC not enabled" }));
+    if (!rosterEnabled(process.env)) {
+      res.writeHead(404).end(JSON.stringify({ error: "roster not enabled" }));
       return;
     }
     const pid = parseInt(sessionPidMatch[1], 10);
@@ -2239,8 +2254,13 @@ if (IS_ENTRYPOINT) {
     }
   });
 
-  server.listen(PORT, () => {
-    emit({ type: "server:start", port: PORT, scanRoot: SCAN_ROOT });
+  const onListening = () => {
+    emit({ type: "server:start", port: PORT, listen: LISTEN, scanRoot: SCAN_ROOT, requiredUser: REQUIRED_USER });
+    if (LISTEN.kind === "socket") {
+      // The 0750 socket directory is the wall; the file itself is world-connectable so
+      // the door (another uid, group frontdoor) can reach it. See docs/atelier-per-user.md.
+      chmodSync(LISTEN.path, 0o666);
+    }
 
     // Auto-resume mid-turn sessions from the previous bridge (gdn-kuhuga).
     // No client needed — CC runs headless, push notification fires on turn complete.
@@ -2250,5 +2270,13 @@ if (IS_ENTRYPOINT) {
         emit({ type: "session:auto-resume-fail", folder: basename(prior.folder), error: errorDetail(err) }),
       );
     }
-  });
+  };
+  if (LISTEN.kind === "fd") {
+    server.listen({ fd: LISTEN.fd }, onListening);
+  } else if (LISTEN.kind === "socket") {
+    try { unlinkSync(LISTEN.path); } catch { /* no stale socket */ }
+    server.listen(LISTEN.path, onListening);
+  } else {
+    server.listen(LISTEN.port, onListening);
+  }
 }

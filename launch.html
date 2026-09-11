@@ -447,9 +447,25 @@
     btn.onclick = handler;
   }
 
+  // Teams lane availability (gdn-codowe): behind the atelier's front door every session
+  // is Vertex-billed and `claude --remote-control` refuses under Vertex, so the bridge
+  // runs without GUERIDON_ENABLE_RC and GET /rc answers 404. Hide the lane rather than
+  // offer a button whose only outcome is an error note.
+  let teamsLane = true;
+  (async () => {
+    try {
+      const r = await fetch("/rc");
+      if (r.status === 404) { teamsLane = false; $launchTeams.style.display = "none"; resetButton(); }
+    } catch (e) { /* offline: leave the lane as it is; the roster fetch reports the outage */ }
+  })();
+
   function resetButton() {
     setLane($launchVertex, "Vertex", selected ? launchVertex : null);
     setLane($launchTeams, "Teams", selected ? launch : null);
+    if (!teamsLane) {
+      setNote(selected ? "Vertex → Guéridon UI" : "Pick a repo.");
+      return;
+    }
     setNote(selected ? "Vertex → Guéridon UI · Teams → Claude app" : "Pick a repo.");
   }
 

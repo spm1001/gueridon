@@ -1072,3 +1072,63 @@ export function shouldSendEvent(
   }
   return { send: true, clearSuppression: false };
 }
+
+// ---------------------------------------------------------------------------
+// Behind a shared front door (gdn-codowe, docs/atelier-per-user.md)
+// ---------------------------------------------------------------------------
+
+/** Where the bridge listens, in order of precedence: systemd socket activation
+ *  (LISTEN_FDS, fd 3), a Unix socket path (BRIDGE_SOCKET), else a TCP port. */
+export type ListenTarget =
+  | { kind: "fd"; fd: number }
+  | { kind: "socket"; path: string }
+  | { kind: "port"; port: number };
+
+export function resolveListenTarget(env: NodeJS.ProcessEnv, defaultPort = 3001): ListenTarget {
+  const fds = parseInt(env.LISTEN_FDS || "", 10);
+  const pidMatches = !env.LISTEN_PID || env.LISTEN_PID === String(process.pid);
+  if (fds >= 1 && pidMatches) return { kind: "fd", fd: 3 };
+  if (env.BRIDGE_SOCKET) return { kind: "socket", path: env.BRIDGE_SOCKET };
+  return { kind: "port", port: parseInt(env.BRIDGE_PORT || String(defaultPort), 10) };
+}
+
+/** Identity guard verdict for one request. `required` unset → guard off (localhost /
+ *  Tailscale behaviour). Otherwise the header must be present AND equal — deny by
+ *  default, so a door that stopped forwarding the header takes the bridge offline
+ *  rather than opening it. */
+export type IdentityVerdict = "ok" | "off" | "identity-missing" | "identity-mismatch";
+
+export function identityVerdict(
+  headerValue: string | string[] | undefined,
+  required: string | undefined,
+): IdentityVerdict {
+  if (!required) return "off";
+  if (headerValue === undefined || headerValue === "") return "identity-missing";
+  const value = Array.isArray(headerValue) ? headerValue.join(",") : headerValue;
+  return value === required ? "ok" : "identity-mismatch";
+}
+
+/** Roster endpoints (/sessions, /recent, DELETE /session/:pid) open under either flag;
+ *  /launch and /rc (the Teams lane) stay RC-only. */
+export function rosterEnabled(env: NodeJS.ProcessEnv): boolean {
+  return env.GUERIDON_ENABLE_RC === "1" || env.GUERIDON_ENABLE_ROSTER === "1";
+}
+
+/** CORS allow-list: the Tailscale host, an explicit PUBLIC_ORIGIN (a front door's
+ *  origin), and localhost on the bridge port. Malformed PUBLIC_ORIGIN is dropped, not
+ *  half-matched. */
+export function buildAllowedOrigins(env: NodeJS.ProcessEnv, port: number): Set<string> {
+  const origins = new Set<string>([
+    `https://${env.TAILSCALE_HOSTNAME || "localhost"}`,
+    `http://localhost:${port}`,
+    `http://127.0.0.1:${port}`,
+  ]);
+  if (env.PUBLIC_ORIGIN) {
+    try {
+      origins.add(new URL(env.PUBLIC_ORIGIN).origin);
+    } catch {
+      /* not a URL: leave it out rather than admit a garbled origin */
+    }
+  }
+  return origins;
+}
