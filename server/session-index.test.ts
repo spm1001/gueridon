@@ -85,11 +85,15 @@ describe("scanRecentSessions (fixture farm)", () => {
     const proj = join(projectsDir, "-home-x-repos-acme-data-tools");
     await mkdir(proj, { recursive: true });
 
-    // Every fixture gets an EXPLICIT, distinct mtime (gdn-vidame). Written back-to-back they
-    // routinely land in the same millisecond, the newest-first sort then ties, and the
-    // maxFiles slice at session-index.ts (which caps BEFORE the substance filters) could keep
-    // the warmup file the filters go on to drop — a ~25% flake on CI and locally, 2026-08-30
-    // to 2026-09-13. Minutes-ago stamps make "newest" a fact of the fixture, not of the clock.
+    // Every fixture gets an EXPLICIT, distinct mtime (gdn-vidame). Written back-to-back with
+    // no stamps, "newest" was whatever the clock said: ext4 mtimes move in kernel ticks (4 ms
+    // at HZ=250), so most of the time all five files tied and the empty/warmup file — written
+    // LAST — sometimes landed one tick later as the strictly newest. The maxFiles slice caps
+    // BEFORE the substance filters, so maxFiles:1 then kept only the warmup file, the filters
+    // dropped it, and the scan returned 0 rows — a 16–25% flake on CI and locally, 2026-08-30
+    // to 2026-09-13 (measured by the closing essayeur: old fixtures 5/20 red even with a path
+    // tie-break in the product sort, which is why no product change ships for this). Minutes-
+    // ago stamps make "newest" a fact of the fixture, not of the clock.
     const stamp = async (path: string, minutesAgo: number) => {
       const t = (Date.now() - minutesAgo * 60_000) / 1000;
       await utimes(path, t, t);
