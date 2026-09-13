@@ -25,6 +25,7 @@ import {
   sessionDisplayName,
   type RcRosterInfo,
   type VertexRosterInfo,
+  type LiveRosterInfo,
   formatToolCallSummary,
   shouldSendEvent,
   HANDOFF_STALE_THRESHOLD_MS,
@@ -1950,6 +1951,78 @@ describe("buildSessionRoster", () => {
     expect(roster.find((r) => r.pid === 1)?.wallet).toBe("family@");
     expect(roster.find((r) => r.pid === 2)?.wallet).toBe("sameer@");
     expect(roster.find((r) => r.pid === 3)?.wallet).toBe("vertex");
+  });
+
+  // --- Live state from the session registry, merged on pid (gdn-fusijo) ---
+  const live = (state: LiveRosterInfo["state"], over: Partial<LiveRosterInfo> = {}): LiveRosterInfo => ({
+    state, statusUpdatedAt: 1789333409871, tmuxPane: "0:@37.%37",
+    sessionId: "2c753660-9cb1-4402-9fe7-02e4883ff7e0", configDir: "/home/modha/.claude", ...over,
+  });
+
+  it("merges state, stateSince, tmux pane and transcript uuid from the registry record (gdn-fusijo)", () => {
+    const [e] = buildSessionRoster(
+      [{ pid: 600, cwd: "/home/modha/.claude", ageSec: 30 }], NO_RC, NO_VX, ROOT, HOME, [],
+      new Map([[600, live("waiting")]]));
+    expect(e).toMatchObject({
+      pid: 600, kind: "local", state: "waiting", stateSince: 1789333409871,
+      tmux: "0:@37.%37", sessionUuid: "2c753660-9cb1-4402-9fe7-02e4883ff7e0",
+    });
+  });
+
+  it("a pid the registry does not know reads unknown — never idle — with no stateSince or tmux", () => {
+    const [e] = buildSessionRoster(
+      [{ pid: 601, cwd: "/home/modha", ageSec: 30 }], NO_RC, NO_VX, ROOT, HOME, [],
+      new Map([[600, live("idle")]]));
+    expect(e.state).toBe("unknown");
+    expect(e.stateSince).toBeNull();
+    expect(e).not.toHaveProperty("tmux");
+    expect(e).not.toHaveProperty("sessionUuid");
+  });
+
+  it("every kind carries the live fields: rc, vertex, remote and vertex-terminal rows too", () => {
+    const rcByPid = new Map<number, RcRosterInfo>([[1, { folderName: "spm1001/a", url: null, ready: true }]]);
+    const vertexByPid = new Map<number, VertexRosterInfo>([[2, { folderName: "spm1001/b" }]]);
+    const liveByPid = new Map<number, LiveRosterInfo>([
+      [1, live("busy")], [2, live("idle")], [3, live("unknown", { tmuxPane: null })], [4, live("waiting")],
+    ]);
+    const roster = buildSessionRoster([
+      { pid: 1, cwd: "/home/modha/repos/spm1001/a", ageSec: 1 },
+      { pid: 2, cwd: "/home/modha/repos/spm1001/b", ageSec: 2 },
+      { pid: 3, cwd: "/home/modha/notes", ageSec: 3, remoteSessionId: "cse_01X", sessionUuid: "derived-uuid" },
+      { pid: 4, cwd: "/home/modha/repos/itv/mit-kg", ageSec: 4, vertexBilled: true },
+    ], rcByPid, vertexByPid, ROOT, HOME, [], liveByPid);
+    const by = new Map(roster.map((r) => [r.pid, r]));
+    expect(by.get(1)).toMatchObject({ kind: "rc", state: "busy" });
+    expect(by.get(2)).toMatchObject({ kind: "vertex", state: "idle" });
+    expect(by.get(3)).toMatchObject({ kind: "remote", state: "unknown" });
+    expect(by.get(3)).not.toHaveProperty("tmux");
+    expect(by.get(4)).toMatchObject({ kind: "vertex-terminal", state: "waiting", wallet: "vertex" });
+  });
+
+  it("the scan's derived uuid wins over the record's sessionId; the record fills the gap otherwise", () => {
+    const liveByPid = new Map<number, LiveRosterInfo>([[3, live("unknown", { sessionId: "registry-uuid" })]]);
+    const [e] = buildSessionRoster(
+      [{ pid: 3, cwd: "/home/modha/notes", ageSec: 3, remoteSessionId: "cse_01X", sessionUuid: "derived-uuid" }],
+      NO_RC, NO_VX, ROOT, HOME, [], liveByPid);
+    expect(e.sessionUuid).toBe("derived-uuid");
+  });
+
+  it("the record's seat names the wallet when the process environ gave no config dir; environ wins when present", () => {
+    const commis = live("idle", { configDir: "/home/modha/.claude-commis" });
+    const roster = buildSessionRoster([
+      { pid: 10, cwd: "/home/modha", ageSec: 1 },
+      { pid: 11, cwd: "/home/modha", ageSec: 2, configDir: "/home/modha/.claude" },
+    ], NO_RC, NO_VX, ROOT, HOME, [], new Map([[10, commis], [11, commis]]));
+    expect(roster.find((r) => r.pid === 10)?.wallet).toBe("family@");
+    expect(roster.find((r) => r.pid === 11)?.wallet).toBe("sameer@");
+  });
+
+  it("with no registry at all (watcher not started) every row reads unknown", () => {
+    const roster = buildSessionRoster([
+      { pid: 1, cwd: "/home/modha", ageSec: 1 },
+      { pid: 2, cwd: "/home/modha", ageSec: 2 },
+    ], NO_RC, NO_VX, ROOT, HOME);
+    expect(roster.every((r) => r.state === "unknown" && r.stateSince === null)).toBe(true);
   });
 });
 

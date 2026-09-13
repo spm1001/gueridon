@@ -112,7 +112,11 @@ export type BridgeEvent =
   | { type: "server:uncaught-exception"; error: string }
   | { type: "server:unhandled-rejection"; error: string }
   | { type: "server:persist-error"; error: string }
-  | { type: "server:prior-sessions"; sessions: Array<{ folder: string; sessionId: string; turnInProgress: boolean }> };
+  | { type: "server:prior-sessions"; sessions: Array<{ folder: string; sessionId: string; turnInProgress: boolean }> }
+  // Session-registry watcher lifecycle (gdn-fusijo): one line per directory when a watch
+  // arms, is missing (seat not provisioned), or errors — so an unknown-everywhere roster
+  // can be read back to "the watcher never armed" rather than "CC stopped writing".
+  | { type: "registry:watch"; dir: string; status: "armed" | "missing" | "error"; detail?: string };
 
 // -- Level mapping --
 
@@ -182,6 +186,7 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "server:unhandled-rejection": "error",
   "server:persist-error": "error",
   "server:prior-sessions": "info",
+  "registry:watch": "info",
 };
 
 export function levelFor(event: BridgeEvent): LogLevel {

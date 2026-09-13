@@ -249,6 +249,19 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      didn't spawn. But discovery ≠ control: with no pty handle we can *see* a
      foreign/terminal session, not drive or kill it (why the roster is read-only
      for `kind:"local"`).
+  4. **CC's session registry, `<configDir>/sessions/<pid>.json`** (gdn-fusijo, 2026-09-13)
+     = the live idle / busy / waiting of every registered session, from CC's own state
+     machine. `server/registry-watch.ts` watches both seats' directories with inotify and
+     the roster merges it on pid. Hooks lost this job because an interrupted turn fires no
+     Stop hook; screen scrapers lost because a rendered view is a lossy readout of the same
+     state (Herdr retreated from hook authority to screen manifests on 2026-06-03 for both
+     reasons). Measured under hublot on tube: a permission dialog reached `/sessions` as
+     `waiting` 205 ms (Vertex) and 276 ms (Family seat) after CC's own `statusUpdatedAt`,
+     ahead of the tmux screen poll both times; Escape put `idle` back in 168–302 ms. Absent
+     `status` — every `sdk-cli` session — renders `unknown`, never idle; `shell` and any
+     value CC adds later map to "fine" rather than an exhaustive switch. The registry record
+     is deleted seconds after exit, which is why gdn-daluto journals it (same watcher,
+     second sink).
 
 ## Session identity across surfaces (2026-08-28 — the switchboard's identity layer)
 
@@ -293,10 +306,44 @@ any surface") needs to *name* every session wherever it lives. That identity lay
   whole derivation fell out of three greps. A negative result over guessed candidates is a
   statement about your guesses, not the system.
 
-Board state after that session: **gdn-merozu** (the revived baton-pass, superseding the
-dropped gdn-kidowe) sits under gdn-jibudu and needs its `--badly` from Sameer before anyone
-builds. **gdn-himaba** (the design pass) now carries the per-surface handle table, the
-three-state model, and the Cowork answer.
+### The session registry, and why `/resume` will never show a phone session (2026-09-09, 2026-09-13)
+
+- **The `/resume` picker is a filtered view, not a listing.** CC's session lister drops
+  SDK-spawned transcripts (`entrypoint` in `sdk-cli`, `sdk-ts`, `sdk-py`) unless the current
+  process is itself an SDK entrypoint, and drops sidechains, daemon kinds, team-name
+  mismatches, superseded sessions and bookkeeping-only files; its search box matches titles
+  only. Every phone, remote-control, `-p`, Guéridon and email-loop session is invisible there
+  by design, so "our session isn't in /resume" is not a bug to chase — the uuid route
+  (`teleport-id.sh`) or a lister of our own (`remote-sessions`, the RECENT band) is the
+  product, and a `--fork-session` resume converts a hidden session into a visible one because
+  the fork is written by an interactive process. Measured 2026-09-09 on CC 2.1.266, bundle
+  read plus live picker under hublot on both seats.
+- **The session registry is the join the estate kept re-deriving, and it is ephemeral.**
+  `~/.claude/sessions/<pid>.json` (and the commis seat's directory) pairs the teleport id
+  (`bridgeSessionId`), the local uuid, cwd, entrypoint, tmux pane, `status` and — by which
+  directory it sits in — the wallet, and is deleted seconds after the process exits. Anything
+  needing those fields after death must journal them while the record exists (gdn-daluto).
+  Since 2026-09-13 the bridge watches these directories live (`server/registry-watch.ts`,
+  structural primitive 4 above); the ledger is that watcher's second sink. A live record means
+  a live driver: never plain-`--resume` a uuid a record still names.
+- **Ending a bridge child does not end a phone conversation.** The remote-control server
+  respawns a child on the same transcript the next time a message arrives from the app, so a
+  phone session that has hit its model limit stays writable-from-the-phone indefinitely; the
+  only safe continuation on another wallet is a fork. Archive the conversation in the app if
+  the original must stay quiet.
+- **A guard that asks a human to do a mechanical step will be a red light nobody reads**
+  (batterie's version ratchet: seven red days, seven unread emails, then automated in
+  bds-hajeli). When a CI check goes red for the same reason day after day, ask whether the
+  check's mechanism can do the thing it is asking for. Same family, this repo: gdn-vidame's
+  flaky test was red on main for a fortnight before anyone measured it.
+
+Board state as of 2026-09-13: gdn-fusijo (state chip) shipped; under gdn-jibudu the open
+threads are **gdn-daluto** (registry ledger — build it on the fusijo watcher, never a second
+reader), **gdn-merozu** (the revived baton-pass, superseding the dropped gdn-kidowe; still
+wants its `--badly` from Sameer), **gdn-vogidu** (answer a waiting session's dialog from the
+phone — the `tmux` field each roster row now carries is its handle) and **gdn-miseso** (should
+read daluto's ledger rather than keep its own recorder). **gdn-himaba** (the design pass)
+carries the per-surface handle table, the three-state model, and the Cowork answer.
 
 ## Substrate watch (2026-06-10 read, Fable first-look session)
 

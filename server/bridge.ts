@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { spawn as ptySpawn, type IPty } from "node-pty";
 import { scanClaudeSessions, isLiveClaudePid } from "./sessions.js";
 import { scanRecentSessions, agentsRegistryUuids } from "./session-index.js";
+import { RegistryWatcher } from "./registry-watch.js";
 
 import {
   buildCCArgs,
@@ -233,6 +234,12 @@ let lastShutdownCtx: ShutdownContext | null = null;
 
 /** Sessions from the previous bridge instance — used for bystander auto-resume. */
 let priorSessions: PriorSessionInfo[] = [];
+
+/**
+ * CC's session registry, watched live (gdn-fusijo) — the roster's idle/busy/waiting source.
+ * Started only when the roster is enabled; null means every row reads `unknown`.
+ */
+let registryWatcher: RegistryWatcher | null = null;
 
 /** Set during shutdown — prevents process exit handlers from overwriting the session file. */
 let isShuttingDown = false;
@@ -1781,7 +1788,10 @@ const server = createServer((req, res) => {
       const pid = s.process?.pid;
       if (pid && s.process!.exitCode === null) vertexByPid.set(pid, { folderName: s.folderName });
     }
-    const roster = buildSessionRoster(procs, rcByPid, vertexByPid, SCAN_ROOT, homedir(), EXTRA_FOLDERS);
+    // Live state from the session registry (gdn-fusijo), merged on pid. An unstarted
+    // watcher yields an empty map, and every row honestly reads `unknown`.
+    const liveByPid = registryWatcher?.byPid() ?? new Map();
+    const roster = buildSessionRoster(procs, rcByPid, vertexByPid, SCAN_ROOT, homedir(), EXTRA_FOLDERS, liveByPid);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions: roster }));
     return;
@@ -1811,6 +1821,9 @@ const server = createServer((req, res) => {
     ]);
     const liveUuids = new Set<string>(registryUuids);
     for (const p of procs) if (p.sessionUuid) liveUuids.add(p.sessionUuid);
+    // The watched session registry names a uuid for EVERY registered session on both
+    // seats, with no CLI round trip (gdn-fusijo) — the cheapest member of the union.
+    for (const r of registryWatcher?.snapshot() ?? []) if (r.sessionId) liveUuids.add(r.sessionId);
     for (const s of sessions.values()) {
       if (s.process && s.process.exitCode === null) liveUuids.add(s.id);
     }
@@ -2135,6 +2148,7 @@ function shutdown(signal: string): void {
   if (isShuttingDown) return; // guard against duplicate signals
   isShuttingDown = true;
   emit({ type: "server:shutdown", signal });
+  registryWatcher?.stop();
 
   // Persist shutdown context so the next bridge can classify the restart (gdn-bokimo).
   // Must happen before killing processes — turnInProgress is the key signal.
@@ -2253,6 +2267,17 @@ if (IS_ENTRYPOINT) {
       sendSSE(client, "content-updated", { contentHash: newHash });
     }
   });
+
+  // Watch CC's session registry for live idle/busy/waiting (gdn-fusijo). Roster-only: the
+  // streaming lane never reads it. The `watch` line per directory is the tell when every
+  // row reads `unknown` — a missing commis seat is expected on a fresh atelier home.
+  if (rosterEnabled(process.env)) {
+    registryWatcher = new RegistryWatcher();
+    registryWatcher.on("watch", (dir: string, status: "armed" | "missing" | "error", detail?: string) =>
+      emit({ type: "registry:watch", dir, status, ...(detail && { detail }) }));
+    registryWatcher.start().catch((err) =>
+      emit({ type: "registry:watch", dir: "*", status: "error", detail: errorDetail(err) }));
+  }
 
   const onListening = () => {
     emit({ type: "server:start", port: PORT, listen: LISTEN, scanRoot: SCAN_ROOT, requiredUser: REQUIRED_USER });

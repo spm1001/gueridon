@@ -22,6 +22,7 @@ export function isSubagentEvent(event: Record<string, unknown>): boolean {
 
 import { resolve, basename } from "node:path";
 import { hostname } from "node:os";
+import type { LiveState } from "./registry-watch.js";
 
 // --- Configuration constants ---
 
@@ -855,8 +856,30 @@ export interface RosterEntry {
   /** Which wallet the process is billing to, display-ready (gdn-zahidu): "vertex",
    *  "sameer@", "family@", or a config-dir basename for a seat we don't know by name. */
   wallet: string;
-  /** Local transcript uuid, where the scan could derive one (remote children today). */
+  /** Local transcript uuid, where the scan could derive one (remote children today) or the
+   *  session registry names one (gdn-fusijo — every registered session). */
   sessionUuid?: string;
+  /**
+   * Live state from CC's session registry (gdn-fusijo): `waiting` = a dialog is up and the
+   * session cannot progress without a human; `busy` = mid-turn; `idle` = at the prompt (or
+   * any other not-blocked status CC writes); `unknown` = no registry status for this pid —
+   * every `sdk-cli` session (bridge children, `-p`, phone sessions) and any pid the
+   * registry does not know. Never inferred: absent means unknown, not idle.
+   */
+  state: LiveState;
+  /** ms epoch when the state last changed, when the registry stamped one; null otherwise. */
+  stateSince: number | null;
+  /** tmux pane id holding the session (e.g. `0:@37.%37`) — the handle gdn-vogidu will send keys to. */
+  tmux?: string;
+}
+
+/** The subset of a registry record the roster merges in (see server/registry-watch.ts). */
+export interface LiveRosterInfo {
+  state: LiveState;
+  statusUpdatedAt: number | null;
+  tmuxPane: string | null;
+  sessionId: string | null;
+  configDir: string;
 }
 
 /**
@@ -920,6 +943,11 @@ export function sessionDisplayName(
  * contract and must never be percent-encoded. Every other live `claude` process is a
  * hand-started / foreign session: read-only ("local"), never attachable (Guéridon has no pty
  * handle to drive it). Sorted newest-first (smallest ageSec).
+ *
+ * `liveByPid` (gdn-fusijo) is the session registry, merged on pid: it supplies the state chip
+ * (`state`/`stateSince`), the tmux pane, the transcript uuid for any registered session, and
+ * — for a process whose environ gave no CLAUDE_CONFIG_DIR — the seat, from which registry
+ * directory the record sat in. The /proc scan stays the authority for Vertex-vs-Teams.
  */
 export function buildSessionRoster(
   procs: {
@@ -931,14 +959,24 @@ export function buildSessionRoster(
   scanRoot: string,
   homeDir: string,
   extraFolders: string[] = [],
+  liveByPid: Map<number, LiveRosterInfo> = new Map(),
 ): RosterEntry[] {
   const roster: RosterEntry[] = procs.map((p) => {
-    const wallet = walletLabel(p.configDir, p.vertexBilled);
+    const live = liveByPid.get(p.pid);
+    const wallet = walletLabel(p.configDir ?? live?.configDir, p.vertexBilled);
+    // Absent registry status is UNKNOWN — never idle. sdk-cli sessions write none.
+    const liveFields = {
+      state: live?.state ?? "unknown" as LiveState,
+      stateSince: live?.statusUpdatedAt ?? null,
+      ...(live?.tmuxPane && { tmux: live.tmuxPane }),
+    };
+    const sessionUuid = p.sessionUuid ?? live?.sessionId ?? undefined;
     const rc = rcByPid.get(p.pid);
     if (rc) {
       return {
         pid: p.pid, name: rc.folderName, cwd: p.cwd, ageSec: p.ageSec,
         kind: "rc" as const, attachable: true, url: rc.url, ready: rc.ready, wallet,
+        ...(sessionUuid && { sessionUuid }), ...liveFields,
       };
     }
     const vx = vertexByPid.get(p.pid);
@@ -946,6 +984,7 @@ export function buildSessionRoster(
       return {
         pid: p.pid, name: vx.folderName, cwd: p.cwd, ageSec: p.ageSec,
         kind: "vertex" as const, attachable: true, url: "/#" + vx.folderName, ready: true, wallet,
+        ...(sessionUuid && { sessionUuid }), ...liveFields,
       };
     }
     // Phone-created RC-server child (gdn-zahidu): claude.ai drives it — not attachable by
@@ -959,7 +998,7 @@ export function buildSessionRoster(
         pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
         ageSec: p.ageSec, kind: "remote" as const, attachable: false,
         url: "https://claude.ai/code/session_" + p.remoteSessionId.replace(/^cse_/, ""),
-        ready: true, wallet, ...(p.sessionUuid && { sessionUuid: p.sessionUuid }),
+        ready: true, wallet, ...(sessionUuid && { sessionUuid }), ...liveFields,
       };
     }
     // Foreign but Vertex-billed (a claudev/claudefv terminal session) — label honestly, but
@@ -969,11 +1008,13 @@ export function buildSessionRoster(
       return {
         pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
         ageSec: p.ageSec, kind: "vertex-terminal" as const, attachable: false, url: null, ready: true, wallet,
+        ...(sessionUuid && { sessionUuid }), ...liveFields,
       };
     }
     return {
       pid: p.pid, name: sessionDisplayName(p.cwd, scanRoot, homeDir, extraFolders), cwd: p.cwd,
       ageSec: p.ageSec, kind: "local" as const, attachable: false, url: null, ready: true, wallet,
+      ...(sessionUuid && { sessionUuid }), ...liveFields,
     };
   });
   roster.sort((a, b) => a.ageSec - b.ageSec); // newest first
