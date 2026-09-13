@@ -863,8 +863,9 @@ export interface RosterEntry {
    * Live state from CC's session registry (gdn-fusijo): `waiting` = a dialog is up and the
    * session cannot progress without a human; `busy` = mid-turn; `idle` = at the prompt (or
    * any other not-blocked status CC writes); `unknown` = no registry status for this pid —
-   * every `sdk-cli` session (bridge children, `-p`, phone sessions) and any pid the
-   * registry does not know. Never inferred: absent means unknown, not idle.
+   * batch `-p` sessions (Garni's verifiers write none) and any pid the registry does not
+   * know. Phone children (`--sdk-url`) DO carry a status on 2.1.270, with no tmux pane.
+   * Never inferred: absent means unknown, not idle.
    */
   state: LiveState;
   /** ms epoch when the state last changed, when the registry stamped one; null otherwise. */

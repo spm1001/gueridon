@@ -13,9 +13,11 @@
  * This is state from CC's own state machine — the source the roster wanted all along.
  * Hooks lost because an interrupted turn fires no Stop hook, and screen scrapers lost
  * because a rendered view is a lossy readout of the same state (understanding.md, "Observe
- * CC from outside via structured substrate, never the TUI"). `sdk-cli` sessions (bridge
- * children, `-p`, phone sessions) write a record WITHOUT `status`, so absent means
- * UNKNOWN, never idle.
+ * CC from outside via structured substrate, never the TUI"). Batch `-p` sessions (Garni's
+ * verifiers; measured 2026-09-13, nineteen rows) write a record WITHOUT `status`, so absent
+ * means UNKNOWN, never idle. Phone children (`--print --sdk-url`, also `entrypoint: sdk-cli`)
+ * DO carry `status` on CC 2.1.270 — two live records read idle/busy that night — with `tmux`
+ * null; so the discriminator is `-p` vs `--sdk-url`, not `sdk-cli` vs `cli`.
  *
  * Two sinks by design: the roster reads `byPid()` for live state now; a journal (gdn-daluto)
  * subscribes to `upsert`/`remove` to keep the wallet + teleport-id join after CC deletes

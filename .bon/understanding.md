@@ -258,8 +258,11 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      reasons). Measured under hublot on tube: a permission dialog reached `/sessions` as
      `waiting` 205 ms (Vertex) and 276 ms (Family seat) after CC's own `statusUpdatedAt`,
      ahead of the tmux screen poll both times; Escape put `idle` back in 168–302 ms. Absent
-     `status` — every `sdk-cli` session — renders `unknown`, never idle; `shell` and any
-     value CC adds later map to "fine" rather than an exhaustive switch. The registry record
+     `status` renders `unknown`, never idle — the class that writes none is batch `-p`
+     (Garni's verifiers, nineteen rows measured); phone children (`--print --sdk-url`, also
+     `entrypoint: sdk-cli`) DO carry a status on 2.1.270, with `tmux` null (two live records,
+     cold read 2026-09-13), so the discriminator is `-p` vs `--sdk-url`, not the entrypoint.
+     `shell` and any value CC adds later map to "fine" rather than an exhaustive switch. The registry record
      is deleted seconds after exit, which is why gdn-daluto journals it (same watcher,
      second sink).
 

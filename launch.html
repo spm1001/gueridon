@@ -20,8 +20,9 @@
                idle / busy / waiting / unknown with age, read from CC's own session registry
                (~/.claude/sessions/<pid>.json, both seats) by an inotify watcher in the bridge.
                `waiting` = a dialog is up (permission, AskUserQuestion, plan approval) and the
-               session cannot progress without a human; `unknown` = no registry status (every
-               sdk-cli session) — shown as unknown, never as idle. The page polls /sessions
+               session cannot progress without a human; `unknown` = no registry status (batch
+               `-p` sessions write none; phone `--sdk-url` children DO carry one, with no tmux
+               pane) — shown as unknown, never as idle. The page polls /sessions
                every 20s while visible (gdn-hevuri), so the chip lags the server by up to that.
     RECENT   — cold sessions from the transcript farm (GET /recent, gdn-vucube): uuid-keyed,
                titles scavenged (ai-title → Cowork sidecar → bridge log → first prompt),
@@ -97,7 +98,7 @@
   /* State chip (gdn-fusijo): live idle / busy / waiting / unknown from CC's session registry.
      `waiting` is the one the phone must never miss — a dialog is up and the session cannot
      progress without a human — so it is the only filled chip. `unknown` (dashed) means the
-     registry has no status for this pid (every sdk-cli session), never "idle". */
+     registry has no status for this pid (batch `-p` sessions), never "idle". */
   .schip { flex: 0 0 auto; font-size: 0.66rem; font-weight: 600; border-radius: 5px; padding: 0.05rem 0.4rem; border: 1px solid #444; color: var(--text-dim); white-space: nowrap; }
   .schip.idle { color: #8fbf9f; border-color: #2c5a41; }
   .schip.busy { color: #6aa9f4; border-color: #2c4a75; }
@@ -296,7 +297,7 @@
 
       // State chip (gdn-fusijo) — live idle / busy / waiting from CC's session registry,
       // with how long it has been in that state. `unknown` = the registry has no status for
-      // this pid (sdk-cli sessions never write one); it is shown as such, never as idle.
+      // this pid (batch `-p` sessions write none); it is shown as such, never as idle.
       // Distinguishes "blocked — wants to make progress but can't" (waiting) from "finished
       // the current arc" (idle), which is the phone requirement verbatim (2026-09-09).
       {
