@@ -85,28 +85,44 @@ describe("scanRecentSessions (fixture farm)", () => {
     const proj = join(projectsDir, "-home-x-repos-acme-data-tools");
     await mkdir(proj, { recursive: true });
 
-    // v4 interactive session with ai-title.
-    await writeFile(join(proj, `${V4}.jsonl`),
+    // Every fixture gets an EXPLICIT, distinct mtime (gdn-vidame). Written back-to-back they
+    // routinely land in the same millisecond, the newest-first sort then ties, and the
+    // maxFiles slice at session-index.ts (which caps BEFORE the substance filters) could keep
+    // the warmup file the filters go on to drop — a ~25% flake on CI and locally, 2026-08-30
+    // to 2026-09-13. Minutes-ago stamps make "newest" a fact of the fixture, not of the clock.
+    const stamp = async (path: string, minutesAgo: number) => {
+      const t = (Date.now() - minutesAgo * 60_000) / 1000;
+      await utimes(path, t, t);
+    };
+
+    // v4 interactive session with ai-title — the NEWEST file, so maxFiles:1 must keep it.
+    const v4Path = join(proj, `${V4}.jsonl`);
+    await writeFile(v4Path,
       human("/home/x/repos/acme/data-tools", "let's fix the widget") +
       line({ type: "ai-title", aiTitle: "Widget fixing" }));
+    await stamp(v4Path, 1);
 
     // v5 phone session: no ai-title (0/12 measured), title comes from the bridge log.
-    await writeFile(join(proj, `${V5_REMOTE}.jsonl`),
-      human("/home/x", "phone prompt about widgets", "sdk-cli"));
+    const v5Path = join(proj, `${V5_REMOTE}.jsonl`);
+    await writeFile(v5Path, human("/home/x", "phone prompt about widgets", "sdk-cli"));
+    await stamp(v5Path, 2);
 
     // Cowork session: no ai-title, title from the Desktop sidecar.
-    await writeFile(join(proj, `${V4_COWORK}.jsonl`),
-      human("/home/x", "cowork prompt", "claude-desktop"));
+    const coworkPath = join(proj, `${V4_COWORK}.jsonl`);
+    await writeFile(coworkPath, human("/home/x", "cowork prompt", "claude-desktop"));
+    await stamp(coworkPath, 3);
 
     // Too old — outside the window.
     const oldPath = join(proj, `${V4_OLD}.jsonl`);
     await writeFile(oldPath, human("/home/x", "ancient"));
-    const old = (Date.now() - 30 * 86_400_000) / 1000;
-    await utimes(oldPath, old, old);
+    await stamp(oldPath, 30 * 24 * 60);
 
-    // Empty/warmup session: no human prompt, no title anywhere — dropped.
-    await writeFile(join(proj, `${V4_EMPTY}.jsonl`),
+    // Empty/warmup session: no human prompt, no title anywhere — dropped. Stamped OLDEST of
+    // the in-window files so the cap never reaches it before a real session.
+    const emptyPath = join(proj, `${V4_EMPTY}.jsonl`);
+    await writeFile(emptyPath,
       line({ type: "user", cwd: "/home/x", message: { role: "user", content: [{ type: "tool_result", content: "x" }] }, toolUseResult: {} }));
+    await stamp(emptyPath, 4);
 
     // Distractors: a workflow journal (non-uuid name) and a subagents directory.
     await writeFile(join(proj, "journal.jsonl"), line({ started: true }));
@@ -155,6 +171,7 @@ describe("scanRecentSessions (fixture farm)", () => {
   it("respects maxFiles newest-first", async () => {
     const got = await scanRecentSessions({ projectsDir, sidecarRoot, logsDir, maxFiles: 1, minBytes: 0 });
     expect(got.length).toBe(1);
+    expect(got[0].uuid).toBe(V4); // the newest by stamped mtime, not whichever readdir listed first
   });
 
   it("substance floor drops probe-sized sessions unless a human surface titled them", async () => {

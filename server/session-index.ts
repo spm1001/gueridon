@@ -294,7 +294,10 @@ export async function scanRecentSessions(opts: {
       } catch { continue; }
     }
   }
-  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  // Newest first; equal mtimes break on path so the order is a function of the inputs, not
+  // of readdir's filesystem order (gdn-vidame — two files written in one millisecond used to
+  // fall through the stable sort in whichever order the directory listed them).
+  candidates.sort((a, b) => (b.mtimeMs - a.mtimeMs) || a.path.localeCompare(b.path));
   const bounded = candidates.slice(0, maxFiles);
 
   const [coworkTitles, bridgeTitles] = await Promise.all([
