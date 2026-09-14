@@ -23,6 +23,12 @@
  * subscribes to `upsert`/`remove` to keep the wallet + teleport-id join after CC deletes
  * the record. Write the watcher once; never a second reader.
  *
+ * A record is not proof of a process. CC deletes it on a clean exit, but an unclean end
+ * leaves it behind (measured 2026-09-14: two phone-child records whose pids had been dead
+ * ~2 h, one still `busy`). This watcher reports what is on disk; a consumer that means "a
+ * driver is alive" checks the pid (`pidAlive` in sessions.ts) — the roster is safe by
+ * construction because it joins on the /proc scan's live pids, `/recent` and the ledger ask.
+ *
  * Mechanics: `fs.watch` (inotify) on each directory for the sub-second signal, plus a slow
  * reconcile pass that re-lists the directories — inotify events can coalesce or be missed,
  * and a directory that does not exist yet (the commis seat on a fresh atelier home) can

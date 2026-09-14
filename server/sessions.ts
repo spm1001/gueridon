@@ -8,6 +8,7 @@
  */
 
 import { readdir, readFile, readlink } from "node:fs/promises";
+import { readFileSync, readlinkSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
@@ -78,6 +79,56 @@ export function extractRemoteSessionId(cmdlineRaw: string): string | undefined {
 function hasVertexMarker(text: string): boolean {
   // Matches `CLAUDE_CODE_USE_VERTEX=1` (environ) and `CLAUDE_CODE_USE_VERTEX":"1"` (--settings JSON).
   return /CLAUDE_CODE_USE_VERTEX["\s]*[:=]["\s]*"?1/.test(text);
+}
+
+/**
+ * Does a process with this pid exist right now? `kill -0` semantics: ESRCH → no; EPERM →
+ * yes (another uid's process, which on the atelier is a colleague's session). Needed because
+ * CC's session registry can OUTLIVE its process — measured 2026-09-14: two phone-child records
+ * whose pids had been dead ~2 h, one still saying `busy` — so "a record exists" is not "a
+ * driver is alive". Any consumer that means the second must ask this (gdn-daluto).
+ */
+export function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * `pidAlive` AND the process is a Claude Code binary (comm `claude`, or exe under the CC
+ * versions dir — the same discriminator as `isLiveClaudePid`, synchronous). This is the
+ * "is anything holding this session" test the ledger and `/recent` use: a stale registry
+ * record whose pid has since been recycled by some unrelated process must not read as a
+ * driver (essayeur F5, 2026-09-14). Fail closed — a pid we cannot read is not our session.
+ */
+export function claudePidAlive(pid: number): boolean {
+  if (!pidAlive(pid)) return false;
+  try {
+    if (readFileSync(`/proc/${pid}/comm`, "utf-8").trim() === "claude") return true;
+    return isClaudeExe(readlinkSync(`/proc/${pid}/exe`));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The Vertex-vs-Teams tag for ONE pid (gdn-daluto) — the same two-surface read the roster
+ * scan makes (environ for the systemd/`-p` lane, cmdline `--settings` for the wrappers),
+ * without the whole /proc walk. The session ledger calls this once per session at join
+ * time. Returns null when neither surface is readable (the process is already gone, or
+ * belongs to another uid on the atelier) — null means "not resolved", never "Teams".
+ */
+export async function vertexBilledForPid(pid: number): Promise<boolean | null> {
+  let cmdline: string | null = null;
+  let environ: string | null = null;
+  try { cmdline = await readFile(`/proc/${pid}/cmdline`, "utf-8"); } catch { /* gone or foreign */ }
+  try { environ = await readFile(`/proc/${pid}/environ`, "utf-8"); } catch { /* gone or foreign */ }
+  if (cmdline === null && environ === null) return null;
+  return hasVertexMarker(cmdline ?? "") || hasVertexMarker(environ ?? "");
 }
 
 /**

@@ -263,8 +263,41 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      `entrypoint: sdk-cli`) DO carry a status on 2.1.270, with `tmux` null (two live records,
      cold read 2026-09-13), so the discriminator is `-p` vs `--sdk-url`, not the entrypoint.
      `shell` and any value CC adds later map to "fine" rather than an exhaustive switch. The registry record
-     is deleted seconds after exit, which is why gdn-daluto journals it (same watcher,
-     second sink).
+     is deleted seconds after a CLEAN exit, which is why gdn-daluto journals it (same watcher,
+     second sink — `server/session-ledger.ts`, shipped 2026-09-14). **But a record is not proof
+     of a process** (measured 2026-09-14): an unclean end leaves the record behind — two
+     phone-child records sat in the registry with pids dead for ~2 h, one still saying `busy`
+     — and `claude agents --json` quietly filters those out rather than deleting them. So any
+     consumer that means "a driver is alive" checks the pid (`pidAlive` in sessions.ts): the
+     roster is safe by construction (it joins on the /proc scan's live pids), `/recent`'s
+     liveness union and the ledger's `held` both ask. Before the check, `/recent` was hiding
+     exactly the dead phone sessions the RECENT band exists to show.
+
+- **Probing CC's dialogs needs `--permission-mode default`; the estate defaults to bypass
+  (2026-09-13, gdn-fusijo).** An `ask` rule is silent under `bypassPermissions` — only `deny`
+  holds there — so a probe session launched the ordinary way never raises the dialog it is
+  meant to measure, and the measurement reads as "nothing happened". The recipe that works:
+  `--permission-mode default` (the pane then reads `manual mode on`, the ready tell on
+  2.1.270 — do not wait on the composer placeholder, which differs between arms) plus an
+  inline `--settings '{"permissions":{"ask":["Bash(touch *)"]}}'`. The wrappers' billing
+  survives that trailing `--settings` because they also carry it as an `env` prefix, so a
+  `claudefv` probe stays on Vertex. Measured on both wrappers.
+
+- **A second Guéridon bridge on the same box needs a scratch `HOME` (2026-09-13).** Its boot
+  calls `reapOrphans()`, which SIGTERMs every pid in the shared
+  `~/.config/gueridon/sse-sessions.json` — the LIVE bridge's children. `HOME=/tmp/<scratch>`
+  with `.claude/sessions` and `.claude-commis/sessions` symlinked to the real directories gives
+  a dev bridge the real registry and none of the shared state (and, since gdn-daluto, its own
+  ledger file rather than the live one's). Kill it by the pid `ss -ltnp` names; remove the
+  scratch home explicitly.
+
+- **A two-part fix is a question, not belt-and-braces (2026-09-13, gdn-vidame).** When a fix
+  ships as "the real change plus a second belt", run the known-bad against each part alone
+  before writing the mechanism into the commit message. The session-index flake fix carried a
+  path tie-break that passed every test and fixed nothing that had failed — the essayeur's
+  old-test-against-new-product arm showed it — and it carried a wrong causal story into the
+  record for forty minutes. Sameer's falsifier for that card was "more complications in
+  future"; a belt nobody needed is exactly that.
 
 ## Session identity across surfaces (2026-08-28 — the switchboard's identity layer)
 
@@ -283,6 +316,15 @@ any surface") needs to *name* every session wherever it lives. That identity lay
     failure mode is a confidently WRONG uuid. `teleport-id.sh` cross-checks against a bridge
     transcript whenever one exists and shouts on disagreement — that shout is the tripwire;
     do not remove it as redundant.
+  - **A `session_…` id on a session does not mean the uuid5 route applies to it** (essayeur,
+    2026-09-14). Phone children are MINTED from the id, so their transcript is the v5 uuid;
+    but an ordinary terminal `cli` session on a Teams seat acquires a `bridgeSessionId` too
+    (remote control, seconds after open) and its transcript is its own v4 uuid — the
+    derivation then names a transcript that does not exist. Where a registry record or a
+    ledger row has been seen, the OBSERVED sessionId is the answer and the derivation is only
+    a cross-check; the ledger's `/ledger` reports both (`uuid` observed, `derivedUuid`
+    beside it) and raises `uuidMismatch` only for a v5 sessionId that disagrees. One of three
+    teleport-bearing rows in the first live ledger was such a `cli` session.
 - **A v5 UUID in `~/.claude/projects` means a programmatically-spawned session** (the harness
   hashes a caller-supplied id; a name-based hash is by definition v5). Interactive sessions
   get v4.
@@ -325,10 +367,32 @@ any surface") needs to *name* every session wherever it lives. That identity lay
   `~/.claude/sessions/<pid>.json` (and the commis seat's directory) pairs the teleport id
   (`bridgeSessionId`), the local uuid, cwd, entrypoint, tmux pane, `status` and — by which
   directory it sits in — the wallet, and is deleted seconds after the process exits. Anything
-  needing those fields after death must journal them while the record exists (gdn-daluto).
+  needing those fields after death must journal them while the record exists.
   Since 2026-09-13 the bridge watches these directories live (`server/registry-watch.ts`,
-  structural primitive 4 above); the ledger is that watcher's second sink. A live record means
-  a live driver: never plain-`--resume` a uuid a record still names.
+  structural primitive 4 above), and since 2026-09-14 journals them (`server/session-ledger.ts`,
+  gdn-daluto): an append-only JSONL at `~/.config/gueridon/session-ledger.jsonl`, one row per
+  (sessionId, seat directory), never keyed on pid — pids recycle, `/clear` and `/resume` move a
+  pid between session ids, a resume keeps a sessionId across pids — carrying the seat, the
+  Vertex-vs-Teams tag read from `/proc` once at join, the `session_…` id, cwd, pane, and
+  `first_seen`/`last_seen`/`ended_at`. A line lands only on open, reopen, identity change and
+  end; status flips stay in memory, or the file would grow by every turn. An open row means
+  the record is still on disk; `held` (the record's pid is alive) is the driver check — never
+  plain-`--resume` a uuid that is held. `GET /ledger?session=` (or `npx tsx
+  server/session-ledger.ts <id>` with no bridge) answers both halves, and a stale record
+  reads as live-but-not-held. Because CC prunes a stale record late (or a later CC startup
+  does), such a row's `ended_at` is the prune time, not the death; `last_seen` — CC's last
+  write — is the better "when did it stop".
+- **The switchboard is the picker of record for phone sessions — by CC's design, not ours.**
+  Put the two facts above together: `/resume` filters `sdk-cli` transcripts out on purpose
+  (2.1.266, bundle read and live picker), so no title backfill and no future polish of ours
+  will ever make a phone conversation appear there; and the only artefact that pairs that
+  conversation's `session_…` handle with its transcript uuid and its wallet is a registry
+  record that CC deletes at exit. So the RECENT band, fed by the ledger, is not a convenience
+  duplicate of `/resume` — for phone sessions it is the only picker there is. That is why the
+  ledger keeps every row after death rather than pruning ended ones, why the row carries the
+  seat and the `session_…` id rather than leaving them to a lookup, and why a live-holder check
+  sits beside the answer: the picker that can find a hidden session is also the one that could
+  put a second writer on it.
 - **Ending a bridge child does not end a phone conversation.** The remote-control server
   respawns a child on the same transcript the next time a message arrives from the app, so a
   phone session that has hit its model limit stays writable-from-the-phone indefinitely; the
@@ -340,13 +404,15 @@ any surface") needs to *name* every session wherever it lives. That identity lay
   check's mechanism can do the thing it is asking for. Same family, this repo: gdn-vidame's
   flaky test was red on main for a fortnight before anyone measured it.
 
-Board state as of 2026-09-13: gdn-fusijo (state chip) shipped; under gdn-jibudu the open
-threads are **gdn-daluto** (registry ledger — build it on the fusijo watcher, never a second
-reader), **gdn-merozu** (the revived baton-pass, superseding the dropped gdn-kidowe; still
-wants its `--badly` from Sameer), **gdn-vogidu** (answer a waiting session's dialog from the
-phone — the `tmux` field each roster row now carries is its handle) and **gdn-miseso** (should
-read daluto's ledger rather than keep its own recorder). **gdn-himaba** (the design pass)
-carries the per-surface handle table, the three-state model, and the Cowork answer.
+Board state as of 2026-09-14: gdn-fusijo (state chip) and gdn-daluto (session ledger) shipped;
+under gdn-jibudu the open threads are **gdn-merozu** (the revived baton-pass, superseding the
+dropped gdn-kidowe; still wants its `--badly` from Sameer — the ledger row now hands it the
+seat and the `session_…` id, and `GET /ledger` the live-holder check, so the wallet sheet's
+"resume on wallet X" has its inputs), **gdn-vogidu** (answer a waiting session's dialog from
+the phone — the `tmux` field each roster row now carries is its handle), **gdn-miseso** (the
+health strip; its wallet history reads the ledger, not a recorder of its own) and
+**gdn-jojino** (the phone's 20 s poll). **gdn-himaba** (the design pass) carries the
+per-surface handle table, the three-state model, and the Cowork answer.
 
 ## Substrate watch (2026-06-10 read, Fable first-look session)
 

@@ -116,7 +116,12 @@ export type BridgeEvent =
   // Session-registry watcher lifecycle (gdn-fusijo): one line per directory when a watch
   // arms, is missing (seat not provisioned), or errors — so an unknown-everywhere roster
   // can be read back to "the watcher never armed" rather than "CC stopped writing".
-  | { type: "registry:watch"; dir: string; status: "armed" | "missing" | "error"; detail?: string };
+  | { type: "registry:watch"; dir: string; status: "armed" | "missing" | "error"; detail?: string }
+  // Session ledger (gdn-daluto): one line at boot with the fold (rows / open / closed-at-boot),
+  // and one per file problem — a torn tail skipped on load, an append that failed — so a
+  // ledger that has quietly stopped writing is visible in the journal, not only in its gaps.
+  | { type: "ledger:start"; path: string; rows: number; open: number; endedAtBoot: number }
+  | { type: "ledger:problem"; op: "load" | "append"; path: string; error: string };
 
 // -- Level mapping --
 
@@ -187,6 +192,8 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "server:persist-error": "error",
   "server:prior-sessions": "info",
   "registry:watch": "info",
+  "ledger:start": "info",
+  "ledger:problem": "error",
 };
 
 export function levelFor(event: BridgeEvent): LogLevel {

@@ -27,7 +27,12 @@
     RECENT   — cold sessions from the transcript farm (GET /recent, gdn-vucube): uuid-keyed,
                titles scavenged (ai-title → Cowork sidecar → bridge log → first prompt),
                first-prompt subtitles, 100KB substance floor. Read-only until pickup
-               (gdn-merozu) lands. The search box filters these rows too.
+               (gdn-merozu) lands. The search box filters these rows too. Each row also
+               carries what the transcript cannot say (gdn-daluto, from the bridge's session
+               ledger): a seat chip — which wallet ran it at last sighting — and, for a phone
+               conversation, its session_… id, the handle the claude.ai app knows it by. A
+               dashed chip means the seat is certain but Vertex-or-not was unreadable; no
+               chip means the ledger never saw the session (it predates the ledger).
 
     REPOS    — every launchable repo (GET /repos), name-searchable, ordered by last git commit
                (repo recency, not session mtime). Tap → flat Launch button → POST /launch.
@@ -120,6 +125,12 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .rec-row .rec-meta { font-size: 0.72rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Seat chip on a cold row (gdn-daluto): same colours as the roster's wallet chip; dashed
+     when the ledger knew the seat but could not read Vertex-or-not from /proc. */
+  .rec-row .wchip { display: inline-block; margin-right: 0.35rem; vertical-align: 0.05rem; }
+  .wchip.unsure { border-style: dashed; }
+  /* The phone-app id — monospace and select-all, so a long-press grabs the whole handle. */
+  .rec-row .rec-id { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.68rem; user-select: all; -webkit-user-select: all; }
 
   /* REPO search + list */
   .filter {
@@ -427,9 +438,34 @@
       }
       const m = document.createElement("span");
       m.className = "rec-meta";
+      // Seat chip (gdn-daluto) — from the bridge's session ledger, because the transcript
+      // carries no account identity. `wallet` is the lane at last sighting (vertex / sameer@
+      // / family@); null when the /proc read could not settle Vertex-or-not, in which case
+      // the certain half — the seat — shows dashed. Neither present = the ledger never saw
+      // this session. "+1" = it also ran on another seat (title lists them).
+      const lane = r.wallet || r.seat;
+      if (lane) {
+        const w = document.createElement("span");
+        const wcls = { "vertex": "vertex", "sameer@": "sameer", "family@": "family" }[lane] || "";
+        w.className = "wchip" + (wcls ? " " + wcls : "") + (r.wallet ? "" : " unsure");
+        const others = (r.seats || []).length > 1 ? " +" + (r.seats.length - 1) : "";
+        w.textContent = lane + others;
+        if (others) w.title = "ran on: " + r.seats.join(", ");
+        m.appendChild(w);
+      }
       const glyph = SURFACE_GLYPH[r.entrypoint] || "";
-      m.textContent = [r.name, (glyph ? glyph + " " : "") + ageLabel(r.ageSec) + " ago"].join(" · ");
+      m.appendChild(document.createTextNode(
+        [r.name, (glyph ? glyph + " " : "") + ageLabel(r.ageSec) + " ago"].join(" · ")));
       row.appendChild(m);
+      // Phone-app id (gdn-daluto): the session_… handle the claude.ai app knows this
+      // conversation by — the thing to search for there, and what GET /ledger resolves back
+      // to a transcript uuid and a seat.
+      if (r.teleportId) {
+        const t = document.createElement("span");
+        t.className = "rec-meta rec-id";
+        t.textContent = r.teleportId;
+        row.appendChild(t);
+      }
       $recentList.appendChild(row);
     }
   }

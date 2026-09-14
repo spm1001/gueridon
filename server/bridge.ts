@@ -20,9 +20,10 @@ import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { spawn as ptySpawn, type IPty } from "node-pty";
-import { scanClaudeSessions, isLiveClaudePid } from "./sessions.js";
+import { scanClaudeSessions, isLiveClaudePid, claudePidAlive } from "./sessions.js";
 import { scanRecentSessions, agentsRegistryUuids } from "./session-index.js";
 import { RegistryWatcher } from "./registry-watch.js";
+import { SessionLedger } from "./session-ledger.js";
 
 import {
   buildCCArgs,
@@ -240,6 +241,14 @@ let priorSessions: PriorSessionInfo[] = [];
  * Started only when the roster is enabled; null means every row reads `unknown`.
  */
 let registryWatcher: RegistryWatcher | null = null;
+
+/**
+ * The watcher's second sink (gdn-daluto): an append-only journal of every registry record,
+ * keyed on (sessionId, seat), so the seat and the phone-app id outlive the record. Started
+ * after the watcher's first pass; null when the roster is off — `/recent` then shows no
+ * seat and `/ledger` is 404 like the rest of the roster.
+ */
+let sessionLedger: SessionLedger | null = null;
 
 /** Set during shutdown — prevents process exit handlers from overwriting the session file. */
 let isShuttingDown = false;
@@ -1822,29 +1831,67 @@ const server = createServer((req, res) => {
     const liveUuids = new Set<string>(registryUuids);
     for (const p of procs) if (p.sessionUuid) liveUuids.add(p.sessionUuid);
     // The watched session registry names a uuid for EVERY registered session on both
-    // seats, with no CLI round trip (gdn-fusijo) — the cheapest member of the union.
-    for (const r of registryWatcher?.snapshot() ?? []) if (r.sessionId) liveUuids.add(r.sessionId);
+    // seats, with no CLI round trip (gdn-fusijo) — the cheapest member of the union. But a
+    // record can outlive its process (gdn-daluto, measured 2026-09-14: two phone-child
+    // records with pids dead ~2 h), and counting those as live hid exactly the cold phone
+    // sessions this band exists to show — so only a record with a living pid excludes.
+    for (const r of registryWatcher?.snapshot() ?? []) if (r.sessionId && claudePidAlive(r.pid)) liveUuids.add(r.sessionId);
     for (const s of sessions.values()) {
       if (s.process && s.process.exitCode === null) liveUuids.add(s.id);
     }
     const recent = indexed
       .filter((r) => !liveUuids.has(r.uuid))
       .slice(0, RECENT_CAP)
-      .map((r) => ({
-        uuid: r.uuid,
-        name: sessionDisplayName(r.cwd, SCAN_ROOT, homedir(), EXTRA_FOLDERS),
-        cwd: r.cwd,
-        ageSec: Math.max(0, Math.round((now - r.mtimeMs) / 1000)),
-        title: r.title,
-        titleSource: r.titleSource,
-        firstPrompt: r.firstPrompt,
-        entrypoint: r.entrypoint,
-        uuidVersion: r.uuidVersion,
-      }));
+      .map((r) => {
+        // The ledger (gdn-daluto) is what the transcript cannot say: which seat ran it, and
+        // its phone-app id. Newest row wins for the chip; every seat it ran on is listed.
+        const led = sessionLedger?.rowsForSession(r.uuid) ?? [];
+        const last = led[0];
+        return {
+          uuid: r.uuid,
+          name: sessionDisplayName(r.cwd, SCAN_ROOT, homedir(), EXTRA_FOLDERS),
+          cwd: r.cwd,
+          ageSec: Math.max(0, Math.round((now - r.mtimeMs) / 1000)),
+          title: r.title,
+          titleSource: r.titleSource,
+          firstPrompt: r.firstPrompt,
+          entrypoint: r.entrypoint,
+          uuidVersion: r.uuidVersion,
+          ...(last && {
+            seat: last.seat,
+            wallet: last.wallet,
+            seats: [...new Set(led.map((l) => l.seat))],
+            teleportId: last.bridgeSessionId,
+            lastSeen: last.last_seen,
+            endedAt: last.ended_at,
+          }),
+        };
+      });
     const body = JSON.stringify({ sessions: recent });
     recentCache = { ts: now, body };
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(body);
+    return;
+  }
+
+  // GET /ledger?session=<uuid | session_… | cse_…> — the session ledger's three answers
+  // (gdn-daluto): which seat ran this uuid, which uuid this phone-app id maps to, and
+  // whether anything still holds it (a live row = a live driver: do not plain-`--resume`).
+  // Gated like /sessions; 400 on a query the ledger cannot read rather than an empty 200.
+  if (req.method === "GET" && url.pathname === "/ledger") {
+    if (!rosterEnabled(process.env) || !sessionLedger) {
+      res.writeHead(404).end(JSON.stringify({ error: "roster not enabled" }));
+      return;
+    }
+    const q = url.searchParams.get("session") ?? "";
+    const result = sessionLedger.lookup(q);
+    if (result.kind === "unknown") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "session must be a transcript uuid, a session_… id or a cse_… id", query: q }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(result));
     return;
   }
 
@@ -2149,6 +2196,8 @@ function shutdown(signal: string): void {
   isShuttingDown = true;
   emit({ type: "server:shutdown", signal });
   registryWatcher?.stop();
+  // Queued ledger lines are small appends; let them land rather than lose an end row.
+  void sessionLedger?.flush();
 
   // Persist shutdown context so the next bridge can classify the restart (gdn-bokimo).
   // Must happen before killing processes — turnInProgress is the key signal.
@@ -2275,8 +2324,21 @@ if (IS_ENTRYPOINT) {
     registryWatcher = new RegistryWatcher();
     registryWatcher.on("watch", (dir: string, status: "armed" | "missing" | "error", detail?: string) =>
       emit({ type: "registry:watch", dir, status, ...(detail && { detail }) }));
-    registryWatcher.start().catch((err) =>
-      emit({ type: "registry:watch", dir: "*", status: "error", detail: errorDetail(err) }));
+    // The ledger (gdn-daluto) subscribes once the watcher's first pass has resolved, so its
+    // boot backfill reads a full snapshot: records present become rows, open rows whose
+    // record is gone close as `absent-at-boot`. A ledger fault never takes the roster down.
+    const watcher = registryWatcher;
+    watcher.start()
+      .then(async () => {
+        const ledger = new SessionLedger({
+          onProblem: (p) => emit({ type: "ledger:problem", op: p.op, path: p.path, error: p.error }),
+        });
+        const summary = await ledger.start(watcher);
+        sessionLedger = ledger;
+        emit({ type: "ledger:start", path: ledger.path, ...summary });
+      })
+      .catch((err) =>
+        emit({ type: "registry:watch", dir: "*", status: "error", detail: errorDetail(err) }));
   }
 
   const onListening = () => {
