@@ -288,8 +288,10 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   `~/.config/gueridon/sse-sessions.json` — the LIVE bridge's children. `HOME=/tmp/<scratch>`
   with `.claude/sessions` and `.claude-commis/sessions` symlinked to the real directories gives
   a dev bridge the real registry and none of the shared state (and, since gdn-daluto, its own
-  ledger file rather than the live one's). Kill it by the pid `ss -ltnp` names; remove the
-  scratch home explicitly.
+  ledger file rather than the live one's). Add a third, read-only symlink — `.claude/projects`
+  — if you want `/recent` populated: `scanRecentSessions` reads the farm under `homedir()`,
+  so without it `/recent` is empty by construction and reads like a bug (2026-09-14). Kill it
+  by the pid `ss -ltnp` names; unlink the symlinks, then remove the scratch home explicitly.
 
 - **A two-part fix is a question, not belt-and-braces (2026-09-13, gdn-vidame).** When a fix
   ships as "the real change plus a second belt", run the known-bad against each part alone

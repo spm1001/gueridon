@@ -2,6 +2,7 @@
 
 One line per handoff, newest first. `- [ ]` = not yet processed by an /open sweep; every close appends its line in the same change that writes the handoff.
 
+- [ ] 2026-09-14 [2026-09-14-0133-2c753660.md](2026-09-14-0133-2c753660.md) — Ship the session ledger — CC's registry records journaled past their death so a cold phone session keeps its seat and session_… id, with a read helper that says who still holds it (gdn-daluto)
 - [x] 2026-09-13 [2026-09-13-2247-2c753660.md](2026-09-13-2247-2c753660.md) — Make main green again (the session-index flake) and give every roster row a live idle / busy / waiting chip fed by CC's session registry — the switchboard's liveness column (processed 2026-09-14)
 - [x] 2026-09-09 [2026-09-09-1107-10984259.md](2026-09-09-1107-10984259.md) — Resume a credit-exhausted phone session on another wallet, find why /resume hides such sessions, and make the batterie assembler self-heal a ratchet quarantine (processed 2026-09-13)
 - [x] 2026-08-30 [2026-08-30-2213-63d20585.md](2026-08-30-2213-63d20585.md) — pre-ledger history (processed at adoption 2026-09-09)
