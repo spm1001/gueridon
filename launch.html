@@ -25,8 +25,8 @@
                `-p` sessions write none; phone `--sdk-url` children DO carry one, with no tmux
                pane) — shown as unknown, never as idle. The bridge nudges this page over
                SSE on every registry change (gdn-jojino) and the page refetches /sessions,
-               so a chip follows CC within a second; a 60 s poll (20 s while the stream is
-               down) covers what the registry does not carry.
+               so a chip follows CC within a second; the old 20 s poll stays underneath for
+               what the registry does not carry and for a stream that dies silently.
     RECENT   — cold sessions from the transcript farm (GET /recent, gdn-vucube): uuid-keyed,
                titles scavenged (ai-title → Cowork sidecar → bridge log → first prompt),
                first-prompt subtitles, 100KB substance floor. Read-only until pickup
@@ -270,21 +270,40 @@
   // auto-/open turn runs → pulsing "orienting…". Returns null on fetch failure (leave UI as-is,
   // callers keep polling), [] when none, else the roster array.
   let rosterOff = false; // GET /sessions answered 404: neither roster flag is set on the bridge
+  // A fetch that hangs (iOS can suspend one mid-flight) must still settle, or the single-flight
+  // refetch below would wait on it and every nudge would queue behind it (gdn-jojino).
+  const SESSIONS_FETCH_TIMEOUT_MS = 15000;
+  // What the roster last drew, as visible text. Nudges arrive every few seconds on a busy
+  // estate, and a rebuild under a finger loses the tap, so an unchanged roster is not redrawn.
+  let lastRosterKey = null;
   async function loadSessions() {
     let sessions = null;
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const abortTimer = ctl ? setTimeout(() => ctl.abort(), SESSIONS_FETCH_TIMEOUT_MS) : null;
     try {
-      const r = await fetch("/sessions");
+      const r = await fetch("/sessions", ctl ? { signal: ctl.signal } : undefined);
       rosterOff = r.status === 404;
       if (r.ok) sessions = (await r.json()).sessions || [];
       setOffline(false); // got a response — bridge reachable (even a 404 = RC off = online)
     } catch (e) {
-      setOffline(true); // network threw — bridge unreachable (VPN/Tailscale off)
+      setOffline(true); // network threw or timed out — bridge unreachable (VPN/Tailscale off)
+    } finally {
+      clearTimeout(abortTimer);
     }
     if (sessions === null) return null; // leave current UI in place, don't flicker
     // Repos with a live session are hidden from the launch list (gdn-wuvujo) — refresh it
-    // whenever the roster changes (empty set when no sessions → all repos shown).
-    liveSessionNames = new Set(sessions.map((s) => s.name));
-    renderRepos();
+    // whenever that set changes (empty set when no sessions → all repos shown).
+    const names = new Set(sessions.map((s) => s.name));
+    if (names.size !== liveSessionNames.size || [...names].some((n) => !liveSessionNames.has(n))) {
+      liveSessionNames = names;
+      renderRepos();
+    }
+    const key = JSON.stringify(sessions.map((s) => [
+      s.pid, s.name, s.kind, s.attachable, s.ready, s.url, s.wallet, s.state,
+      s.stateSince ? ageLabel(Math.round((Date.now() - s.stateSince) / 1000)) : null, ageLabel(s.ageSec),
+    ]));
+    if (key === lastRosterKey) return sessions;
+    lastRosterKey = key;
     if (!sessions.length) { $running.hidden = true; $runningList.innerHTML = ""; return sessions; }
     $running.hidden = false;
     $runningLabel.textContent = "Sessions (" + sessions.length + ")";
@@ -372,12 +391,12 @@
           end.className = "mini end"; end.textContent = "End";
           // Two-tap arm (PWA-safe; native confirm() is unreliable in iOS standalone): first tap
           // → "Sure?", a second tap within 3s ends it. Guards a fat-finger on a live foreign row.
+          // The arm is kept by pid, so a roster redraw between the taps (a nudge) keeps it.
+          if (armedEnd && armedEnd.pid === s.pid && Date.now() < armedEnd.until) armEnd(end, armedEnd.until);
           end.addEventListener("click", () => {
-            if (end.dataset.armed === "1") { endSession(s, end); return; }
-            end.dataset.armed = "1"; end.textContent = "Sure?";
-            setTimeout(() => {
-              if (end.dataset.armed === "1") { end.dataset.armed = "0"; end.textContent = "End"; }
-            }, 3000);
+            if (end.dataset.armed === "1") { armedEnd = null; endSession(s, end); return; }
+            armedEnd = { pid: s.pid, until: Date.now() + 3000 };
+            armEnd(end, armedEnd.until);
           });
           row.appendChild(end);
         }
@@ -385,6 +404,14 @@
       $runningList.appendChild(row);
     }
     return sessions;
+  }
+
+  let armedEnd = null; // { pid, until } — the foreign row whose End reads "Sure?"
+  function armEnd(btn, until) {
+    btn.dataset.armed = "1"; btn.textContent = "Sure?";
+    setTimeout(() => {
+      if (btn.dataset.armed === "1") { btn.dataset.armed = "0"; btn.textContent = "End"; }
+    }, Math.max(0, until - Date.now()));
   }
 
   async function endSession(s, btn) {
@@ -662,29 +689,30 @@
   // view uses. The bridge nudges on every registry change a row would show (above all a
   // session going `waiting`) and the page refetches /sessions, so a chip follows CC within
   // a second instead of on the next 20 s poll. The stream is a doorbell, never the data:
-  // /sessions stays the one source of what a row says. A slow poll stays underneath for
-  // what the registry does not carry (ages ticking over, an RC session's ready flip): 60 s
-  // while the stream is up, the old 20 s while it is down.
+  // /sessions stays the one source of what a row says. The 20 s poll stays underneath,
+  // unchanged: it carries what the registry does not (ages ticking over, an RC session's
+  // ready flip), and it bounds the damage when the stream dies without an error — the
+  // watchdog notices that only after 65 s, and a slower poll would have made such a page
+  // worse than the one it replaced (essayeur, 2026-09-28).
   // Mobile Safari resurrects this page from cache with a stale roster and drops sockets in
   // the background, so a hidden tab closes the stream and stops polling (a backgrounded tab
   // costs nothing) and a visible one reopens it; visibilitychange covers app-switch,
   // pageshow (persisted) the back-forward cache.
-  const POLL_STREAM_UP_MS = 60000;
-  const POLL_STREAM_DOWN_MS = 20000;
+  const ROSTER_POLL_MS = 20000;
   const STREAM_WATCHDOG_MS = 65000; // pings every 30 s; silence past two = a dead socket
-  const STREAM_RETRY_MS = 10000;    // after the browser gives up (a 502 mid bridge-restart)
-  let rosterTimer = null, rosterTimerMs = 0;
+  const STREAM_RETRY_MS = 10000;    // after the browser gives up (a 502 mid bridge-restart),
+  const STREAM_RETRY_MAX_MS = 300000; // doubling to 5 min for an answer that keeps not being a stream
+  let rosterTimer = null;
   let rosterStream = null, streamWatchdog = null, streamRetry = null;
+  let streamRetryMs = STREAM_RETRY_MS;
   let refreshing = false, refreshAgain = false;
 
-  function startRosterPolling(ms) {
-    if (rosterTimer && rosterTimerMs === ms) return;
-    stopRosterPolling();
-    rosterTimer = setInterval(loadSessions, ms);
-    rosterTimerMs = ms;
+  function startRosterPolling() {
+    if (rosterTimer) return;
+    rosterTimer = setInterval(loadSessions, ROSTER_POLL_MS);
   }
   function stopRosterPolling() {
-    if (rosterTimer) { clearInterval(rosterTimer); rosterTimer = null; rosterTimerMs = 0; }
+    if (rosterTimer) { clearInterval(rosterTimer); rosterTimer = null; }
   }
 
   // Single-flight: nudges that land while a fetch is out fold into ONE trailing refetch,
@@ -708,27 +736,33 @@
   }
   function openRosterStream() {
     closeRosterStream();
-    startRosterPolling(POLL_STREAM_DOWN_MS); // until the stream is actually up
+    startRosterPolling();
     if (typeof EventSource === "undefined") return;
     const es = new EventSource("/sessions/events");
     rosterStream = es;
-    es.onopen = () => {
+    resetStreamWatchdog(); // a stream that never says hello is reopened like a silent one
+    // The stream counts as up when the bridge's hello arrives (on every reconnect too), not on
+    // onopen: headers alone can come through a proxy that then sits on the body.
+    es.addEventListener("hello", () => {
       if (rosterStream !== es) return;
+      streamRetryMs = STREAM_RETRY_MS;
       resetStreamWatchdog();
-      startRosterPolling(POLL_STREAM_UP_MS);
       refreshSessions(); // anything that changed while the stream was down
-    };
+    });
     es.addEventListener("sessions-changed", () => { resetStreamWatchdog(); refreshSessions(); });
     es.addEventListener("ping", resetStreamWatchdog);
     es.onerror = () => {
       if (rosterStream !== es) return;
-      startRosterPolling(POLL_STREAM_DOWN_MS);
       // EventSource retries a dropped connection by itself. It gives up for good only on an
-      // answer that is not a stream (a 502 while the bridge restarts, a 404 with the roster
-      // off) — so retry that ourselves, unless the roster is off and there is nothing to hear.
-      if (es.readyState === EventSource.CLOSED && !rosterOff) {
+      // answer that is not a stream (a 502 while the bridge restarts, a 404 from a bridge
+      // without the feed) — so retry that ourselves, backing off, unless the roster is off
+      // and there is nothing to hear.
+      if (es.readyState === EventSource.CLOSED) {
         clearTimeout(streamWatchdog); streamWatchdog = null;
-        streamRetry = setTimeout(openRosterStream, STREAM_RETRY_MS);
+        if (!rosterOff) {
+          streamRetry = setTimeout(openRosterStream, streamRetryMs);
+          streamRetryMs = Math.min(streamRetryMs * 2, STREAM_RETRY_MAX_MS);
+        }
       }
     };
   }

@@ -1,7 +1,9 @@
 // Guéridon service worker — push notification handlers + offline app shell cache.
 // Deep-link via hash fragments (/#folder-name).
 
-const CACHE_NAME = "gueridon-shell-v4";
+// v5 (gdn-jojino): drops what v4 cached before the bypass list caught up — /recent, /rc, and
+// any /sessions/events entry an old worker opened on the first launcher load after deploy.
+const CACHE_NAME = "gueridon-shell-v5";
 const SHELL_URLS = ["/", "/manifest.json", "/icon-192.svg", "/icon-512.svg", "/apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {

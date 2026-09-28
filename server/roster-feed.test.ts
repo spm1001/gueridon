@@ -119,6 +119,20 @@ describe("RosterFeed — coalesces watcher events into one nudge", () => {
     expect(got[0].sort()).toEqual([1, 2, 3]);
   });
 
+  it("a steady run of writes cannot starve it: it fires within the window of the FIRST write (throttle, not debounce)", async () => {
+    // coalesceMs is 40 here. Writes every 10 ms for 200 ms: a debounce would stay silent until
+    // ~240 ms; the throttle must speak by ~40 ms and again while the run continues.
+    const t0 = Date.now();
+    const at: number[] = [];
+    feed.on("changed", () => at.push(Date.now() - t0));
+    for (let i = 0; i < 20; i++) {
+      watcher.emit("upsert", rec(100 + i), null);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(at.length).toBeGreaterThanOrEqual(2);
+    expect(at[0]).toBeLessThan(120);
+  });
+
   it("an irrelevant upsert (updatedAt only) emits nothing", async () => {
     let n = 0;
     feed.on("changed", () => n++);

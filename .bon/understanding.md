@@ -266,7 +266,12 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      (Garni's verifiers, nineteen rows measured); phone children (`--print --sdk-url`, also
      `entrypoint: sdk-cli`) DO carry a status on 2.1.270, with `tmux` null (two live records,
      cold read 2026-09-13), so the discriminator is `-p` vs `--sdk-url`, not the entrypoint.
-     `shell` and any value CC adds later map to "fine" rather than an exhaustive switch. The registry record
+     `shell` and any value CC adds later map to "fine" rather than an exhaustive switch.
+     **Watch (2026-09-28, CC 2.1.283):** all 13 live records carried a status, among them nine
+     `claude -p` overnight workers (`entrypoint: sdk-cli`, each inside a tmux pane) reading
+     `busy`/`idle` — so "batch `-p` writes no status" may no longer hold, or may hold only for
+     `-p` runs outside tmux like Garni's verifiers. Not re-censused; the roster's `unknown` is
+     still the right rendering for whatever writes none. The registry record
      is deleted seconds after a CLEAN exit, which is why gdn-daluto journals it (same watcher,
      second sink — `server/session-ledger.ts`, shipped 2026-09-14). A third sink,
      `server/roster-feed.ts` (gdn-jojino, 2026-09-28), turns every roster-visible change into a
