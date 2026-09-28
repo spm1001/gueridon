@@ -1087,6 +1087,22 @@ export function buildMergedDelta(pending: PendingDelta): Record<string, unknown>
   };
 }
 
+// -- SSE framing (shared by GET /events and the launcher's GET /sessions/events) --
+
+/** Response headers every SSE stream the bridge serves opens with. `X-Accel-Buffering`
+ *  asks a buffering proxy (nginx, a front door) to pass frames through as they are written. */
+export const SSE_HEADERS: Readonly<Record<string, string>> = {
+  "Content-Type": "text/event-stream",
+  "Cache-Control": "no-cache",
+  "Connection": "keep-alive",
+  "X-Accel-Buffering": "no",
+};
+
+/** One SSE frame: the id feeds the browser's Last-Event-ID on reconnect. */
+export function sseFrame(id: number, event: string, data: unknown): string {
+  return `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
 // -- Mid-turn reconnect suppression --
 
 /**

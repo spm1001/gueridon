@@ -30,6 +30,26 @@ async function waitForClaudePid(pid: number, ms = 3000): Promise<boolean> {
   return false;
 }
 
+/** Read SSE frames off a streaming fetch body until `until` holds or `ms` passes (gdn-jojino). */
+async function readSSEFrames(res: Response, until: (frames: string[]) => boolean, ms = 3000): Promise<string[]> {
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  const frames: string[] = [];
+  const deadline = Date.now() + ms;
+  while (!until(frames)) {
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    const chunk = await Promise.race([reader.read(), new Promise<null>((r) => setTimeout(() => r(null), left))]);
+    if (!chunk || chunk.done) break;
+    buf += dec.decode(chunk.value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf("\n\n")) >= 0) { frames.push(buf.slice(0, i)); buf = buf.slice(i + 2); }
+  }
+  reader.cancel().catch(() => {});
+  return frames;
+}
+
 /** Grab an unused port by briefly binding to port 0. */
 function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -95,6 +115,7 @@ describe("bridge HTTP smoke tests", () => {
         SCAN_ROOT: tempDir,
         HOME: tempDir,
         GUERIDON_ENABLE_RC: "", // explicit OFF so the gating tests are deterministic (gdn-towiva)
+        GUERIDON_ENABLE_ROSTER: "", // likewise for the roster's own flag (gdn-jojino)
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -133,6 +154,11 @@ describe("bridge HTTP smoke tests", () => {
   });
 
   // -- Tests --
+
+  it("GET /sessions/events is 404 when the roster is off (gdn-jojino)", async () => {
+    const res = await fetch(`${baseUrl}/sessions/events`);
+    expect(res.status).toBe(404);
+  });
 
   it("GET / returns HTML", async () => {
     const res = await fetch(baseUrl);
@@ -834,6 +860,9 @@ describe("launcher endpoints (RC enabled)", () => {
   beforeAll(async () => {
     tempDir = mkdtempSync(join(tmpdir(), "gdn-rc-int-"));
     mkdirSync(join(tempDir, ".config", "gueridon"), { recursive: true });
+    // The primary seat's registry dir exists before boot, so the watcher arms at once
+    // rather than on its 10 s reconcile retry (gdn-jojino's stream test writes into it).
+    mkdirSync(join(tempDir, ".claude", "sessions"), { recursive: true });
     // Two repos; "newer" committed later than "older" → must sort first in /repos.
     makeGitRepo(join(tempDir, "older"), "2020-01-01T00:00:00");
     makeGitRepo(join(tempDir, "newer"), "2024-06-01T00:00:00");
@@ -896,6 +925,34 @@ describe("launcher endpoints (RC enabled)", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.sessions)).toBe(true);
+  });
+
+  it("GET /sessions/events streams a sessions-changed nudge when a registry record goes waiting (gdn-jojino)", async () => {
+    const res = await fetch(`${baseUrl}/sessions/events`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    const pid = 987654; // no such process: the stream is about the registry, not /proc
+    const record = join(tempDir, ".claude", "sessions", `${pid}.json`);
+    const t0 = Date.now();
+    // Write once the hello has arrived, so the change cannot race the subscription.
+    const frames = await readSSEFrames(res, (f) => {
+      if (f.length === 1 && !existsSync(record)) {
+        writeFileSync(record, JSON.stringify({
+          pid, sessionId: "00000000-0000-4000-8000-000000987654", cwd: tempDir,
+          status: "waiting", updatedAt: Date.now(), statusUpdatedAt: Date.now(),
+        }));
+      }
+      return f.some((x) => x.includes("event: sessions-changed"));
+    });
+    try {
+      expect(frames[0]).toContain("event: hello");
+      const nudge = frames.find((x) => x.includes("event: sessions-changed"));
+      expect(nudge, `frames: ${JSON.stringify(frames)}`).toBeDefined();
+      expect(JSON.parse(nudge!.split("data: ")[1]).pids).toContain(pid);
+      expect(Date.now() - t0).toBeLessThan(2000);
+    } finally {
+      rmSync(record, { force: true });
+    }
   });
 
   it("DELETE /launch for a valid folder with no running session returns 404", async () => {

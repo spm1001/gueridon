@@ -24,6 +24,7 @@ import { scanClaudeSessions, isLiveClaudePid, claudePidAlive } from "./sessions.
 import { scanRecentSessions, agentsRegistryUuids } from "./session-index.js";
 import { RegistryWatcher } from "./registry-watch.js";
 import { SessionLedger } from "./session-ledger.js";
+import { RosterFeed } from "./roster-feed.js";
 
 import {
   buildCCArgs,
@@ -51,6 +52,8 @@ import {
   type RcRosterInfo,
   type VertexRosterInfo,
   shouldSendEvent,
+  sseFrame,
+  SSE_HEADERS,
   STATIC_FILES,
   CSP,
   type PendingDelta,
@@ -250,6 +253,13 @@ let registryWatcher: RegistryWatcher | null = null;
  */
 let sessionLedger: SessionLedger | null = null;
 
+/**
+ * The watcher's third sink (gdn-jojino): GET /sessions/events, the launcher's doorbell. Each
+ * roster-visible registry change becomes one `sessions-changed` nudge and the page refetches
+ * GET /sessions. Null when the roster is off — the stream then 404s like the rest of it.
+ */
+let rosterFeed: RosterFeed | null = null;
+
 /** Set during shutdown — prevents process exit handlers from overwriting the session file. */
 let isShuttingDown = false;
 
@@ -269,9 +279,7 @@ loadShutdownContext();
 function sendSSE(client: SSEClient, event: string, data: unknown): boolean {
   try {
     client.eventSeq++;
-    return client.res.write(
-      `id: ${client.eventSeq}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
-    );
+    return client.res.write(sseFrame(client.eventSeq, event, data));
   } catch {
     cleanupClient(client);
     return false;
@@ -303,12 +311,7 @@ function broadcastToSession(session: Session, event: string, data: unknown): voi
 // -- SSE connection --
 
 function setupSSE(req: IncomingMessage, res: ServerResponse, clientId: string): SSEClient {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    "Connection": "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
+  res.writeHead(200, SSE_HEADERS);
   res.socket?.setKeepAlive(true, 10_000);
 
   // Last-Event-ID: sent by EventSource on auto-reconnect (SSE spec)
@@ -1721,7 +1724,7 @@ const server = createServer((req, res) => {
   const url = new URL(req.url!, `http://localhost`);
 
   // Debug-level request logging — skip noisy endpoints
-  if (url.pathname !== "/events" && url.pathname !== "/status") {
+  if (url.pathname !== "/events" && url.pathname !== "/sessions/events" && url.pathname !== "/status") {
     const start = Date.now();
     res.on("finish", () => {
       emit({ type: "request:http", method: req.method!, url: url.pathname, status: res.statusCode, durationMs: Date.now() - start });
@@ -1770,6 +1773,18 @@ const server = createServer((req, res) => {
     );
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions: running }));
+    return;
+  }
+
+  // GET /sessions/events — the launcher's live roster (gdn-jojino): an SSE stream of
+  // `sessions-changed` nudges fed by the session registry; the page refetches GET /sessions
+  // on each. Gated like /sessions.
+  if (req.method === "GET" && url.pathname === "/sessions/events") {
+    if (!rosterEnabled(process.env) || !rosterFeed) {
+      res.writeHead(404).end(JSON.stringify({ error: "roster not enabled" }));
+      return;
+    }
+    rosterFeed.subscribe(req, res);
     return;
   }
 
@@ -2186,6 +2201,7 @@ const pingTimer = setInterval(() => {
   for (const client of allClients) {
     sendSSE(client, "ping", {}); // sendSSE handles cleanup on failure
   }
+  rosterFeed?.ping();
 }, 30_000);
 pingTimer.unref(); // don't prevent clean shutdown
 
@@ -2196,6 +2212,7 @@ function shutdown(signal: string): void {
   isShuttingDown = true;
   emit({ type: "server:shutdown", signal });
   registryWatcher?.stop();
+  rosterFeed?.stop();
   // Queued ledger lines are small appends; let them land rather than lose an end row.
   void sessionLedger?.flush();
 
@@ -2324,6 +2341,14 @@ if (IS_ENTRYPOINT) {
     registryWatcher = new RegistryWatcher();
     registryWatcher.on("watch", (dir: string, status: "armed" | "missing" | "error", detail?: string) =>
       emit({ type: "registry:watch", dir, status, ...(detail && { detail }) }));
+    // The launcher's doorbell (gdn-jojino). Attached before start(), so it never misses a
+    // change; the first pass's nudge goes to no one, since no page can connect before listen.
+    const feed = new RosterFeed();
+    feed.attach(registryWatcher);
+    feed.on("clients", (clients: number) => emit({ type: "roster:clients", clients }));
+    feed.on("changed", ({ pids }: { pids: number[] }) =>
+      emit({ type: "roster:nudge", pids, clients: feed.clientCount }));
+    rosterFeed = feed;
     // The ledger (gdn-daluto) subscribes once the watcher's first pass has resolved, so its
     // boot backfill reads a full snapshot: records present become rows, open rows whose
     // record is gone close as `absent-at-boot`. A ledger fault never takes the roster down.

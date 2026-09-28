@@ -121,7 +121,12 @@ export type BridgeEvent =
   // and one per file problem — a torn tail skipped on load, an append that failed — so a
   // ledger that has quietly stopped writing is visible in the journal, not only in its gaps.
   | { type: "ledger:start"; path: string; rows: number; open: number; endedAtBoot: number }
-  | { type: "ledger:problem"; op: "load" | "append"; path: string; error: string };
+  | { type: "ledger:problem"; op: "load" | "append"; path: string; error: string }
+  // Launcher roster feed (gdn-jojino): open-stream count on each open/close, and one debug
+  // line per coalesced nudge — the timestamp that splits "the bridge was late" from "the
+  // page was late" when a waiting chip seems slow.
+  | { type: "roster:clients"; clients: number }
+  | { type: "roster:nudge"; pids: number[]; clients: number };
 
 // -- Level mapping --
 
@@ -194,6 +199,8 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "registry:watch": "info",
   "ledger:start": "info",
   "ledger:problem": "error",
+  "roster:clients": "info",
+  "roster:nudge": "debug",
 };
 
 export function levelFor(event: BridgeEvent): LogLevel {

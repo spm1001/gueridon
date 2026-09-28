@@ -6,7 +6,8 @@
   Future B launcher (gdn-todidu + gdn-rilope), grown into the estate switchboard
   (gdn-jibudu). A FRESH, self-contained page — knows nothing about index.html / the
   SSE+render layer (Sameer: "my worry about porting is we bring over too much").
-  Three stacked bands, no streaming:
+  Three stacked bands. The one stream it opens is a doorbell, not a render path
+  (GET /sessions/events, gdn-jojino — see "Roster freshness" below):
 
     SESSIONS — roster of EVERY live claude session (GET /sessions, gdn-batogo), newest first.
                RC sessions Guéridon spawned are attachable: Open = reopen the claude.ai URL;
@@ -22,8 +23,10 @@
                `waiting` = a dialog is up (permission, AskUserQuestion, plan approval) and the
                session cannot progress without a human; `unknown` = no registry status (batch
                `-p` sessions write none; phone `--sdk-url` children DO carry one, with no tmux
-               pane) — shown as unknown, never as idle. The page polls /sessions
-               every 20s while visible (gdn-hevuri), so the chip lags the server by up to that.
+               pane) — shown as unknown, never as idle. The bridge nudges this page over
+               SSE on every registry change (gdn-jojino) and the page refetches /sessions,
+               so a chip follows CC within a second; a 60 s poll (20 s while the stream is
+               down) covers what the registry does not carry.
     RECENT   — cold sessions from the transcript farm (GET /recent, gdn-vucube): uuid-keyed,
                titles scavenged (ai-title → Cowork sidecar → bridge log → first prompt),
                first-prompt subtitles, 100KB substance floor. Read-only until pickup
@@ -266,10 +269,12 @@
   // are read-only ("local · 44m"). RC sessions carry `ready` (gdn-cumado): false while their
   // auto-/open turn runs → pulsing "orienting…". Returns null on fetch failure (leave UI as-is,
   // callers keep polling), [] when none, else the roster array.
+  let rosterOff = false; // GET /sessions answered 404: neither roster flag is set on the bridge
   async function loadSessions() {
     let sessions = null;
     try {
       const r = await fetch("/sessions");
+      rosterOff = r.status === 404;
       if (r.ok) sessions = (await r.json()).sessions || [];
       setOffline(false); // got a response — bridge reachable (even a 404 = RC off = online)
     } catch (e) {
@@ -652,23 +657,88 @@
   loadSessions();
   loadRecent();
 
-  // ---- Roster freshness (gdn-hevuri) ----
-  // Mobile Safari resurrects this page from cache with a stale roster; nothing above
-  // re-fetches on wake. Re-fetch whenever the tab becomes visible (visibilitychange
-  // covers app-switch, pageshow covers back-forward cache), and poll gently while
-  // visible only — the timer is cleared when hidden so a backgrounded tab costs nothing.
-  let rosterTimer = null;
-  function startRosterPolling() {
-    if (rosterTimer) return;
-    rosterTimer = setInterval(loadSessions, 20000);
+  // ---- Roster freshness (gdn-hevuri, live since gdn-jojino) ----
+  // The roster rides an SSE stream, GET /sessions/events — the same transport the chat
+  // view uses. The bridge nudges on every registry change a row would show (above all a
+  // session going `waiting`) and the page refetches /sessions, so a chip follows CC within
+  // a second instead of on the next 20 s poll. The stream is a doorbell, never the data:
+  // /sessions stays the one source of what a row says. A slow poll stays underneath for
+  // what the registry does not carry (ages ticking over, an RC session's ready flip): 60 s
+  // while the stream is up, the old 20 s while it is down.
+  // Mobile Safari resurrects this page from cache with a stale roster and drops sockets in
+  // the background, so a hidden tab closes the stream and stops polling (a backgrounded tab
+  // costs nothing) and a visible one reopens it; visibilitychange covers app-switch,
+  // pageshow (persisted) the back-forward cache.
+  const POLL_STREAM_UP_MS = 60000;
+  const POLL_STREAM_DOWN_MS = 20000;
+  const STREAM_WATCHDOG_MS = 65000; // pings every 30 s; silence past two = a dead socket
+  const STREAM_RETRY_MS = 10000;    // after the browser gives up (a 502 mid bridge-restart)
+  let rosterTimer = null, rosterTimerMs = 0;
+  let rosterStream = null, streamWatchdog = null, streamRetry = null;
+  let refreshing = false, refreshAgain = false;
+
+  function startRosterPolling(ms) {
+    if (rosterTimer && rosterTimerMs === ms) return;
+    stopRosterPolling();
+    rosterTimer = setInterval(loadSessions, ms);
+    rosterTimerMs = ms;
   }
   function stopRosterPolling() {
-    if (rosterTimer) { clearInterval(rosterTimer); rosterTimer = null; }
+    if (rosterTimer) { clearInterval(rosterTimer); rosterTimer = null; rosterTimerMs = 0; }
   }
+
+  // Single-flight: nudges that land while a fetch is out fold into ONE trailing refetch,
+  // so a burst of registry writes costs two /proc scans, not one per write.
+  async function refreshSessions() {
+    if (refreshing) { refreshAgain = true; return; }
+    refreshing = true;
+    try {
+      do { refreshAgain = false; await loadSessions(); } while (refreshAgain);
+    } finally { refreshing = false; }
+  }
+
+  function resetStreamWatchdog() {
+    clearTimeout(streamWatchdog);
+    streamWatchdog = setTimeout(openRosterStream, STREAM_WATCHDOG_MS);
+  }
+  function closeRosterStream() {
+    if (rosterStream) { rosterStream.close(); rosterStream = null; }
+    clearTimeout(streamWatchdog); streamWatchdog = null;
+    clearTimeout(streamRetry); streamRetry = null;
+  }
+  function openRosterStream() {
+    closeRosterStream();
+    startRosterPolling(POLL_STREAM_DOWN_MS); // until the stream is actually up
+    if (typeof EventSource === "undefined") return;
+    const es = new EventSource("/sessions/events");
+    rosterStream = es;
+    es.onopen = () => {
+      if (rosterStream !== es) return;
+      resetStreamWatchdog();
+      startRosterPolling(POLL_STREAM_UP_MS);
+      refreshSessions(); // anything that changed while the stream was down
+    };
+    es.addEventListener("sessions-changed", () => { resetStreamWatchdog(); refreshSessions(); });
+    es.addEventListener("ping", resetStreamWatchdog);
+    es.onerror = () => {
+      if (rosterStream !== es) return;
+      startRosterPolling(POLL_STREAM_DOWN_MS);
+      // EventSource retries a dropped connection by itself. It gives up for good only on an
+      // answer that is not a stream (a 502 while the bridge restarts, a 404 with the roster
+      // off) — so retry that ourselves, unless the roster is off and there is nothing to hear.
+      if (es.readyState === EventSource.CLOSED && !rosterOff) {
+        clearTimeout(streamWatchdog); streamWatchdog = null;
+        streamRetry = setTimeout(openRosterStream, STREAM_RETRY_MS);
+      }
+    };
+  }
+
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") { loadSessions(); loadRecent(); startRosterPolling(); }
-    else stopRosterPolling();
+    if (document.visibilityState === "visible") { refreshSessions(); loadRecent(); openRosterStream(); }
+    else { closeRosterStream(); stopRosterPolling(); }
   });
-  window.addEventListener("pageshow", () => { loadSessions(); loadRecent(); startRosterPolling(); });
-  startRosterPolling();
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) { refreshSessions(); loadRecent(); openRosterStream(); }
+  });
+  openRosterStream();
 </script>
