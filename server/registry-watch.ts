@@ -15,7 +15,8 @@
  * because a rendered view is a lossy readout of the same state (understanding.md, "Observe
  * CC from outside via structured substrate, never the TUI"). Batch `-p` sessions (Garni's
  * verifiers; measured 2026-09-13, nineteen rows) write a record WITHOUT `status`, so absent
- * means UNKNOWN, never idle. Phone children (`--print --sdk-url`, also `entrypoint: sdk-cli`)
+ * means UNKNOWN, never idle. (Watch, 2026-09-28: on 2.1.283 nine `claude -p` workers inside
+ * tmux panes did carry a status; not re-censused — see understanding.md.) Phone children (`--print --sdk-url`, also `entrypoint: sdk-cli`)
  * DO carry `status` on CC 2.1.270 — two live records read idle/busy that night — with `tmux`
  * null; so the discriminator is `-p` vs `--sdk-url`, not `sdk-cli` vs `cli`.
  *
