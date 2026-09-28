@@ -32,8 +32,11 @@ self.addEventListener("fetch", (event) => {
   // Only handle same-origin GET requests
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
 
-  // API routes and SSE — always network, never cache
+  // API routes and SSE — always network, never cache. Both SSE streams must be here: the
+  // shell branch below clones OK responses into the cache, and cache.put on a stream that
+  // never ends never completes (the launcher's /sessions/events, gdn-jojino).
   if (url.pathname.startsWith("/events") ||
+      url.pathname === "/sessions/events" ||
       url.pathname.startsWith("/session/") ||
       url.pathname.startsWith("/prompt/") ||
       url.pathname.startsWith("/abort/") ||
@@ -41,6 +44,9 @@ self.addEventListener("fetch", (event) => {
       url.pathname.startsWith("/push/") ||
       url.pathname === "/folders" ||
       url.pathname === "/sessions" ||
+      url.pathname === "/recent" ||
+      url.pathname === "/ledger" ||
+      url.pathname === "/rc" ||
       url.pathname === "/repos" ||
       url.pathname === "/status" ||
       url.pathname === "/client-error") {
