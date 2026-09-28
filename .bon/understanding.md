@@ -183,7 +183,11 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   If yes, it must hand off, not share. (Ending never triggers this — it's the safe subtraction.)
   The corollary bug it explains: Guéridon rendering a session it doesn't own shows a **frozen
   snapshot** (`replayFromJSONL` fires once at attach, no watcher) — live-tailing a foreign session
-  would need a watcher+SSE path (deliberately NOT built; streaming lane is maintenance-mode).
+  would need a watcher+SSE path on its *conversation*, which is still not built. Maintenance mode
+  was lifted on 2026-09-27 (dated note under "Keep the streaming lane in MAINTENANCE mode"
+  below), and the first thing built under it was a watcher+SSE path for the *roster*
+  (gdn-jojino, 2026-09-28): it carries "a session changed", never a transcript, so this
+  corollary stands.
 
 - **Roster is FOUR-kind (rc/vertex/vertex-terminal/local) as of gdn-kuhaku.** The contract note
   stands and grew a member: anything touching the roster must move together — the classifier
@@ -264,7 +268,16 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      cold read 2026-09-13), so the discriminator is `-p` vs `--sdk-url`, not the entrypoint.
      `shell` and any value CC adds later map to "fine" rather than an exhaustive switch. The registry record
      is deleted seconds after a CLEAN exit, which is why gdn-daluto journals it (same watcher,
-     second sink — `server/session-ledger.ts`, shipped 2026-09-14). **But a record is not proof
+     second sink — `server/session-ledger.ts`, shipped 2026-09-14). A third sink,
+     `server/roster-feed.ts` (gdn-jojino, 2026-09-28), turns every roster-visible change into a
+     `sessions-changed` nudge on `GET /sessions/events`, and the launcher refetches `/sessions`
+     on each: a permission dialog on a tube-tmux session turned the row amber on an
+     iPhone-14-Pro-viewport launcher 0.246, 0.289 and 0.255 s after CC's `statusUpdatedAt`
+     (three runs, the third with the service worker controlling the page); the pre-change
+     poll-only page, same instrument, took 8.96 s. CC rewrites a record only when the status
+     changes — 5 writes across 13 records in 150 s, never `updatedAt` alone — but with ~14 live
+     sessions a visible launcher still saw a nudge about every 8 s, one `/sessions` refetch
+     each, against one per 20 s before. **But a record is not proof
      of a process** (measured 2026-09-14): an unclean end leaves the record behind — two
      phone-child records sat in the registry with pids dead for ~2 h, one still saying `busy`
      — and `claude agents --json` quietly filters those out rather than deleting them. So any
@@ -292,6 +305,26 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   — if you want `/recent` populated: `scanRecentSessions` reads the farm under `homedir()`,
   so without it `/recent` is empty by construction and reads like a bug (2026-09-14). Kill it
   by the pid `ss -ltnp` names; unlink the symlinks, then remove the scratch home explicitly.
+
+- **Any new streaming endpoint must go on `sw.js`'s bypass list (2026-09-28, gdn-jojino).** The
+  PWA's service worker controls every page on the origin — the launcher included, though only
+  `index.html` registers it — and anything not on its list takes the shell branch, which clones
+  each OK response into Cache Storage. `cache.put` on an SSE stream never completes. The bypass
+  list was an exact-match list, so `/sessions` did not cover `/sessions/events`, and neither the
+  jsdom page test nor the HTTP tests could see it because neither runs a worker.
+  `client/sw.test.ts` now runs the real `sw.js` in a vm and asserts which paths it answers.
+
+- **Timing a chip end to end on one clock (2026-09-28, gdn-jojino).** passe's `:9223` Chrome
+  runs on tube, so a page-side `Date.now()` and CC's `statusUpdatedAt` share a clock. The
+  recipe: load the launcher with `--device "iPhone 14 Pro"`, `eval-file` a MutationObserver
+  that stamps the first `.run-row.waiting` per name (plus a wrapped `fetch` and a passive second
+  `EventSource` to split bridge-late from page-late), `wait` inside the same `passe run` so the
+  device emulation holds, then raise the dialog under hublot (recipe above) and read the record.
+  Give the probe a cwd whose display name is unique — `gueridon/fixtures` inherits trust from
+  the repo and names itself. For a control arm, `git worktree add` the pre-change commit and run
+  a second dev bridge from it on another port with the same scratch `HOME`, plus a
+  `node_modules` symlink; the old page measured 8.96 s against the new 0.25 s on the same dialog,
+  which is what shows the instrument can see a slow page.
 
 - **A two-part fix is a question, not belt-and-braces (2026-09-13, gdn-vidame).** When a fix
   ships as "the real change plus a second belt", run the known-bad against each part alone
@@ -676,6 +709,14 @@ a two-lane launcher must *route*, never *detect-and-fallback*.)
 So the streaming `-p`+render stack is the **only** path to a Vertex-billed mobile
 session — it IS the Vertex lane. **gdn-mezofu/gdn-deloce/gdn-wimera reframed from
 "retire the back-half" to a two-lane model:**
+- **UPDATE 2026-09-27 — maintenance mode LIFTED (Sameer, estate-picture session, asked
+  whether the launcher's 20 s poll should become SSE):** "SSE because same. and maintenance -
+  not so much - we're going to need it for Atelier." So new feature work on Guéridon is wanted
+  again, starting with the launcher's session list over SSE (gdn-jojino). Whether that covers
+  the whole stream-json lane or only the launcher side is worth one question to him at
+  draw-down; the doctrine line below is kept as the record of what held until today.
+  The launcher's live roster shipped under it on 2026-09-28 (gdn-jojino); the scope question
+  is still open, parked for Sameer on its own card (gdn-wenava).
 - **Keep the streaming lane in MAINTENANCE mode** — nips and tucks fine (so
   **gdn-kuciku and gdn-hodoco are NOT moot** — they're live Vertex-lane fixes),
   but no major new feature-building on the drift-prone stream-json layer.

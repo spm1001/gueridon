@@ -25,7 +25,8 @@ Tool and docs: https://github.com/spm1001/bon
 
 ## Writing (through the tool, never by hand)
 
-- With the CLI (`uv tool install git+https://github.com/spm1001/bon`):
+- With the CLI (the batterie plugin installs it:
+  `claude plugin install batterie@batterie`):
   `bon list`, `bon show ID`, pipe JSON to `bon new`, `bon done ID --note`.
 - Without the CLI: leave `items.jsonl` untouched. Append a `### Candidates`
   section to your session's handoff instead, proposing changes as

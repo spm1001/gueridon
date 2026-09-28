@@ -19,9 +19,11 @@
  * DO carry `status` on CC 2.1.270 — two live records read idle/busy that night — with `tmux`
  * null; so the discriminator is `-p` vs `--sdk-url`, not `sdk-cli` vs `cli`.
  *
- * Two sinks by design: the roster reads `byPid()` for live state now; a journal (gdn-daluto)
- * subscribes to `upsert`/`remove` to keep the wallet + teleport-id join after CC deletes
- * the record. Write the watcher once; never a second reader.
+ * Three sinks, one reader: the roster reads `byPid()` for live state now; a journal
+ * (gdn-daluto) subscribes to `upsert`/`remove` to keep the wallet + teleport-id join after
+ * CC deletes the record; and the launcher's feed (gdn-jojino, roster-feed.ts) subscribes to
+ * the same two events to nudge open pages over SSE. Write the watcher once; never a second
+ * reader.
  *
  * A record is not proof of a process. CC deletes it on a clean exit, but an unclean end
  * leaves it behind (measured 2026-09-14: two phone-child records whose pids had been dead
