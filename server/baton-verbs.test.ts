@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { takeSession, releaseSession, type TakeDeps, type TakeRecord, type ReleaseDeps } from "./baton-verbs.js";
+import { takeSession, releaseSession, foreignHolder, type TakeDeps, type TakeRecord, type ReleaseDeps } from "./baton-verbs.js";
 import type { Baton } from "./baton.js";
 
 const ID = "0c6f6a8e-2d4b-4a57-9d51-3f1f5f0b7a11";
@@ -21,6 +21,7 @@ function takeWorld(rec: Partial<TakeRecord> = {}) {
     onSignal: (pid: number, sig: string) => { if (sig === "SIGTERM" || sig === "SIGKILL") w.alive.delete(pid); },
     onTick: (_t: number) => {},
     busy: false,
+    wrapper: 777 as number | null,
   };
   const deps: TakeDeps = {
     record: (pid) => w.records.get(pid),
@@ -30,6 +31,7 @@ function takeWorld(rec: Partial<TakeRecord> = {}) {
     now: () => w.t,
     resolveFolder: (cwd) => (cwd.startsWith("/repos/") ? cwd : null),
     folderBusy: () => w.busy,
+    wrapper: () => w.wrapper,
     writeBaton: (b) => { w.log.push(`baton:${b.holder}`); w.batons.push(b); },
     release: { url: "http://127.0.0.1:3013" },
     resume: async (folder, id) => {
@@ -48,7 +50,7 @@ describe("takeSession", () => {
     expect(w.log).toEqual(["baton:gueridon", "SIGTERM@0", `resume:${ID}`]);
     expect(w.batons[0]).toMatchObject({
       holder: "gueridon", sessionId: ID, pane: "0:@3.%3", cwd: "/repos/demo",
-      takenFrom: PID, release: { url: "http://127.0.0.1:3013" },
+      takenFrom: PID, wrapper: 777, release: { url: "http://127.0.0.1:3013" },
     });
   });
 
@@ -114,6 +116,22 @@ describe("takeSession", () => {
     const { w, deps } = takeWorld();
     w.busy = true;
     expect(await takeSession({ pid: PID, sessionId: ID }, deps)).toMatchObject({ ok: false, status: 409 });
+    expect(w.log).toEqual([]);
+  });
+
+  it("refuses a terminal claude not started through bin/baton: nothing there could take it back", async () => {
+    const { w, deps } = takeWorld();
+    w.wrapper = null;
+    const r = await takeSession({ pid: PID, sessionId: ID }, deps);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(w.log).toEqual([]);
+  });
+
+  it("re-checks the folder after the wait: a G that started meanwhile blocks the take", async () => {
+    const { w, deps } = takeWorld({ state: "busy" });
+    w.onTick = (t) => { if (t >= 500) { w.busy = true; w.records.get(PID)!.state = "idle"; } };
+    const r = await takeSession({ pid: PID, sessionId: ID }, deps);
+    expect(r).toMatchObject({ ok: false, status: 409, reason: "Guéridon already has a live session in that folder" });
     expect(w.log).toEqual([]);
   });
 
@@ -197,5 +215,23 @@ describe("releaseSession", () => {
     const { w, deps } = releaseWorld();
     expect(await releaseSession({ sessionId: "../../etc/passwd" }, deps)).toMatchObject({ ok: false, status: 400 });
     expect(w.log).toEqual([]);
+  });
+});
+
+describe("foreignHolder", () => {
+  const recs = [
+    { pid: 10, sessionId: OTHER },
+    { pid: 11, sessionId: ID },   // G itself
+    { pid: 12, sessionId: ID },   // a terminal claude on the same conversation
+  ];
+  it("finds a live claude other than G on the same conversation", () => {
+    expect(foreignHolder(recs, ID, 11, () => true)?.pid).toBe(12);
+  });
+  it("ignores G's own record, other conversations, and dead pids (a stale record)", () => {
+    expect(foreignHolder(recs.slice(0, 2), ID, 11, () => true)).toBeNull();
+    expect(foreignHolder(recs, ID, 11, (pid) => pid !== 12)).toBeNull();
+  });
+  it("with no G yet, any live holder counts", () => {
+    expect(foreignHolder(recs, ID, null, () => true)?.pid).toBe(11);
   });
 });

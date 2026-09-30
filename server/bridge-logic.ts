@@ -881,6 +881,8 @@ export interface RosterEntry {
   /** Local transcript uuid, where the scan could derive one (remote children today) or the
    *  session registry names one (gdn-fusijo — every registered session). */
   sessionUuid?: string;
+  /** Started through bin/baton, so it can be taken into Guéridon and back (gdn-tamose). */
+  baton?: boolean;
   /**
    * Live state from CC's session registry (gdn-fusijo): `waiting` = a dialog is up and the
    * session cannot progress without a human; `busy` = mid-turn; `idle` = at the prompt (or

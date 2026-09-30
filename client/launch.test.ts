@@ -326,20 +326,21 @@ describe("Take a terminal conversation (gdn-tamose)", () => {
   afterEach(() => h.dom.window.close());
   const takeButtons = () => [...h.dom.window.document.querySelectorAll(".run-row .take")] as HTMLButtonElement[];
 
-  it("offers Take only on terminal rows that name their conversation and have a known state", async () => {
+  it("offers Take only on bin/baton terminal rows that name their conversation and have a known state", async () => {
     h.sessions = () => ({ sessions: [
-      { ...row(1, "idle"), sessionUuid: UUID },
-      { ...row(2, "busy"), kind: "vertex-terminal", sessionUuid: UUID },
-      { ...row(3, "idle") },                                        // no uuid
-      { ...row(4, "unknown"), sessionUuid: UUID },                  // no status to wait on
-      { ...row(5, "idle"), kind: "remote", sessionUuid: UUID },     // a phone child
+      { ...row(1, "idle"), sessionUuid: UUID, baton: true },
+      { ...row(2, "busy"), kind: "vertex-terminal", sessionUuid: UUID, baton: true },
+      { ...row(3, "idle"), baton: true },                                    // no uuid
+      { ...row(4, "unknown"), sessionUuid: UUID, baton: true },              // no status to wait on
+      { ...row(5, "idle"), kind: "remote", sessionUuid: UUID, baton: true }, // a phone child
+      { ...row(6, "idle"), sessionUuid: UUID },                              // a bare claude
     ] });
     await up(h.sources[0]);
     expect(takeButtons()).toHaveLength(2);
   });
 
   it("tapping Take posts the pid and conversation, then opens the conversation page on the taken id", async () => {
-    h.sessions = () => ({ sessions: [{ ...row(42, "idle"), sessionUuid: UUID }] });
+    h.sessions = () => ({ sessions: [{ ...row(42, "idle"), sessionUuid: UUID, baton: true }] });
     h.answers.set("/take", [200, { folder: "acme/widgets", sessionId: UUID, waitedMs: 0 }]);
     await up(h.sources[0]);
     takeButtons()[0].click();
@@ -349,7 +350,7 @@ describe("Take a terminal conversation (gdn-tamose)", () => {
   });
 
   it("a refused take says why on the page and stores nothing", async () => {
-    h.sessions = () => ({ sessions: [{ ...row(42, "busy"), sessionUuid: UUID }] });
+    h.sessions = () => ({ sessions: [{ ...row(42, "busy"), sessionUuid: UUID, baton: true }] });
     h.answers.set("/take", [409, { error: "still not idle", state: "busy" }]);
     await up(h.sources[0]);
     takeButtons()[0].click();

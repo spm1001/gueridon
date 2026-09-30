@@ -285,6 +285,18 @@ export async function scanClaudeSessions(): Promise<ClaudeProc[]> {
  * same guard its roster row came from. False on any error (process gone, non-Linux,
  * permissions) — fail closed, so a bad pid never gets signalled.
  */
+/** Parent pid from /proc/<pid>/stat, or null when unreadable. The comm field is parenthesised
+ *  and may contain spaces, so parse after the last ')'. */
+export function ppidOf(pid: number): number | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const ppid = parseInt(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1], 10);
+    return Number.isInteger(ppid) && ppid > 0 ? ppid : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function isLiveClaudePid(pid: number): Promise<boolean> {
   if (!Number.isInteger(pid) || pid <= 1) return false;
   try {

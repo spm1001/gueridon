@@ -523,7 +523,11 @@ async function ssePostPrompt(folderName, text) {
     if (!res.ok) {
       console.error('[bb] POST /prompt failed:', res.status);
       reportError('POST /prompt failed: ' + res.status);
-      return { ok: false };
+      // A 409 is the bridge refusing on purpose (gdn-tamose: the conversation is held by a
+      // terminal claude, or is moving to one) and says why; pass that on to the sender.
+      let error = null;
+      try { error = (await res.json()).error || null; } catch {}
+      return { ok: false, status: res.status, error };
     }
     const data = await res.json();
     return { ok: true, queued: !!data.queued, delivered: !!data.delivered };
@@ -894,6 +898,15 @@ sendBtn.addEventListener('click', () => {
       sendBtn.disabled = true;
       ssePostPrompt(sseCurrentFolder, text).then(result => {
         sendBtn.disabled = false;
+        if (!result.ok && result.status === 409) {
+          // Refused, not lost: take the bubble back, give the text back, say why.
+          bubble.remove();
+          liveState.messages = liveState.messages.filter(m => m._msgId !== msgId);
+          if (userText && !ta.value) ta.value = userText;
+          showStagedError(result.error === 'held by a terminal claude'
+            ? 'Not sent: this conversation is open in a terminal. Take it from the launcher first.'
+            : 'Not sent: ' + (result.error || 'refused'));
+        }
         if (!result.ok) refreshSendButton();
       });
     }

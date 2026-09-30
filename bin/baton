@@ -50,9 +50,9 @@ write_terminal() {
   mkdir -p "$BATON_DIR" && chmod 700 "$BATON_DIR"
   tmp="$f.$$.tmp"
   jq -n --arg id "$id" --arg since "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        --arg cwd "$PWD" --arg pane "${TMUX_PANE:-}" \
+        --arg cwd "$PWD" --arg pane "${TMUX_PANE:-}" --argjson wrapper $$ \
     '{v:1, sessionId:$id, holder:"terminal", since:$since, pid:null, cwd:$cwd,
-      pane:(if $pane == "" then null else $pane end), release:null}' > "$tmp" \
+      pane:(if $pane == "" then null else $pane end), release:null, wrapper:$wrapper}' > "$tmp" \
     && mv "$tmp" "$f"
 }
 
@@ -67,7 +67,19 @@ live_claude() {
   [[ $exe == */claude/versions/* ]]
 }
 
-# release ID — ask the Guéridon holding ID to let go. Returns 0 once it has.
+# taken_since EPOCH — the conversation Guéridon took from THIS wrapper since EPOCH, if any.
+# Matched on the wrapper pid, not the id: /clear and /resume move claude to another id.
+taken_since() {
+  local f
+  for f in "$BATON_DIR"/*.json; do [[ -f $f ]] && echo "$f"; done | tr '\n' '\0' |
+    xargs -0 -r jq -r --argjson w $$ --argjson t "$1" '
+      select(.holder == "gueridon" and .wrapper == $w
+             and ((.since | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) >= $t))
+      | [.since, .sessionId] | @tsv' 2>/dev/null | sort | tail -1 | cut -f2
+}
+
+# release ID — ask the Guéridon holding ID to let go. 0 once it has; 1 when it answered
+# no; 2 when there was no answer at all.
 release() {
   local id=$1 url socket user resp code
   url=$(field "$id" '.release.url'); socket=$(field "$id" '.release.socket'); user=$(field "$id" '.release.user')
@@ -82,7 +94,8 @@ release() {
   resp=$(curl "${args[@]}")
   code=${resp##*$'\n'}
   [[ $code == 200 ]] && return 0
-  say "Guéridon did not let go (HTTP ${code:-none}): ${resp%$'\n'*}"
+  if [[ -z $code || $code == 000 ]]; then say "no answer from Guéridon"; return 2; fi
+  say "Guéridon did not let go (HTTP $code): ${resp%$'\n'*}"
   return 1
 }
 
@@ -91,7 +104,11 @@ acquire() {
   local id=$1 holder pid
   holder=$(field "$id" '.holder')
   [[ $holder == gueridon ]] || return 0
-  release "$id" && return 0
+  local rc=0
+  release "$id" || rc=$?
+  (( rc == 0 )) && return 0
+  # Guéridon answered no: it is alive and holding. Only silence may fall through to the pid.
+  (( rc == 1 )) && die "Guéridon still holds this conversation; not starting a second claude"
   pid=$(field "$id" '.pid')
   if [[ -n $pid ]] && live_claude "$pid"; then
     die "Guéridon's claude (pid $pid) still holds this conversation; not starting a second one"
@@ -132,12 +149,15 @@ placeholder() {
 # run_loop ID ARGS… — start claude (ARGS already carry the id), then placeholder whenever taken
 run_loop() {
   local id=$1; shift
-  local args=("$@") code
+  local args=("$@") code started taken
   while true; do
     acquire "$id" || exit 1
     write_terminal "$id"
+    started=$(date -u +%s)
     "$CLAUDE_BIN" "${args[@]}"; code=$?
-    if [[ $(field "$id" '.holder') != gueridon ]]; then exit "$code"; fi
+    taken=$(taken_since "$((started - 1))")
+    [[ -z $taken ]] && exit "$code"
+    id=$taken
     placeholder "$id" || { say "left in Guéridon: baton wait $id"; exit 0; }
     args=(--resume "$id")
   done

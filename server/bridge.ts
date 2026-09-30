@@ -20,7 +20,7 @@ import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 
 import { spawn as ptySpawn, type IPty } from "node-pty";
-import { scanClaudeSessions, isLiveClaudePid, claudePidAlive } from "./sessions.js";
+import { scanClaudeSessions, isLiveClaudePid, claudePidAlive, pidAlive, ppidOf } from "./sessions.js";
 import { scanRecentSessions, agentsRegistryUuids } from "./session-index.js";
 import { RegistryWatcher } from "./registry-watch.js";
 import { SessionLedger } from "./session-ledger.js";
@@ -70,8 +70,8 @@ import {
   lastPermissionMode,
   type PermissionMode,
 } from "./bridge-logic.js";
-import { batonDir, readBaton, writeBaton, type Baton, type BatonRelease } from "./baton.js";
-import { takeSession, releaseSession } from "./baton-verbs.js";
+import { batonDir, listBatons, readBaton, writeBaton, type Baton, type BatonRelease } from "./baton.js";
+import { takeSession, releaseSession, foreignHolder } from "./baton-verbs.js";
 
 import {
   scanFolders,
@@ -180,8 +180,6 @@ interface Session {
   turnSkippedBytes: number;
   /** The mode the conversation last ran in, from its transcript (gdn-tamose); null = the home's default. */
   permissionMode: PermissionMode | null;
-  /** Taken from a terminal: the baton is Guéridon's, and spawnCC records G's pid on it. */
-  batonHeld: boolean;
   /** A release to the terminal is under way: refuse new prompts so no turn starts before G ends. */
   releasing: boolean;
 }
@@ -476,7 +474,7 @@ function spawnCC(session: Session): void {
     session.id, session.resumable, session.folder, process.env.CC_MODEL,
     readPluginMcpAllowRules(), session.permissionMode,
   );
-  emit({ type: "session:permission-mode", folder: session.folderName, sessionId: session.id, mode: session.permissionMode });
+  emit({ type: "session:permission-mode", folder: session.folderName, sessionId: session.id, mode: session.permissionMode ?? "home-default" });
 
   // Start from process.env, stripping CC internal vars
   const baseEnv = Object.fromEntries(
@@ -523,7 +521,10 @@ function spawnCC(session: Session): void {
   wireProcess(session);
   emit({ type: "session:spawn", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
   persistSessions(sessions.values());
-  if (session.batonHeld) updateBatonPid(session.id, session.process.pid ?? null);
+  // Every G on a conversation whose baton is Guéridon's records its pid, however it was
+  // spawned (a take, a reopen after the grace timer, a restart), so the terminal end can
+  // tell a live holder from a dead one.
+  updateBatonPid(session.id, session.process.pid ?? null);
 
   // Init timeout: if CC doesn't emit an init event within 30s, kill it.
   // This catches hung resumes (observed: 90s stall on third concurrent resume).
@@ -914,8 +915,17 @@ async function onTurnComplete(session: Session): Promise<void> {
 function deliverPrompt(
   session: Session,
   msg: { text?: string; content?: unknown[] },
-): void {
+): boolean {
+  // One conversation, one holder (gdn-tamose). Every path to a turn comes through here (a
+  // prompt, an upload, both auto-resumes), so the guard lives here: no turn while a release
+  // is under way, and no G spawned on a conversation a live terminal claude still holds.
+  if (session.releasing) return false;
   if (!session.process || session.process.exitCode !== null) {
+    const holder = heldElsewhere(session);
+    if (holder) {
+      emit({ type: "session:held-elsewhere", folder: session.folderName, sessionId: session.id, holderPid: holder.pid, pane: holder.pane });
+      return false;
+    }
     spawnCC(session);
   }
 
@@ -957,6 +967,7 @@ function deliverPrompt(
     emit({ type: "process:stdin-error", folder: session.folderName, sessionId: session.id, error: errorDetail(err)});
     // Process will exit shortly — the exit handler broadcasts state with processAlive: false
   }
+  return true;
 }
 
 // -- Kill with escalation --
@@ -1021,6 +1032,13 @@ async function createSession(folderPath: string): Promise<Session> {
     emit({ type: "handoff:stale", folder: folderName, sessionId: latestSession!.id });
   }
 
+  // A conversation taken into Guéridon keeps its place across a bridge restart (gdn-tamose).
+  const heldId = batonHeldIdFor(folderPath);
+  if (heldId && heldId !== latestSession?.id) {
+    emit({ type: "session:resolve", folder: folderName, sessionId: heldId, outcome: "resume" });
+    return createSessionWithId(folderPath, heldId, true);
+  }
+
   const resolution = resolveSessionForFolder(
     null, // no existing bridge session for this folder
     latestSession,
@@ -1059,7 +1077,6 @@ async function createSession(folderPath: string): Promise<Session> {
     lastSentTextLength: 0,
     lastSentMessagesVersion: -1,
     permissionMode: null,
-    batonHeld: false,
     releasing: false,
   };
 
@@ -1224,7 +1241,6 @@ async function createSessionWithId(
     lastSentTextLength: 0,
     lastSentMessagesVersion: -1,
     permissionMode: null,
-    batonHeld: false,
     releasing: false,
   };
 
@@ -1395,13 +1411,34 @@ function updateBatonPid(sessionId: string, pid: number | null): void {
  *  designed answer: that bridge offers no take either. */
 function heldElsewhere(session: Session): { pid: number; pane: string | null } | null {
   if (!registryWatcher) return null;
-  const own = session.process?.pid;
-  for (const rec of registryWatcher.snapshot()) {
-    if (rec.sessionId === session.id && rec.pid !== own && claudePidAlive(rec.pid)) {
-      return { pid: rec.pid, pane: rec.tmuxPane };
+  const rec = foreignHolder(registryWatcher.snapshot(), session.id, session.process?.pid, claudePidAlive);
+  return rec ? { pid: rec.pid, pane: rec.tmuxPane } : null;
+}
+
+/** Wrapper pids of live `bin/baton` processes holding a terminal baton. */
+function liveTerminalWrappers(): Set<number> {
+  const wrappers = new Set<number>();
+  try {
+    for (const b of listBatons(BATON_DIR).batons) {
+      if (b.holder === "terminal" && typeof b.wrapper === "number" && pidAlive(b.wrapper)) wrappers.add(b.wrapper);
     }
+  } catch (err) {
+    emit({ type: "baton:write-error", sessionId: "*", error: errorDetail(err) });
   }
-  return null;
+  return wrappers;
+}
+
+/** The conversation Guéridon holds the baton for in this folder, newest first, so a reopen
+ *  after a restart lands on the taken conversation rather than the folder's latest file. */
+function batonHeldIdFor(folderPath: string): string | null {
+  try {
+    const held = listBatons(BATON_DIR).batons
+      .filter((b) => b.holder === "gueridon" && b.cwd === folderPath)
+      .sort((a, b) => b.since.localeCompare(a.since));
+    return held[0]?.sessionId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** End G for a release: close its stdin (claude -p exits cleanly at EOF), escalate after 10 s,
@@ -1469,13 +1506,23 @@ export async function handleTake(body: string, res: ServerResponse): Promise<voi
       const existing = sessions.get(folder);
       return !!existing?.process && existing.process.exitCode === null;
     },
+    wrapper: (pid) => {
+      const parent = ppidOf(pid);
+      return parent !== null && liveTerminalWrappers().has(parent) ? parent : null;
+    },
     writeBaton: writeBatonLogged,
     release: batonReleaseAddress(),
     resume: async (folder, sessionId) => {
       const existing = sessions.get(folder);
-      if (existing) await tearDownSession(existing);
+      if (existing) {
+        // Pages open on the folder's previous conversation go home rather than silently
+        // sending their next message into the taken one.
+        broadcastToSession(existing, "state", {
+          ...existing.stateBuilder.getState(), status: "idle", processAlive: false, sessionEnded: true,
+        });
+        await tearDownSession(existing);
+      }
       const session = await createSessionWithId(folder, sessionId, true);
-      session.batonHeld = true;
       return { folderName: session.folderName };
     },
   });
@@ -2018,6 +2065,13 @@ const server = createServer((req, res) => {
     // watcher yields an empty map, and every row honestly reads `unknown`.
     const liveByPid = registryWatcher?.byPid() ?? new Map();
     const roster = buildSessionRoster(procs, rcByPid, vertexByPid, SCAN_ROOT, homedir(), EXTRA_FOLDERS, liveByPid);
+    // A terminal claude whose parent is a live bin/baton holding a terminal baton can be
+    // taken (gdn-tamose); the launcher offers Take on these rows only.
+    const wrappers = liveTerminalWrappers();
+    if (wrappers.size) for (const r of roster) {
+      const parent = ppidOf(r.pid);
+      if (parent !== null && wrappers.has(parent)) r.baton = true;
+    }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ sessions: roster }));
     return;

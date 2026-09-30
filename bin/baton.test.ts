@@ -14,6 +14,7 @@ import { readBaton, writeBaton } from "../server/baton.js";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "baton");
 const ID = "0c6f6a8e-2d4b-4a57-9d51-3f1f5f0b7a11";
+const ID2 = "9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
 
 // A claude that logs its args; on its first run it waits for the test to "take" it (the test
 // writes Guéridon's baton, then touches `go`), and exits 143 as claude does on SIGTERM.
@@ -38,7 +39,9 @@ async function until(pred: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
-async function setup(releaseStatus: number) {
+/** Start `baton run --session-id ID` against a fake claude, then have "Guéridon" take the
+ *  conversation `takeId` (ID2 = the terminal had moved to another id with /clear). */
+async function setup(releaseStatus: number, takeId = ID) {
   const dir = mkdtempSync(join(tmpdir(), "baton-sh-"));
   const bdir = join(dir, "batons");
   const log = join(dir, "claude.log");
@@ -52,7 +55,7 @@ async function setup(releaseStatus: number) {
     req.on("end", () => {
       releases.push({ url: req.url!, body });
       // The real bridge hands the baton back before it answers 200.
-      if (releaseStatus === 200) writeBaton(bdir, { ...readBaton(bdir, ID)!, holder: "terminal", release: null, pid: null });
+      if (releaseStatus === 200) writeBaton(bdir, { ...readBaton(bdir, takeId)!, holder: "terminal", release: null, pid: null });
       res.writeHead(releaseStatus).end(JSON.stringify(releaseStatus === 200 ? { ended: true } : { error: "Guéridon is still mid-reply" }));
     });
   });
@@ -67,15 +70,16 @@ async function setup(releaseStatus: number) {
   const exited = new Promise<number | null>((r) => child!.on("exit", (code) => r(code)));
   // claude is running: the terminal holds the baton
   await until(() => existsSync(log));
-  expect(readBaton(bdir, ID)).toMatchObject({ holder: "terminal", pane: "%9" });
-  // Guéridon takes it: baton first, then the signal (here, `go`)
+  expect(readBaton(bdir, ID)).toMatchObject({ holder: "terminal", pane: "%9", wrapper: child.pid });
+  // Guéridon takes it: baton first (naming the wrapper it found as claude's parent), then
+  // the signal (here, `go`)
   writeBaton(bdir, {
-    v: 1, sessionId: ID, holder: "gueridon", since: new Date().toISOString(), pid: null,
-    cwd: dir, pane: "%9", release: { url: `http://127.0.0.1:${port}` }, takenFrom: 1234,
+    v: 1, sessionId: takeId, holder: "gueridon", since: new Date().toISOString(), pid: null,
+    cwd: dir, pane: "%9", release: { url: `http://127.0.0.1:${port}` }, takenFrom: 1234, wrapper: child.pid!,
   });
   writeFileSync(go, "");
   await until(() => stderr.includes("In Guéridon since"));
-  return { bdir, log, releases, exited, stderr: () => stderr };
+  return { bdir, log, releases, exited, stderr: () => stderr, port };
 }
 
 describe("bin/baton", () => {
@@ -99,6 +103,44 @@ describe("bin/baton", () => {
     expect(await t.exited).toBe(0);
     expect(readFileSync(t.log, "utf-8").trim().split("\n")).toEqual([`--session-id ${ID}`]);
     expect(readBaton(t.bdir, ID)).toMatchObject({ holder: "gueridon" });
+  });
+
+  it("follows the conversation when the terminal had moved to another id (/clear) before the take", async () => {
+    const t = await setup(200, ID2);
+    child!.stdin!.write("R");
+    expect(await t.exited).toBe(0);
+    expect(readFileSync(t.log, "utf-8").trim().split("\n")).toEqual([`--session-id ${ID}`, `--resume ${ID2}`]);
+    expect(t.releases.map((r) => r.url)).toEqual([`/release/${ID2}`]);
+  });
+
+  it("refuses to start claude when Guéridon answers that it still holds the conversation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "baton-sh-"));
+    const bdir = join(dir, "b");
+    const log = join(dir, "claude.log");
+    const fake = join(dir, "claude");
+    writeFileSync(fake, FAKE_CLAUDE); chmodSync(fake, 0o755);
+    server = createServer((_req, res) => res.writeHead(409).end('{"error":"Guéridon is still mid-reply"}'));
+    await new Promise<void>((r) => server!.listen(0, "127.0.0.1", () => r()));
+    const port = (server.address() as { port: number }).port;
+    // pid null: the case where a stale baton pid used to let the script take anyway
+    writeBaton(bdir, { v: 1, sessionId: ID, holder: "gueridon", since: new Date().toISOString(), pid: null, cwd: dir, pane: null, release: { url: `http://127.0.0.1:${port}` } });
+    const p = spawn("bash", [SCRIPT, "run", "--resume", ID], { env: { ...process.env, BATON_DIR: bdir, BATON_CLAUDE: fake, LOG: log, GO: join(dir, "go") }, stdio: "ignore" });
+    expect(await new Promise((r) => p.on("exit", r))).toBe(1);
+    expect(existsSync(log)).toBe(false);
+    expect(readBaton(bdir, ID)).toMatchObject({ holder: "gueridon" });
+  });
+
+  it("takes a conversation whose Guéridon is gone (no answer) and holds no live claude", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "baton-sh-"));
+    const bdir = join(dir, "b");
+    const fake = join(dir, "claude");
+    writeFileSync(fake, "#!/usr/bin/env bash\necho \"$*\" > \"$LOG\"\n"); chmodSync(fake, 0o755);
+    writeBaton(bdir, { v: 1, sessionId: ID, holder: "gueridon", since: new Date().toISOString(), pid: 999999, cwd: dir, pane: null, release: { url: "http://127.0.0.1:9" } });
+    const log = join(dir, "claude.log");
+    const p = spawn("bash", [SCRIPT, "run", "--resume", ID], { env: { ...process.env, BATON_DIR: bdir, BATON_CLAUDE: fake, LOG: log }, stdio: "ignore" });
+    expect(await new Promise((r) => p.on("exit", r))).toBe(0);
+    expect(readFileSync(log, "utf-8").trim()).toBe(`--resume ${ID}`);
+    expect(readBaton(bdir, ID)).toMatchObject({ holder: "terminal" });
   });
 
   it("a claude that simply exits (not taken) ends the script with claude's exit code", async () => {

@@ -12,7 +12,7 @@
  * contract between them, and `bin/baton.test.ts` binds the bash reader to it.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type BatonHolder = "gueridon" | "terminal";
@@ -40,6 +40,11 @@ export interface Baton {
   release: BatonRelease | null;
   /** The terminal claude's pid a take stopped, for the record. */
   takenFrom?: number | null;
+  /** pid of the `bin/baton` process that runs the terminal end, when there is one. Its claude
+   *  is its direct child, so a take finds "is this terminal claude wrapped?" by parent pid, and
+   *  the wrapper finds "was my claude taken?" by this field, whatever conversation id the
+   *  claude had moved to by then (/clear and /resume change it under the same pid). */
+  wrapper?: number | null;
 }
 
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -73,6 +78,31 @@ export function readBaton(dir: string, sessionId: string): Baton | null {
     throw new Error(`malformed baton for ${sessionId}`);
   }
   return b;
+}
+
+/** Every readable baton in the directory. A file that does not parse is skipped and named in
+ *  `broken`, so one bad writer never hides the rest. */
+export function listBatons(dir: string): { batons: Baton[]; broken: string[] } {
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { batons: [], broken: [] };
+    throw err;
+  }
+  const batons: Baton[] = [];
+  const broken: string[] = [];
+  for (const name of names) {
+    const m = /^(.+)\.json$/.exec(name);
+    if (!m || !isSessionId(m[1])) continue;
+    try {
+      const b = readBaton(dir, m[1]);
+      if (b) batons.push(b);
+    } catch {
+      broken.push(name);
+    }
+  }
+  return { batons, broken };
 }
 
 export function writeBaton(dir: string, baton: Baton): void {

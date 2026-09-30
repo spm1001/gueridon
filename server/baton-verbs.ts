@@ -39,8 +39,13 @@ export interface TakeDeps {
   now(): number;
   /** The absolute folder Guéridon would serve this cwd as, or null when it serves none. */
   resolveFolder(cwd: string): string | null;
-  /** True when Guéridon already drives a live G in this folder on another conversation. */
+  /** True when Guéridon already drives a live G in this folder. */
   folderBusy(folder: string, sessionId: string): boolean;
+  /** The `bin/baton` wrapper running this terminal claude (its parent, holding a terminal
+   *  baton), or null when the claude was started some other way. Only a wrapped terminal can
+   *  be taken: nothing else in that window would take the conversation back, and a bare
+   *  shell's `claude --resume` hint invites a second writer. */
+  wrapper(pid: number): number | null;
   writeBaton(b: Baton): void;
   release: BatonRelease;
   /** Open the conversation in Guéridon (G spawns lazily, on the first prompt). */
@@ -78,6 +83,10 @@ export async function takeSession(
   if (deps.folderBusy(folder, sessionId)) {
     return { ok: false, status: 409, reason: "Guéridon already has a live session in that folder" };
   }
+  const wrapper = deps.wrapper(pid);
+  if (wrapper === null) {
+    return { ok: false, status: 409, reason: "that terminal was not started through bin/baton, so nothing there could take it back" };
+  }
 
   // Wait for idle. A record that vanishes, or a pid that dies, means the terminal let go on
   // its own: nothing left to stop, so carry on to the resume.
@@ -97,10 +106,14 @@ export async function takeSession(
     await deps.sleep(pollMs);
   }
   const waitedMs = deps.now() - started;
+  // The wait can be long: a G may have started in the folder meanwhile.
+  if (deps.folderBusy(folder, sessionId)) {
+    return { ok: false, status: 409, reason: "Guéridon already has a live session in that folder" };
+  }
 
   deps.writeBaton({
     v: 1, sessionId, holder: "gueridon", since: new Date(deps.now()).toISOString(),
-    pid: null, cwd: rec.cwd, pane: rec.tmuxPane, release: deps.release, takenFrom: pid,
+    pid: null, cwd: rec.cwd, pane: rec.tmuxPane, release: deps.release, takenFrom: pid, wrapper,
   });
 
   if (!gone) {
@@ -127,6 +140,17 @@ async function waitForDeath(
     await deps.sleep(pollMs);
   }
   return true;
+}
+
+/** A live claude OTHER than `ownPid` that the registry says holds `sessionId`: the guard that
+ *  keeps Guéridon from spawning G on a conversation a terminal is still writing. */
+export function foreignHolder<R extends { pid: number; sessionId: string | null }>(
+  records: Iterable<R>, sessionId: string, ownPid: number | null | undefined, alive: (pid: number) => boolean,
+): R | null {
+  for (const rec of records) {
+    if (rec.sessionId === sessionId && rec.pid !== ownPid && alive(rec.pid)) return rec;
+  }
+  return null;
 }
 
 /** The slice of a Guéridon session the release reads, plus how to end it. */
@@ -177,6 +201,7 @@ export async function releaseSession(
   deps.writeBaton({
     v: 1, sessionId, holder: "terminal", since: new Date(deps.now()).toISOString(),
     pid: null, cwd: s?.cwd ?? prev?.cwd ?? null, pane: pane ?? prev?.pane ?? null, release: null,
+    wrapper: prev?.wrapper ?? null,
   });
   return { ok: true, ended: !!s };
 }

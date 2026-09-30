@@ -388,9 +388,10 @@
           row.appendChild(open);
         }
         // Take (gdn-tamose): move a terminal conversation into Guéridon. The bridge waits for
-        // the terminal claude to be idle, stops it, and resumes the same conversation here;
-        // a window started through bin/baton then shows "press R to take it back".
-        if ((s.kind === "local" || s.kind === "vertex-terminal") && s.sessionUuid && s.state !== "unknown") {
+        // the terminal claude to be idle, stops it, and resumes the same conversation here.
+        // Offered only where the bridge says the claude runs under bin/baton (s.baton): that
+        // window then shows "press R to take it back"; a bare claude would drop to a shell.
+        if (s.baton && (s.kind === "local" || s.kind === "vertex-terminal") && s.sessionUuid && s.state !== "unknown") {
           const take = document.createElement("button");
           take.className = "mini take";
           if (takingPid === s.pid) { take.disabled = true; take.textContent = "Taking…"; }
