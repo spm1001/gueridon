@@ -34,6 +34,8 @@ phone → launcher (/) ──┤
 > started — servers went live for `infra` and `gueridon` on 2026-08-03** (gdn-sudacu step 3), so
 > gdn-sudacu's decision is due once they have been used in anger.
 
+**A conversation can move between a tmux window and the Vertex lane** (take from the launcher, R in the window): see **Session baton** below, and **Test rig** for the harness that drives both surfaces at once.
+
 **Route by billing intent BEFORE spawning — never detect-and-fallback.** A Vertex `--remote-control` spawn comes up *silently inert* (no attach URL, no error), so "spawn RC, fall back to streaming" would only ever hang. The launcher's two buttons make the choice explicit per launch. Mechanism + the matched-pair spike that proved it: `.bon/understanding.md` → **Billing lanes**.
 
 **UPDATE 2026-09-27 (Sameer): maintenance mode is lifted — "we're going to need it for Atelier".** The launcher's live roster (gdn-jojino) was the first build under the lift; whether it covers the whole stream-json lane or only the launcher side is still his to say (parked on gdn-wenava), so treat the line below as the record of what held until then, not as current doctrine. The Vertex/streaming lane is in **maintenance mode** — nips and tucks fine (e.g. `gdn-hodoco`, `gdn-muluwo`), but no major new feature-building on the drift-prone stream-json layer; retire it only on felt pain (a CC version breaks the parser, or Vertex-on-mobile stops mattering). The bridge protocol is deliberately client-agnostic — rendering is the client's problem (see `docs/kube-brain-mac-body.md`).
@@ -43,7 +45,7 @@ phone → launcher (/) ──┤
 ```bash
 npm start                    # Start bridge on port 3001
 BRIDGE_PORT=3002 npm start   # Override port
-npm test                     # Run all tests (~908 incl. the local-only integration file; CI runs ~842, ~10s)
+npm test                     # Run all tests (~957 incl. the local-only integration file; CI excludes that file, ~10s)
 npm run test:watch           # Watch mode
 ```
 
@@ -232,7 +234,7 @@ Slice 1 (built 2026-09-30, on branch `baton-slice1`) measured end to end on tube
 
 ## Test rig — `scripts/rig.ts` (both surfaces at once)
 
-`npx tsx scripts/rig.ts up` starts a private dev bridge (port 3013, its own `GUERIDON_STATE_DIR`, serving only the scratch repo `~/.local/state/gueridon-rig/rigbox` via `EXTRA_FOLDERS`), a tmux session `rig` (windows `bridge`, `term`, `watchdog`) and one phone tab in passe's Chrome emulating an iPhone 14 Pro at 393 px. `loop a` (terminal → Guéridon → terminal) and `loop b` (Guéridon → terminal → Guéridon → terminal) run the whole baton cycle with PASS/FAIL checks, pushing a Markdown table and code, an AskUserQuestion answered by tapping, a file staged through the page's own file input, a shell tool turn, a task list and a refused phone prompt through the moves. `report` writes checks, steps, the watchdog's holder timeline and screenshots to `~/scratch/gueridon-rig/`; `down` stops everything. Single verbs (`phone take <id>`, `phone say …`, `term say …`, `term key R`, `status`, `reset`) drive it by hand. Runs on Haiku (`RIG_MODEL`).
+`npx tsx scripts/rig.ts up` starts a private dev bridge (port 3013, its own `GUERIDON_STATE_DIR`, serving only the scratch repo `~/.local/state/gueridon-rig/rigbox` via `EXTRA_FOLDERS`), a tmux session `rig` (windows `bridge`, `term`, `watchdog`) and one phone tab in passe's Chrome emulating an iPhone 14 Pro at 393 px. `loop a` (terminal → Guéridon → terminal) and `loop b` (Guéridon → terminal → Guéridon → terminal) run the whole baton cycle with PASS/FAIL checks, pushing a Markdown table and code, an AskUserQuestion answered by tapping, a file staged through the page's own file input, a shell tool turn, a task list and a refused phone prompt through the moves. `report` writes checks, steps, the watchdog's holder timeline and screenshots to `~/scratch/gueridon-rig/`; `down` stops everything and moves the rig's transcripts out of `~/.claude/projects` into the run folder (left in place they flooded the live launcher's RECENT band). Single verbs (`phone take <id>`, `phone say …`, `term say …`, `term key R`, `status`, `reset`) drive it by hand. Runs on Haiku (`RIG_MODEL`).
 
 - **Picks by id, reads state, waits on the registry.** Launcher rows carry `data-pid` / `data-session`, so a take can only hit the conversation named; the page is read from `liveState`, never screen text; terminal waits are on Claude Code's own registry status. The watchdog polls the registry every 100 ms and writes a `VIOLATION` line if two live claudes ever share a conversation in the rig folder.
 - **passe quirks it absorbs:** step lines come on stderr; eval results are Python-rendered (`True`/`False`/`None`); one eval gets 15 s, so waits run in 10 s slices; an eval started before a navigation dies with its page, so navigation waits probe repeatedly and report the last error on timeout.

@@ -27,7 +27,7 @@
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, appendFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync, appendFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -438,6 +438,14 @@ function down(): void {
   const t0 = Date.now();
   while (portOpen() && Date.now() - t0 < 8_000) spawnSync("sleep", ["0.3"]);
   sh("tmux", ["kill-session", "-t", TMUX], { allowFail: true });
+  // Move the rig's conversations out of ~/.claude/projects: left there, they flood the live
+  // launcher's RECENT band ("Remember the word PAMPLEMOUSSE" fifteen times). Moved, not deleted,
+  // so a run's evidence stays readable under the run folder.
+  if (existsSync(PROJECT_DIR)) {
+    const dest = join(RUN, `transcripts-${now().replace(/[:.]/g, "-")}`);
+    renameSync(PROJECT_DIR, dest);
+    log(`down: rig transcripts moved to ${dest}`);
+  }
   log(`down: port ${PORT} ${portOpen() ? "STILL OPEN" : "closed"}`);
 }
 
