@@ -102,6 +102,10 @@ function records(): Rec[] {
   return out;
 }
 
+/** At the prompt: Claude Code writes `idle`, or `shell` while a background shell runs (the
+ *  turn is over either way). `busy` and `waiting` are not; no status is not either. */
+const atPrompt = (r?: Rec) => !!r && r.status !== null && r.status !== "busy" && r.status !== "waiting";
+
 function termPane(): string {
   return tmux("display-message", "-p", "-t", `${TMUX}:term`, "#{pane_id}").trim();
 }
@@ -220,6 +224,28 @@ const phone = {
     log(`phone: said ${JSON.stringify(text)} → ${JSON.stringify(reply.slice(0, 200))}`);
     return reply;
   },
+  /** Type and send without waiting for the reply. */
+  send(text: string): void {
+    phoneEval(`(() => { const ta = document.querySelector('.input-field'); ta.value = ${JSON.stringify(text)}; ta.dispatchEvent(new Event('input', {bubbles: true})); document.getElementById('sendBtn').click(); return 1; })()`);
+    log(`phone: sent ${JSON.stringify(text)}`);
+  },
+  /** Tap the row's button again without reloading (it reads "Take anyway" after a shell refusal). */
+  async takeAgain(sessionId: string): Promise<void> {
+    await phoneWaitNav(`(document.querySelector('.run-row[data-session="${sessionId}"] .take') || {}).textContent === 'Take anyway'`, 15_000);
+    phoneEval(`(() => { document.querySelector('.run-row[data-session="${sessionId}"] .take').click(); return 1; })()`);
+    await phoneWaitNav(CONNECTED, 150_000);
+    log(`phone: took ${sessionId} anyway`);
+  },
+  /** Tap Take and expect the bridge to refuse: returns the launcher's note. */
+  async takeRefused(sessionId: string, timeoutMs = 60_000): Promise<string> {
+    passe(`goto ${BASE}/launch.html\nwait 1.5`);
+    await phoneWaitNav(`!!document.querySelector('.run-row[data-session="${sessionId}"] .take')`, 30_000);
+    phoneEval(`(() => { document.querySelector('.run-row[data-session="${sessionId}"] .take').click(); return 1; })()`);
+    await phoneWaitNav(`document.getElementById('note').className.includes('warn')`, timeoutMs);
+    const note = phoneEval<string>(`JSON.stringify(document.getElementById('note').textContent)`);
+    log(`phone: take refused → ${note}`);
+    return note;
+  },
   lastReply(): string {
     return phoneEval<string>(`JSON.stringify((() => { const m = [...liveState.messages].reverse().find(m => m.role === 'assistant'); if (!m) return ''; return typeof m.content === 'string' ? m.content : (m.content || []).filter(b => b.type === 'text').map(b => b.text).join(' '); })())`);
   },
@@ -276,7 +302,7 @@ const term = {
     tmux("send-keys", "-t", `${TMUX}:term`, "Enter");
     await answerTrust();
     const rec = await until("the terminal claude's registry record", () => termRecord(), 45_000);
-    await until("the terminal claude to be idle", () => termRecord()?.status === "idle", 45_000);
+    await until("the terminal claude to be idle", () => atPrompt(termRecord()), 45_000);
     log(`term: claude up, pid ${rec.pid}, conversation ${rec.sessionId}`);
     return rec.sessionId!;
   },
@@ -294,15 +320,28 @@ const term = {
     tmux("send-keys", "-t", `${TMUX}:term`, "-l", text);
     await sleep(400);
     tmux("send-keys", "-t", `${TMUX}:term`, "Enter");
-    const busy = () => { const r = termRecord(); return r && r.status !== "idle" && (r.statusUpdatedAt ?? 0) >= t0 - 500; };
+    const busy = () => { const r = termRecord(); return r && !atPrompt(r) && (r.statusUpdatedAt ?? 0) >= t0 - 500; };
     try { await until("busy", busy, 2_500, 100); } catch {
       tmux("send-keys", "-t", `${TMUX}:term`, "Enter");
       await until("busy after a second Enter", busy, 5_000, 100);
     }
-    await until("idle again", () => { const r = termRecord(); return r && r.status === "idle" && (r.statusUpdatedAt ?? 0) > t0; }, timeoutMs);
+    await until("idle again", () => { const r = termRecord(); return r && atPrompt(r) && (r.statusUpdatedAt ?? 0) > t0; }, timeoutMs);
     const reply = term.lastReply();
     log(`term: said ${JSON.stringify(text)} (pid ${rec0.pid}) → ${JSON.stringify(reply.slice(0, 200))}`);
     return reply;
+  },
+  /** Type and submit without waiting for the reply; returns once the claude is busy. */
+  async send(text: string): Promise<void> {
+    const t0 = Date.now();
+    tmux("send-keys", "-t", `${TMUX}:term`, "-l", text);
+    await sleep(400);
+    tmux("send-keys", "-t", `${TMUX}:term`, "Enter");
+    const busy = () => { const r = termRecord(); return r && !atPrompt(r) && (r.statusUpdatedAt ?? 0) >= t0 - 500; };
+    try { await until("busy", busy, 2_500, 100); } catch {
+      tmux("send-keys", "-t", `${TMUX}:term`, "Enter");
+      await until("busy after a second Enter", busy, 5_000, 100);
+    }
+    log(`term: sent ${JSON.stringify(text)} (now ${termRecord()?.status})`);
   },
   /** /exit the terminal claude; bin/baton then exits and the window is back at its shell. */
   async exit(): Promise<void> {
@@ -377,7 +416,7 @@ async function up(): Promise<void> {
   tmux("new-session", "-d", "-s", TMUX, "-n", "bridge", "-c", REPO);
   const env = [
     `GUERIDON_STATE_DIR=${STATE}`, `BRIDGE_PORT=${PORT}`, `SCAN_ROOT=${join(ROOT, "no-scan")}`,
-    `EXTRA_FOLDERS=${BOX}`, "GUERIDON_ENABLE_ROSTER=1", `CC_MODEL=${MODEL}`,
+    `EXTRA_FOLDERS=${BOX}`, "GUERIDON_ENABLE_ROSTER=1", `CC_MODEL=${MODEL}`, "GUERIDON_TAKE_IDLE_MS=25000",
   ].join(" ");
   tmux("send-keys", "-t", `${TMUX}:bridge`, "-l", `${env} npx tsx server/bridge.ts > ${join(RUN, "bridge.log")} 2>&1`);
   tmux("send-keys", "-t", `${TMUX}:bridge`, "Enter");
@@ -516,7 +555,7 @@ async function loopA(): Promise<void> {
 
   // A message from the phone is refused once the terminal has it back.
   term.key("R");
-  await until("the terminal claude back", () => termRecord()?.status === "idle", 60_000);
+  await until("the terminal claude back", () => atPrompt(termRecord()), 60_000);
   check("A7 R hands it back to the terminal", true);
   const r5 = await term.say("What secret number did the file say, and which colour did I pick? One line.");
   check("A8 terminal sees the Guéridon turns", /4417/.test(r5) && /green/i.test(r5), r5);
@@ -541,7 +580,7 @@ async function loopB(): Promise<void> {
   await term.screenHas(/press R to take it back/, 15_000);
   check("B2 the terminal's placeholder sees Guéridon holding it", true);
   term.key("R");
-  await until("the terminal claude on the conversation", () => { const r = termRecord(); return r?.sessionId === id && r.status === "idle"; }, 90_000);
+  await until("the terminal claude on the conversation", () => { const r = termRecord(); return r?.sessionId === id && atPrompt(r); }, 90_000);
   check("B3 R takes it into the terminal", true);
   const pageAfter = phoneEval<{ hash: string }>(`JSON.stringify({ hash: location.hash })`);
   check("B4 the phone page was sent home", pageAfter.hash !== "#rigbox", JSON.stringify(pageAfter));
@@ -556,11 +595,173 @@ async function loopB(): Promise<void> {
   check("B7 Guéridon sees the terminal's tool turn", /rig-42/.test(r3), r3);
   phone.shot("b-back-in-gueridon");
   term.key("R");
-  await until("the terminal claude back", () => termRecord()?.sessionId === id && termRecord()?.status === "idle", 60_000);
+  await until("the terminal claude back", () => termRecord()?.sessionId === id && atPrompt(termRecord()), 60_000);
   const r4 = await term.say("Which fruit word and which tea steps came up earlier? One line.");
   check("B8a terminal still has the whole conversation", /mango/i.test(r4) && /boil|steep/i.test(r4), r4);
   check("B8 surfaces sdk-cli → cli → sdk-cli → cli", surfaces(id).join(" → ") === "sdk-cli → cli → sdk-cli → cli", surfaces(id).join(" → "));
   check("B9 watchdog saw no two writers", violations().length === 0, violations().join("; "));
+}
+
+// ---------- the hard cases (gdn-cefuda) ----------
+
+function bridgeEvents(type: string): Record<string, unknown>[] {
+  try {
+    return readFileSync(join(RUN, "bridge.log"), "utf-8").split("\n")
+      .filter((l) => l.includes(`"type":"${type}"`)).map((l) => JSON.parse(l));
+  } catch { return []; }
+}
+
+/** Every assistant text block in a conversation's transcript, in order. */
+function assistantTexts(sessionId: string): string[] {
+  const f = join(PROJECT_DIR, `${sessionId}.jsonl`);
+  if (!existsSync(f)) return [];
+  const out: string[] = [];
+  for (const line of readFileSync(f, "utf-8").split("\n")) {
+    try {
+      const e = JSON.parse(line);
+      if (e.type !== "assistant") continue;
+      for (const b of e.message?.content ?? []) if (b.type === "text" && b.text) out.push(b.text);
+    } catch { /* torn */ }
+  }
+  return out;
+}
+
+async function backToTerminal(id: string): Promise<void> {
+  term.key("R");
+  await until("the terminal claude back", () => { const r = termRecord(); return r?.sessionId === id && atPrompt(r); }, 120_000);
+}
+
+/** C1 take mid-reply, and C2 a release while a phone message is queued. */
+async function hardC1C2(): Promise<void> {
+  await reset();
+  log("=== C1: take while the terminal is mid-reply ===");
+  const id = await term.start();
+  await term.say("Remember the word BANANA. Reply with just: noted.");
+  await term.send("Run the shell command `sleep 12; echo done-c1` and then tell me its output. Just the output.");
+  const takes0 = bridgeEvents("baton:take").length;
+  await phone.take(id);
+  const take = bridgeEvents("baton:take").slice(takes0).pop() ?? {};
+  check("C1a the take waited for the reply to finish", Number(take.waitedMs) >= 5_000, `waitedMs=${take.waitedMs}`);
+  check("C1b the terminal's reply finished before the stop", assistantTexts(id).some((t) => /done-c1/.test(t)), assistantTexts(id).slice(-1).join(""));
+  const r1 = phone.say("What did the shell command print? Just the output.");
+  check("C1c Guéridon has the finished turn", /done-c1/.test(r1), r1);
+
+  log("=== C2: release while a phone message is queued behind a running turn ===");
+  phone.send("Run the shell command `sleep 8; echo first-c2` and tell me its output. Just the output.");
+  phoneWait(`liveState.status !== 'idle'`, 20_000);
+  phone.send("Now reply with exactly: QUEUED-TWO");
+  await sleep(500);
+  const rel0 = Date.now();
+  await backToTerminal(id);
+  log(`C2: release took ${Date.now() - rel0} ms`);
+  const texts = assistantTexts(id);
+  // Measured 2026-09-30 on 2.1.285: CC does not queue a mid-turn message as a turn of its own;
+  // it folds it into the running turn (queue-operation enqueue → remove), and the model then
+  // answers the newest message. So "finished" means the command ran, not that it was reported.
+  const raw = readFileSync(join(PROJECT_DIR, `${id}.jsonl`), "utf-8");
+  check("C2a the running phone turn finished (its command ran)", /first-c2/.test(raw), "");
+  check("C2b the queued phone message was answered, not cut off", texts.some((t) => /QUEUED-TWO/.test(t)), texts.slice(-2).join(" | "));
+  const r2 = await term.say("List every reply you gave me since BANANA, one per line, nothing else.");
+  log(`C2: terminal's view of the history → ${JSON.stringify(r2)}`);
+  check("C2c no two writers", violations().length === 0, violations().join("; "));
+}
+
+/** C3 a background shell running at a take. */
+async function hardC3(): Promise<void> {
+  await reset();
+  log("=== C3: background shell running at the take ===");
+  const id = await term.start();
+  await term.say("Use the Bash tool with run_in_background set to true to run `sleep 300; echo bg-finished`. Then reply with just: started.");
+  const rec = termRecord();
+  log(`C3: terminal registry status with the background shell: ${rec?.status}`);
+  const bgBefore = sh("pgrep", ["-f", "^sleep 300$"], { allowFail: true }).trim();
+  check("C3a the background shell is running before the take", bgBefore !== "", `pids ${bgBefore || "none"}`);
+  const note = await phone.takeRefused(id, 30_000);
+  check("C3b0 the take stops and says a background shell would end", /background shell/i.test(note), note);
+  check("C3b1 the refused take left the terminal and its shell alone", !!termRecord() && sh("pgrep", ["-f", "^sleep 300$"], { allowFail: true }).trim() !== "", "");
+  await phone.takeAgain(id);
+  await sleep(1_000);
+  const bgAfter = sh("pgrep", ["-f", "^sleep 300$"], { allowFail: true }).trim();
+  log(`C3: background sleep after the take: ${bgAfter || "gone"}`);
+  const r = phone.say("Earlier you started a background shell task (sleep 300). Is it still running? Check with your tools, then answer in one line.");
+  log(`C3: Guéridon's claude on the background task → ${JSON.stringify(r)}`);
+  check("C3b the registry named the background shell before the take (status 'shell')", rec?.status === "shell", `status=${rec?.status}`);
+  check("C3c Take anyway ends the terminal's background shell, as the warning said", bgAfter === "", bgAfter);
+  // Only the pids this scenario saw start, never a pattern kill.
+  for (const pid of bgAfter.split(/\s+/).filter((p) => bgBefore.split(/\s+/).includes(p))) {
+    try { process.kill(parseInt(pid, 10), "SIGTERM"); } catch { /* gone */ }
+  }
+  await backToTerminal(id);
+}
+
+/** C4 a permission prompt waiting at a take, and C5 a slash command on the phone after a move. */
+async function hardC4C5(): Promise<void> {
+  await reset();
+  log("=== C4: a permission dialog is up when the take is asked for ===");
+  // An `ask` rule forces a dialog for one harmless command: the home allows all of Bash, Read,
+  // Write and Edit, and denies WebFetch/TodoWrite/NotebookEdit outright, so no built-in tool asks.
+  const id = await term.start(["--permission-mode", "default", "--settings", `'{"permissions":{"ask":["Bash(echo rig-ask*)"]}}'`]);
+  await term.say("Remember the word CHERRY. Reply with just: noted.");
+  await term.send("Run the shell command `echo rig-ask-c4` with the Bash tool and tell me its output.");
+  await until("the permission dialog (registry status waiting)", () => termRecord()?.status === "waiting", 60_000);
+  const note = await phone.takeRefused(id, 60_000);
+  check("C4a a take refuses while the permission dialog waits, and says why", /dialog is waiting in the terminal/i.test(note), note);
+  check("C4b the terminal claude is untouched by the refused take", termRecord()?.sessionId === id, `status=${termRecord()?.status}`);
+  term.key("Escape");
+  await until("idle after declining", () => atPrompt(termRecord()), 30_000);
+  await phone.take(id);
+  const gArgs = () => { const g = records().find((r) => r.entrypoint === "sdk-cli"); return g ? readFileSync(`/proc/${g.pid}/cmdline`, "utf-8").split("\0") : []; };
+  const r1 = phone.say("What word did I ask you to remember? One word.");
+  check("C4c Guéridon has the conversation", /cherry/i.test(r1), r1);
+  const args = gArgs();
+  const mode = args[args.indexOf("--permission-mode") + 1];
+  check("C4d G inherited the conversation's mode (default)", mode === "default", `--permission-mode ${args.includes("--permission-mode") ? mode : "(none)"}`);
+  const r2 = phone.say("Earlier the command `echo rig-ask-c4` was declined. Run it again now with the Bash tool and tell me its output, or say exactly what stopped you.");
+  log(`C4: G's retry of the declined tool → ${JSON.stringify(r2)}`);
+  check("C4e G answers about the declined tool instead of hanging on a dialog it cannot show", r2.length > 0, r2);
+
+  log("=== C5: a slash command on the phone after the move ===");
+  const before = phoneEval<number>(`liveState.messages.length`);
+  phone.send("/context");
+  await sleep(8_000);
+  const after = phone.read() as { messages: { role: string; text: string }[] };
+  log(`C5: after /context the page shows → ${JSON.stringify(after.messages.slice(-2)).slice(0, 400)}`);
+  const shown = JSON.stringify(after.messages.slice(-2));
+  check("C5 /context on the phone shows its output", phoneEval<number>(`liveState.messages.length`) > before && /Context Usage|Tokens:/i.test(shown), shown.slice(0, 200));
+  phone.shot("c5-context");
+  await backToTerminal(id);
+  try { sh("rm", ["-f", join(BOX, "perm-test.txt")]); } catch { /* fine */ }
+}
+
+/** C6 a longer conversation across three moves: every fact survives, the page's history
+ *  matches the transcript, and the context gauge reads after replay. */
+async function hardC6(): Promise<void> {
+  await reset();
+  log("=== C6: eight facts across three moves ===");
+  const facts = ["ALPHA-11", "BRAVO-22", "CHARLIE-33", "DELTA-44", "ECHO-55", "FOXTROT-66", "GOLF-77", "HOTEL-88"];
+  const tell = (i: number) => `Fact ${i + 1} is ${facts[i]}. Reply with just: ok.`;
+  const id = await term.start();
+  await term.say(tell(0)); await term.say(tell(1));
+  await phone.take(id);
+  phone.say(tell(2)); phone.say(tell(3));
+  await backToTerminal(id);
+  await term.say(tell(4)); await term.say(tell(5));
+  await phone.take(id);
+  phone.say(tell(6)); phone.say(tell(7));
+  const all = phone.say("List facts 1 to 8, one per line, nothing else.");
+  const missing = facts.filter((f) => !all.includes(f));
+  check("C6a all eight facts survive three moves", missing.length === 0, missing.length ? `missing ${missing.join(", ")}` : all.replace(/\n/g, " "));
+  const pageUsers = phoneEval<number>(`liveState.messages.filter(m => m.role === 'user').length`);
+  const f = join(PROJECT_DIR, `${id}.jsonl`);
+  const tUsers = readFileSync(f, "utf-8").split("\n").filter((l) => { try { const e = JSON.parse(l); return e.type === "user" && typeof e.message?.content === "string" && !e.isMeta; } catch { return false; } }).length;
+  check("C6b the page's history has every user turn the transcript has", pageUsers === tUsers, `page ${pageUsers}, transcript ${tUsers}`);
+  // The phone tab sits in the background, where Chrome runs no requestAnimationFrame, so the
+  // page's DOM render lags its state; read the state (a screenshot forces a frame if needed).
+  const pct = phoneEval<number | null>(`liveState.session && liveState.session.context_pct`);
+  check("C6c the context gauge has a reading after the moves", typeof pct === "number" && pct > 0, `context_pct=${pct}`);
+  check("C6d surfaces cli → sdk-cli → cli → sdk-cli", surfaces(id).join(" → ") === "cli → sdk-cli → cli → sdk-cli", surfaces(id).join(" → "));
+  check("C6e no two writers", violations().length === 0, violations().join("; "));
+  await backToTerminal(id);
 }
 
 // ---------- CLI ----------
@@ -578,7 +779,12 @@ async function main(): Promise<void> {
     case "loop":
       if (sub === "a") await loopA();
       else if (sub === "b") await loopB();
-      else throw new Error("loop a|b");
+      else if (sub === "c1") await hardC1C2();
+      else if (sub === "c3") await hardC3();
+      else if (sub === "c4") await hardC4C5();
+      else if (sub === "c6") await hardC6();
+      else if (sub === "hard") { for (const f of [hardC1C2, hardC3, hardC4C5, hardC6]) { try { await f(); } catch (err) { log(`ERROR ${err instanceof Error ? err.message : String(err)}`); } } }
+      else throw new Error("loop a|b|c1|c3|c4|c6|hard");
       console.log(report());
       return;
     case "phone": {
@@ -603,7 +809,7 @@ async function main(): Promise<void> {
         case "say": console.log(await term.say(a)); return;
         case "key": return term.key(a);
         case "read": console.log(term.read()); return;
-        case "idle": await until("idle", () => termRecord()?.status === "idle"); return;
+        case "idle": await until("idle", () => atPrompt(termRecord())); return;
       }
       break;
     }

@@ -21,12 +21,14 @@ import type { LiveState } from "./registry-watch.js";
 
 export type VerbResult<T> =
   | ({ ok: true } & T)
-  | { ok: false; status: number; reason: string; state?: LiveState };
+  | { ok: false; status: number; reason: string; state?: LiveState | "shell" };
 
 /** The slice of a registry record the take reads. */
 export interface TakeRecord {
   sessionId: string | null;
   state: LiveState;
+  /** Raw status as CC wrote it; `shell` = at the prompt with a background shell running. */
+  status?: string | null;
   cwd: string | null;
   tmuxPane: string | null;
 }
@@ -60,7 +62,7 @@ export interface TakeOpts {
 }
 
 export async function takeSession(
-  req: { pid?: unknown; sessionId?: unknown },
+  req: { pid?: unknown; sessionId?: unknown; force?: unknown },
   deps: TakeDeps,
   opts: TakeOpts = {},
 ): Promise<VerbResult<{ folder: string; sessionId: string; waitedMs: number }>> {
@@ -106,6 +108,11 @@ export async function takeSession(
     await deps.sleep(pollMs);
   }
   const waitedMs = deps.now() - started;
+  // A take stops the terminal claude, and its background shells with it (measured by the rig,
+  // 2026-09-30: the resumed claude found `[killed]`). Say so and let the person choose.
+  if (!gone && current?.status === "shell" && req.force !== true) {
+    return { ok: false, status: 409, reason: "a background shell is running in the terminal; taking it would end that shell", state: "shell" };
+  }
   // The wait can be long: a G may have started in the folder meanwhile.
   if (deps.folderBusy(folder, sessionId)) {
     return { ok: false, status: 409, reason: "Guéridon already has a live session in that folder" };

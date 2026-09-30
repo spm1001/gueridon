@@ -8,6 +8,7 @@ import {
   validateFolderPath,
   buildCCArgs,
   lastPermissionMode,
+  syntheticLocalOutput,
   pluginMcpAllowRules,
   buildSystemPrompt,
   getActiveSessions,
@@ -2700,5 +2701,46 @@ describe("lastPermissionMode", () => {
 
   it("is null for a mode this build does not know, rather than passing it to --permission-mode", () => {
     expect(lastPermissionMode(line("yolo"))).toBeNull();
+  });
+});
+
+// --- local command output in 2.1.285's system-line shape (gdn-cefuda) ---
+
+describe("syntheticLocalOutput", () => {
+  const syn = (text: string) => ({ type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text }] } });
+  it("turns a synthetic assistant carrying /context output into the local-command message", () => {
+    const ev = syntheticLocalOutput(syn("## Context Usage\n\n**Tokens:** 1k")) as any;
+    expect(ev.type).toBe("user");
+    expect(ev.message.content).toBe("<local-command-stdout>## Context Usage\n\n**Tokens:** 1k</local-command-stdout>");
+  });
+  it("leaves the 'No response requested.' filler and real assistants alone", () => {
+    expect(syntheticLocalOutput(syn("No response requested."))).toBeNull();
+    expect(syntheticLocalOutput({ type: "assistant", message: { model: "claude-haiku-4-5", content: [{ type: "text", text: "hi" }] } })).toBeNull();
+  });
+});
+
+describe("local command output recorded as a system line", () => {
+  const sys = JSON.stringify({
+    type: "system", subtype: "local_command",
+    content: "<local-command-stdout>## Context Usage\n\n**Tokens:** 56.3k / 200k (28%)</local-command-stdout>",
+  });
+  const cmd = JSON.stringify({ type: "user", message: { role: "user", content: "<command-name>/context</command-name>" } });
+
+  it("extractLocalCommandOutput finds it and hands it on as a user message", () => {
+    const out = extractLocalCommandOutput([cmd, sys].join("\n"));
+    expect(out).not.toBeNull();
+    const ev = JSON.parse(out!).event;
+    expect(ev.type).toBe("user");
+    expect(ev.message.content).toContain("Context Usage");
+  });
+
+  it("replay keeps it", () => {
+    const { events } = parseSessionJSONL([cmd, sys].join("\n"));
+    expect(events.some((e) => e.includes("Context Usage"))).toBe(true);
+  });
+
+  it("ignores other system lines", () => {
+    const other = JSON.stringify({ type: "system", subtype: "turn_duration", content: "<local-command-stdout>x</local-command-stdout>" });
+    expect(extractLocalCommandOutput(other)).toBeNull();
   });
 });

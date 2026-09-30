@@ -356,13 +356,27 @@ describe("Take a terminal conversation (gdn-tamose)", () => {
     expect(JSON.parse(h.dom.window.sessionStorage.getItem("gdnTakenSession")!)).toEqual({ folder: "acme/widgets", sessionId: UUID });
   });
 
+  it("a take that would end a background shell asks first; Take anyway sends force", async () => {
+    h.sessions = () => ({ sessions: [{ ...row(42, "idle"), sessionUuid: UUID, baton: true }] });
+    h.answers.set("/take", [409, { error: "a background shell is running", state: "shell" }]);
+    await up(h.sources[0]);
+    takeButtons()[0].click();
+    await tick(); await tick(); await tick();
+    expect(h.dom.window.document.getElementById("note")!.textContent).toContain("background shell");
+    expect(takeButtons()[0].textContent).toBe("Take anyway");
+    h.answers.set("/take", [200, { folder: "acme/widgets", sessionId: UUID, waitedMs: 0 }]);
+    takeButtons()[0].click();
+    await tick(); await tick();
+    expect(JSON.parse(h.bodies.get("/take")!)).toEqual({ pid: 42, sessionId: UUID, force: true });
+  });
+
   it("a refused take says why on the page and stores nothing", async () => {
     h.sessions = () => ({ sessions: [{ ...row(42, "busy"), sessionUuid: UUID, baton: true }] });
     h.answers.set("/take", [409, { error: "still not idle", state: "busy" }]);
     await up(h.sources[0]);
     takeButtons()[0].click();
     await tick(); await tick();
-    expect(h.dom.window.document.getElementById("note")!.textContent).toContain("still not idle");
+    expect(h.dom.window.document.getElementById("note")!.textContent).toContain("still replying in the terminal");
     expect(h.dom.window.sessionStorage.getItem("gdnTakenSession")).toBeNull();
   });
 });

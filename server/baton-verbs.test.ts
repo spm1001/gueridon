@@ -135,6 +135,16 @@ describe("takeSession", () => {
     expect(w.log).toEqual([]);
   });
 
+  it("stops before ending a background shell, unless told to go ahead", async () => {
+    const { w, deps } = takeWorld({ status: "shell" });
+    const r = await takeSession({ pid: PID, sessionId: ID }, deps);
+    expect(r).toMatchObject({ ok: false, status: 409, state: "shell" });
+    expect(w.log).toEqual([]);
+    const forced = await takeSession({ pid: PID, sessionId: ID, force: true }, deps);
+    expect(forced.ok).toBe(true);
+    expect(w.log).toEqual(["baton:gueridon", "SIGTERM@0", `resume:${ID}`]);
+  });
+
   it("rejects malformed input before looking anything up", async () => {
     const { w, deps } = takeWorld();
     for (const req of [{ pid: "4242", sessionId: ID }, { pid: 1, sessionId: ID }, { pid: PID, sessionId: "../x" }, {}]) {

@@ -571,6 +571,10 @@ export function parseSessionJSONL(content: string): { events: string[]; skippedL
       if (!msg) continue;
       const entry: Entry = { type: "user", msg, order: order++ };
       entries.push(entry);
+    } else if (parsed.type === "system" && localCommandMessage(parsed)) {
+      // 2.1.285 records a local command's output as a system line; replay it as the user
+      // message the older shape was, so /context output survives a reload or a take.
+      entries.push({ type: "user", msg: localCommandMessage(parsed), order: order++ });
     } else if (parsed.type === "assistant") {
       const msg = parsed.message;
       if (!msg) continue;
@@ -748,17 +752,48 @@ export const LOCAL_CMD_TAIL_LINES = 5;
  *
  * Pure function — no IO. Caller reads the file and broadcasts the result.
  */
+/**
+ * A local command's output as a user message, whichever shape the transcript used: a user line
+ * whose content carries `<local-command-stdout>` (the older shape), or a `system` line with
+ * `subtype: "local_command"` and the stdout in `content` (measured on 2.1.285, 30 Sep 2026,
+ * which is why typed /context on the phone showed nothing). Null for anything else.
+ */
+export function localCommandMessage(parsed: any): { role: "user"; content: string } | null {
+  if (parsed?.type === "user") {
+    const mc = parsed.message?.content;
+    return typeof mc === "string" && mc.includes("<local-command-stdout>") ? parsed.message : null;
+  }
+  if (parsed?.type === "system" && parsed.subtype === "local_command"
+    && typeof parsed.content === "string" && parsed.content.includes("<local-command-stdout>")) {
+    return { role: "user", content: parsed.content };
+  }
+  return null;
+}
+
+/**
+ * On 2.1.285 a local command's output (/context, /cost) also arrives on stdout, as an
+ * `assistant` event whose model is `<synthetic>` and whose text is the output. The state
+ * builder drops synthetic assistants (they used to be only "No response requested."), so
+ * this rewrites one that carries real text into the local-command user message the page
+ * renders. Null for anything else, the "No response requested." filler included.
+ */
+export function syntheticLocalOutput(event: Record<string, any>): Record<string, unknown> | null {
+  if (event?.type !== "assistant" || event.message?.model !== "<synthetic>") return null;
+  const text = (event.message.content ?? [])
+    .filter((b: any) => b?.type === "text" && typeof b.text === "string").map((b: any) => b.text).join("\n").trim();
+  if (!text || text === "No response requested.") return null;
+  return { type: "user", message: { role: "user", content: `<local-command-stdout>${text}</local-command-stdout>` } };
+}
+
 export function extractLocalCommandOutput(jsonlContent: string): string | null {
   const lines = jsonlContent.trimEnd().split("\n");
   for (let i = lines.length - 1; i >= Math.max(0, lines.length - LOCAL_CMD_TAIL_LINES); i--) {
     try {
-      const parsed = JSON.parse(lines[i]);
-      if (parsed.type !== "user") continue;
-      const mc = parsed.message?.content;
-      if (typeof mc !== "string" || !mc.includes("<local-command-stdout>")) continue;
+      const message = localCommandMessage(JSON.parse(lines[i]));
+      if (!message) continue;
       return JSON.stringify({
         source: "cc",
-        event: { type: "user", message: parsed.message },
+        event: { type: "user", message },
       });
     } catch {
       continue;

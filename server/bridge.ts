@@ -39,6 +39,7 @@ import {
   extractDeltaInfo,
   buildMergedDelta,
   extractLocalCommandOutput,
+  syntheticLocalOutput,
   validateFolderPath,
   parseSessionJSONL,
   getActiveSessions,
@@ -700,6 +701,13 @@ function handleCCEvent(session: Session, event: Record<string, unknown>): void {
     session.subagentFilteredCount++;
     return;
   }
+  // A local command's output arriving on stdout (2.1.285): show it as the local-command
+  // message, and skip the JSONL-tail recovery so it is not shown twice.
+  const localOutput = syntheticLocalOutput(event);
+  if (localOutput) {
+    session.hadContentThisTurn = true;
+    event = localOutput;
+  }
 
   // Clear init timeout on first system init event
   if (event.type === "system" && event.subtype === "init" && session.initTimer) {
@@ -856,11 +864,12 @@ async function onTurnComplete(session: Session): Promise<void> {
   session.turnStartedAt = null;
 
   // Recover local command output (CC writes to JSONL, not stdout).
-  // Reads only the last 8KB async instead of the entire file sync. (gdn-webuje)
+  // Reads only the tail async instead of the entire file sync (gdn-webuje). 64 KB, not 8: on
+  // 2.1.285 one /context output line is ~17 KB, so an 8 KB tail began mid-line and lost it.
   if (!session.hadContentThisTurn) {
     try {
       const jsonlPath = getSessionJSONLPath(session.folder, session.id);
-      const tail = await tailRead(jsonlPath, 8192);
+      const tail = await tailRead(jsonlPath, 65536);
       if (tail) {
         const localOutput = extractLocalCommandOutput(tail);
         if (localOutput) {
@@ -1372,6 +1381,9 @@ export async function handleSessionEnd(pid: number, res: ServerResponse): Promis
 // in baton-verbs.ts; this is the wiring to the registry, the signals and the sessions map.
 
 const BATON_DIR = batonDir(STATE_DIR);
+/** How long a take waits for the terminal to go idle (default 120 s in baton-verbs). The rig
+ *  shortens it to reach the "still not idle" answer without a two-minute wait. */
+const TAKE_IDLE_TIMEOUT_MS = parseInt(process.env.GUERIDON_TAKE_IDLE_MS || "", 10) || 0;
 
 /** Where `bin/baton` reaches this bridge, written into every baton Guéridon holds.
  *  GUERIDON_SELF_URL overrides (a socket-activated bridge has no path of its own to name). */
@@ -1491,7 +1503,7 @@ function sendVerbResult(res: ServerResponse, r: { ok: boolean; status?: number; 
 
 /** POST /take {pid, sessionId} — take a terminal conversation into Guéridon. */
 export async function handleTake(body: string, res: ServerResponse): Promise<void> {
-  let req: { pid?: unknown; sessionId?: unknown } = {};
+  let req: { pid?: unknown; sessionId?: unknown; force?: unknown } = {};
   try { req = JSON.parse(body || "{}"); } catch { /* validated below */ }
   const watcher = registryWatcher;
   if (!watcher) {
@@ -1529,7 +1541,7 @@ export async function handleTake(body: string, res: ServerResponse): Promise<voi
       const session = await createSessionWithId(folder, sessionId, true);
       return { folderName: session.folderName };
     },
-  });
+  }, TAKE_IDLE_TIMEOUT_MS ? { idleTimeoutMs: TAKE_IDLE_TIMEOUT_MS } : {});
   emit({
     type: "baton:take", sessionId: String(req.sessionId), pid: Number(req.pid), ok: result.ok,
     ...(result.ok ? { folder: result.folder, waitedMs: result.waitedMs } : { status: result.status, reason: result.reason }),

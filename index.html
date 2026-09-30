@@ -842,15 +842,18 @@ sendBtn.addEventListener('click', () => {
       ssePostAbort(sseCurrentFolder);
     }
   } else if (hasContent) {
-    // Intercept typed bridge commands (/exit, /abort) and CC-local commands
-    // (/compact, /context, /cost). Non-local CC skills (/close, /commit)
-    // fall through and are sent as prompts.
+    // Intercept typed bridge commands (/exit, /abort) only. Everything else, the CC-local
+    // commands (/compact, /context, /cost) included, is sent as a prompt: CC runs it and the
+    // bridge recovers the output from the JSONL. (Intercepting the local ones too routed them
+    // to handleSlashSelect, whose sendBtn.click() fires inside this click handler, and a
+    // re-entrant click() is ignored: typed and sheet-picked /context sent nothing from March
+    // to 30 Sep 2026. Found by the rig, gdn-cefuda.)
     const userText = ta.value.trim();
     if (!hasDeposits && /^\/\w+$/.test(userText)) {
       const name = userText.slice(1);
       const locals = getSlashCommands(liveState.slashCommands);
       const cmd = locals.find(c => c.name === name);
-      if (cmd && (cmd.name === 'exit' || cmd.name === 'abort' || cmd.local)) {
+      if (cmd && (cmd.name === 'exit' || cmd.name === 'abort')) {
         ta.value = '';
         refreshSendButton();
         handleSlashSelect(cmd);
