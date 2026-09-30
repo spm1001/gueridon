@@ -7,6 +7,7 @@ import {
   isHandoffStale,
   validateFolderPath,
   buildCCArgs,
+  lastPermissionMode,
   pluginMcpAllowRules,
   buildSystemPrompt,
   getActiveSessions,
@@ -467,14 +468,21 @@ describe("buildCCArgs", () => {
     expect(args).toContain("--include-partial-messages");
     expect(args).toContain("--replay-user-messages");
     expect(args).toContain("--allowed-tools");
-    expect(args).toContain("--permission-mode");
-    expect(args).toContain("default");
+    // No mode forced (gdn-tamose): with none inherited, the home's own default applies.
+    expect(args).not.toContain("--permission-mode");
     expect(args).toContain("--append-system-prompt");
     // Must NOT include dangerous bypass
     expect(args).not.toContain("--dangerously-skip-permissions");
     // --mcp-config is GONE (gdn-lometu): it only ever pointed at a file whose
     // mcpServers was {}, registering nothing; plugin MCP servers load without it.
     expect(args).not.toContain("--mcp-config");
+  });
+
+  it("passes the inherited permission mode when there is one (gdn-tamose)", () => {
+    const args = buildCCArgs("x", true, undefined, undefined, [], "bypassPermissions");
+    const i = args.indexOf("--permission-mode");
+    expect(args[i + 1]).toBe("bypassPermissions");
+    expect(args.filter((a) => a === "--permission-mode")).toHaveLength(1);
   });
 
   it("carries per-server MCP allow rules, never the rejected bare mcp__* (gdn-lometu)", () => {
@@ -2673,5 +2681,24 @@ describe("buildAllowedOrigins", () => {
   it("drops a malformed PUBLIC_ORIGIN instead of admitting it", () => {
     const o = buildAllowedOrigins({ PUBLIC_ORIGIN: "door.run.app" }, 3001);
     expect([...o].some((x) => x.includes("door.run.app"))).toBe(false);
+  });
+});
+
+// --- lastPermissionMode (gdn-tamose) ---
+
+describe("lastPermissionMode", () => {
+  const line = (mode: string) => JSON.stringify({ type: "user", permissionMode: mode, message: { role: "user", content: "hi" } });
+
+  it("returns the last mode the transcript ran in", () => {
+    expect(lastPermissionMode([line("default"), line("bypassPermissions"), line("acceptEdits")].join("\n"))).toBe("acceptEdits");
+  });
+
+  it("is null when no line carries one (the home's default then applies)", () => {
+    expect(lastPermissionMode(JSON.stringify({ type: "assistant", message: {} }))).toBeNull();
+    expect(lastPermissionMode("")).toBeNull();
+  });
+
+  it("is null for a mode this build does not know, rather than passing it to --permission-mode", () => {
+    expect(lastPermissionMode(line("yolo"))).toBeNull();
   });
 });

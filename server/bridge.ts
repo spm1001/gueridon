@@ -67,7 +67,11 @@ import {
   identityVerdict,
   rosterEnabled,
   buildAllowedOrigins,
+  lastPermissionMode,
+  type PermissionMode,
 } from "./bridge-logic.js";
+import { batonDir, readBaton, writeBaton, type Baton, type BatonRelease } from "./baton.js";
+import { takeSession, releaseSession } from "./baton-verbs.js";
 
 import {
   scanFolders,
@@ -95,6 +99,7 @@ import { cancelPendingPersist, persistSessions, persistSessionsSyncWithSnapshot,
 import { generateFolderName } from "./fun-names.js";
 import { getContentHash, startWatcher, stopWatcher } from "./content-hash.js";
 import { requestContext, generateRequestId } from "./request-context.js";
+import { gueridonStateDir } from "./state-dir.js";
 
 // -- Types --
 
@@ -173,6 +178,12 @@ interface Session {
   turnSSEBytes: Map<string, number>;
   /** Bytes saved by version-counter skip — counterfactual measurement. */
   turnSkippedBytes: number;
+  /** The mode the conversation last ran in, from its transcript (gdn-tamose); null = the home's default. */
+  permissionMode: PermissionMode | null;
+  /** Taken from a terminal: the baton is Guéridon's, and spawnCC records G's pid on it. */
+  batonHeld: boolean;
+  /** A release to the terminal is under way: refuse new prompts so no turn starts before G ends. */
+  releasing: boolean;
 }
 
 // -- Remote-control sessions (Future B, gdn-difoto) --
@@ -231,7 +242,8 @@ let clientErrorTimestamps: number[] = [];
 // Written during graceful shutdown so the next bridge can classify the restart.
 // Absence of this file on startup → crash (shutdown() never ran).
 
-const SHUTDOWN_FILE = join(homedir(), ".config", "gueridon", "shutdown.json");
+const STATE_DIR = gueridonStateDir();
+const SHUTDOWN_FILE = join(STATE_DIR, "shutdown.json");
 
 /** Loaded once at startup, consumed by resume logic, then file is deleted. */
 let lastShutdownCtx: ShutdownContext | null = null;
@@ -462,8 +474,9 @@ function spawnCC(session: Session): void {
 
   const args = buildCCArgs(
     session.id, session.resumable, session.folder, process.env.CC_MODEL,
-    readPluginMcpAllowRules(),
+    readPluginMcpAllowRules(), session.permissionMode,
   );
+  emit({ type: "session:permission-mode", folder: session.folderName, sessionId: session.id, mode: session.permissionMode });
 
   // Start from process.env, stripping CC internal vars
   const baseEnv = Object.fromEntries(
@@ -510,6 +523,7 @@ function spawnCC(session: Session): void {
   wireProcess(session);
   emit({ type: "session:spawn", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
   persistSessions(sessions.values());
+  if (session.batonHeld) updateBatonPid(session.id, session.process.pid ?? null);
 
   // Init timeout: if CC doesn't emit an init event within 30s, kill it.
   // This catches hung resumes (observed: 90s stall on third concurrent resume).
@@ -1044,6 +1058,9 @@ async function createSession(folderPath: string): Promise<Session> {
     turnSkippedBytes: 0,
     lastSentTextLength: 0,
     lastSentMessagesVersion: -1,
+    permissionMode: null,
+    batonHeld: false,
+    releasing: false,
   };
 
   // Replay JSONL if resuming (async to avoid blocking on large files)
@@ -1053,6 +1070,7 @@ async function createSession(folderPath: string): Promise<Session> {
       const content = await readFile(jsonlPath, "utf-8");
       const { events, skippedLines } = parseSessionJSONL(content);
       session.stateBuilder.replayFromJSONL(events);
+      session.permissionMode = lastPermissionMode(content);
       emit({ type: "replay:ok", folder: folderName, eventCount: events.length, ...(skippedLines > 0 && { skippedLines }) });
 
       // Stash resume context for lazy injection on first prompt (gdn-jeliku).
@@ -1205,6 +1223,9 @@ async function createSessionWithId(
     turnSkippedBytes: 0,
     lastSentTextLength: 0,
     lastSentMessagesVersion: -1,
+    permissionMode: null,
+    batonHeld: false,
+    releasing: false,
   };
 
   if (resumable) {
@@ -1213,6 +1234,7 @@ async function createSessionWithId(
       const content = await readFile(jsonlPath, "utf-8");
       const { events, skippedLines } = parseSessionJSONL(content);
       session.stateBuilder.replayFromJSONL(events);
+      session.permissionMode = lastPermissionMode(content);
       emit({ type: "replay:ok", folder: folderName, eventCount: events.length, ...(skippedLines > 0 && { skippedLines }), sessionId });
     } catch (err) {
       emit({ type: "replay:fail", folder: folderName, error: errorDetail(err), sessionId });
@@ -1331,6 +1353,168 @@ export async function handleSessionEnd(pid: number, res: ServerResponse): Promis
     .end(JSON.stringify({ ending: true, pid }));
 }
 
+// -- Session baton (gdn-tamose) --
+// One conversation, one holder. TAKE moves a terminal conversation into Guéridon; RELEASE hands
+// it back to the terminal's `bin/baton`, which is waiting on the baton file. The ordering lives
+// in baton-verbs.ts; this is the wiring to the registry, the signals and the sessions map.
+
+const BATON_DIR = batonDir(STATE_DIR);
+
+/** Where `bin/baton` reaches this bridge, written into every baton Guéridon holds.
+ *  GUERIDON_SELF_URL overrides (a socket-activated bridge has no path of its own to name). */
+function batonReleaseAddress(): BatonRelease {
+  const user = REQUIRED_USER ? { user: REQUIRED_USER } : {};
+  if (process.env.GUERIDON_SELF_URL) return { url: process.env.GUERIDON_SELF_URL, ...user };
+  if (LISTEN.kind === "socket") return { socket: LISTEN.path, ...user };
+  if (LISTEN.kind === "port") return { url: `http://127.0.0.1:${LISTEN.port}`, ...user };
+  return { ...user };
+}
+
+function writeBatonLogged(b: Baton): void {
+  try {
+    writeBaton(BATON_DIR, b);
+  } catch (err) {
+    emit({ type: "baton:write-error", sessionId: b.sessionId, error: errorDetail(err) });
+    throw err;
+  }
+}
+
+/** Record G's pid on the baton once it spawns, so the terminal end can tell a dead holder
+ *  from a live one when Guéridon does not answer. */
+function updateBatonPid(sessionId: string, pid: number | null): void {
+  try {
+    const b = readBaton(BATON_DIR, sessionId);
+    if (b && b.holder === "gueridon") writeBaton(BATON_DIR, { ...b, pid });
+  } catch (err) {
+    emit({ type: "baton:write-error", sessionId, error: errorDetail(err) });
+  }
+}
+
+/** A live claude OTHER than this session's own G that holds the same conversation, per the
+ *  registry. Without a watcher (roster off) there is no registry to ask, and null is the
+ *  designed answer: that bridge offers no take either. */
+function heldElsewhere(session: Session): { pid: number; pane: string | null } | null {
+  if (!registryWatcher) return null;
+  const own = session.process?.pid;
+  for (const rec of registryWatcher.snapshot()) {
+    if (rec.sessionId === session.id && rec.pid !== own && claudePidAlive(rec.pid)) {
+      return { pid: rec.pid, pane: rec.tmuxPane };
+    }
+  }
+  return null;
+}
+
+/** End G for a release: close its stdin (claude -p exits cleanly at EOF), escalate after 10 s,
+ *  then drop the session and send its viewers home. No exit marker: the conversation carries
+ *  on in the terminal, it has not been closed. */
+async function endForRelease(session: Session): Promise<void> {
+  const proc = session.process;
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    session.killReason = "moved-to-terminal";
+    const exited = new Promise<void>((r) => proc.once("exit", () => r()));
+    try { proc.stdin?.end(); } catch { /* already closed */ }
+    const timedOut = await Promise.race([
+      exited.then(() => false),
+      new Promise<boolean>((r) => setTimeout(() => r(true), 10_000).unref()),
+    ]);
+    if (timedOut) {
+      killWithEscalation(proc, { folder: session.folderName, reason: "release-stdin-timeout" });
+      await exited;
+    }
+  }
+  if (session.flushTimer) { clearTimeout(session.flushTimer); session.flushTimer = null; }
+  if (session.graceTimer) { clearTimeout(session.graceTimer); session.graceTimer = null; }
+  if (session.initTimer) { clearTimeout(session.initTimer); session.initTimer = null; }
+  broadcastToSession(session, "state", {
+    ...session.stateBuilder.getState(),
+    status: "idle",
+    processAlive: false,
+    sessionEnded: true,
+    movedTo: "terminal",
+  });
+  for (const client of session.clients) client.folder = null;
+  session.clients.clear();
+  if (sessions.get(session.folder) === session) sessions.delete(session.folder);
+  persistSessions(sessions.values());
+}
+
+function sendVerbResult(res: ServerResponse, r: { ok: boolean; status?: number; reason?: string; [k: string]: unknown }): void {
+  if (r.ok) {
+    const { ok: _ok, ...body } = r;
+    res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(body));
+  } else {
+    res.writeHead(r.status ?? 500, { "Content-Type": "application/json" })
+      .end(JSON.stringify({ error: r.reason, ...(r.state ? { state: r.state } : {}) }));
+  }
+}
+
+/** POST /take {pid, sessionId} — take a terminal conversation into Guéridon. */
+export async function handleTake(body: string, res: ServerResponse): Promise<void> {
+  let req: { pid?: unknown; sessionId?: unknown } = {};
+  try { req = JSON.parse(body || "{}"); } catch { /* validated below */ }
+  const watcher = registryWatcher;
+  if (!watcher) {
+    res.writeHead(503, { "Content-Type": "application/json" })
+      .end(JSON.stringify({ error: "registry watcher not running" }));
+    return;
+  }
+  const result = await takeSession(req, {
+    record: (pid) => watcher.byPid().get(pid),
+    isLiveClaude: isLiveClaudePid,
+    signal: (pid, sig) => { try { process.kill(pid, sig); } catch { /* raced to exit */ } },
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    now: Date.now,
+    resolveFolder: (cwd) => resolveFolder(cwd),
+    folderBusy: (folder) => {
+      const existing = sessions.get(folder);
+      return !!existing?.process && existing.process.exitCode === null;
+    },
+    writeBaton: writeBatonLogged,
+    release: batonReleaseAddress(),
+    resume: async (folder, sessionId) => {
+      const existing = sessions.get(folder);
+      if (existing) await tearDownSession(existing);
+      const session = await createSessionWithId(folder, sessionId, true);
+      session.batonHeld = true;
+      return { folderName: session.folderName };
+    },
+  });
+  emit({
+    type: "baton:take", sessionId: String(req.sessionId), pid: Number(req.pid), ok: result.ok,
+    ...(result.ok ? { folder: result.folder, waitedMs: result.waitedMs } : { status: result.status, reason: result.reason }),
+  });
+  sendVerbResult(res, result);
+}
+
+/** POST /release/:sessionId {pane?} — hand a conversation Guéridon holds back to the terminal. */
+export async function handleRelease(sessionIdParam: string, body: string, res: ServerResponse): Promise<void> {
+  let req: { pane?: unknown } = {};
+  try { req = JSON.parse(body || "{}"); } catch { /* pane is optional */ }
+  const find = (id: string) => [...sessions.values()].find((s) => s.id === id);
+  const result = await releaseSession({ sessionId: sessionIdParam, pane: req.pane }, {
+    session: (id) => {
+      const s = find(id);
+      if (!s) return undefined;
+      return {
+        cwd: s.folder,
+        turnInProgress: () => s.turnInProgress,
+        freeze: () => { s.releasing = true; },
+        unfreeze: () => { s.releasing = false; },
+        end: () => endForRelease(s),
+      };
+    },
+    readBaton: (id) => readBaton(BATON_DIR, id),
+    writeBaton: writeBatonLogged,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    now: Date.now,
+  });
+  emit({
+    type: "baton:release", sessionId: sessionIdParam, ok: result.ok,
+    ...(result.ok ? { ended: result.ended } : { status: result.status, reason: result.reason }),
+  });
+  sendVerbResult(res, result);
+}
+
 async function handleSession(
   folderPath: string,
   client: SSEClient | undefined,
@@ -1426,6 +1610,24 @@ async function handlePrompt(
     emit({ type: "request:rejected", reason: "prompt-parse-error", method: "POST", url: `/prompt/${folderPath.split("/").pop()}` });
     res.writeHead(400).end(JSON.stringify({ error: "Invalid JSON" }));
     return;
+  }
+
+  // One conversation, one holder (gdn-tamose). A release under way refuses new turns; and a
+  // prompt that would spawn G on a conversation a live terminal claude holds is refused, since
+  // two processes on one transcript interleave their writes.
+  if (session.releasing) {
+    res.writeHead(409, { "Content-Type": "application/json" })
+      .end(JSON.stringify({ error: "moving to the terminal" }));
+    return;
+  }
+  if (!session.process || session.process.exitCode !== null) {
+    const holder = heldElsewhere(session);
+    if (holder) {
+      emit({ type: "session:held-elsewhere", folder: session.folderName, sessionId: session.id, holderPid: holder.pid, pane: holder.pane });
+      res.writeHead(409, { "Content-Type": "application/json" })
+        .end(JSON.stringify({ error: "held by a terminal claude", pid: holder.pid, pane: holder.pane }));
+      return;
+    }
   }
 
   if (session.turnInProgress) {
@@ -2188,6 +2390,26 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // POST /take and POST /release/:sessionId — the session baton (gdn-tamose). Gated like
+  // /sessions: the take's pids come from that roster, and the release is only ever asked of
+  // a bridge that took.
+  const releaseMatch = url.pathname.match(/^\/release\/([^/]+)$/);
+  if (req.method === "POST" && (url.pathname === "/take" || releaseMatch)) {
+    if (!rosterEnabled(process.env)) {
+      res.writeHead(404).end(JSON.stringify({ error: "roster not enabled" }));
+      return;
+    }
+    try {
+      const body = await readBody(req);
+      if (releaseMatch) await handleRelease(decodeURIComponent(releaseMatch[1]), body, res);
+      else await handleTake(body, res);
+    } catch (err) {
+      emit({ type: "request:error", action: releaseMatch ? "release" : "take", error: errorDetail(err) });
+      if (!res.headersSent) res.writeHead(500).end(JSON.stringify({ error: "Internal error" }));
+    }
+    return;
+  }
+
   // Static files — index.html, sw.js, manifest.json, icons
   if (req.method === "GET" && serveStatic(url.pathname, res)) return;
 
@@ -2223,7 +2445,7 @@ function shutdown(signal: string): void {
     if (session.turnInProgress) activeTurnFolders.push(session.folder);
   }
   try {
-    mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+    mkdirSync(STATE_DIR, { recursive: true });
     const ctx: ShutdownContext = {
       signal,
       timestamp: new Date().toISOString(),

@@ -152,9 +152,26 @@ function buildBaseFlags(mcpAllowRules: string[] = []): string[] {
     [...allowed, ...mcpAllowRules].join(","),
     "--disallowedTools",
     disallowed.join(","),
-    "--permission-mode",
-    "default",
   ];
+}
+
+/** Permission modes Claude Code accepts for `--permission-mode`. 2.1.285's --help lists
+ *  `manual` where transcripts still write `default`; the flag takes both (Guéridon passed
+ *  `default` on every spawn until gdn-tamose). */
+export const PERMISSION_MODES = ["default", "manual", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+/**
+ * The permission mode a conversation last ran in, read from its transcript: every user line
+ * carries `permissionMode`, and the last one is the mode it was in when it stopped (gdn-tamose,
+ * Sameer 2026-09-30: "Inherit"). Null when the transcript names none, or names one this build
+ * does not know, and the caller then passes no flag so the home's own default applies.
+ */
+export function lastPermissionMode(transcript: string): PermissionMode | null {
+  const re = /"permissionMode":"([A-Za-z]+)"/g;
+  let last: string | null = null;
+  for (let m = re.exec(transcript); m; m = re.exec(transcript)) last = m[1];
+  return last && (PERMISSION_MODES as readonly string[]).includes(last) ? (last as PermissionMode) : null;
 }
 
 // The Vertex AI env var set (the vars set in ~/.dotfiles/shell/gueridon.env — the
@@ -479,7 +496,8 @@ export function validateFolderPath(
  * Uses --resume for paused sessions, --session-id for fresh ones.
  * Optional model override via CC_MODEL env var (e.g. "opus").
  * `mcpAllowRules` — per-server MCP allow rules read from the plugin registry
- * at spawn time (gdn-lometu; see pluginMcpAllowRules).
+ * at spawn time (gdn-lometu; see pluginMcpAllowRules). `permissionMode` — the mode the
+ * conversation last ran in (lastPermissionMode); null passes no flag.
  */
 export function buildCCArgs(
   sessionId: string,
@@ -487,9 +505,13 @@ export function buildCCArgs(
   folder?: string,
   model?: string,
   mcpAllowRules: string[] = [],
+  permissionMode: PermissionMode | null = null,
 ): string[] {
   return [
     ...buildBaseFlags(mcpAllowRules),
+    // No mode forced (gdn-tamose): a resumed conversation keeps the mode it last ran in, and a
+    // new one takes the home's own default, as a terminal claude would.
+    ...(permissionMode ? ["--permission-mode", permissionMode] : []),
     ...(model ? ["--model", model] : []),
     "--append-system-prompt",
     buildSystemPrompt(folder),

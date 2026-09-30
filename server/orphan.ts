@@ -8,13 +8,13 @@
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
-import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 
 import { KILL_ESCALATION_MS } from "./bridge-logic.js";
 import { emit, errorDetail } from "./event-bus.js";
+import { gueridonStateDir } from "./state-dir.js";
 
-export const SESSION_FILE = join(homedir(), ".config", "gueridon", "sse-sessions.json");
+export const SESSION_FILE = join(gueridonStateDir(), "sse-sessions.json");
 
 interface SessionRecord {
   sessionId: string;
@@ -73,7 +73,7 @@ export function persistSessions(sessions: Iterable<PersistableSession>): void {
   persistTimer = setTimeout(async () => {
     persistTimer = null;
     try {
-      mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+      mkdirSync(dirname(SESSION_FILE), { recursive: true });
       await writeFile(SESSION_FILE, JSON.stringify(buildSessionRecords(sessions), null, 2), "utf-8");
     } catch (err) {
       emit({ type: "server:persist-error", error: errorDetail(err) });
@@ -89,7 +89,7 @@ export function persistSessionsSyncWithSnapshot(
   activeTurnFolders: string[],
 ): void {
   try {
-    mkdirSync(join(homedir(), ".config", "gueridon"), { recursive: true });
+    mkdirSync(dirname(SESSION_FILE), { recursive: true });
     writeFileSync(SESSION_FILE, JSON.stringify(
       buildSessionRecords(sessions, new Set(activeTurnFolders)), null, 2), "utf-8");
   } catch { /* best effort */ }

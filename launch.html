@@ -119,6 +119,7 @@
     padding: 0.3rem 0.7rem; color: var(--text-mid); background: var(--surface-raised);
   }
   .mini.end { color: var(--red); border-color: #4a2725; }
+  .mini.take { color: var(--accent, #e8a33c); }
 
   /* RECENT (cold sessions) list — read-only rows, gdn-vucube */
   #recent { border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
@@ -386,6 +387,17 @@
           open.className = "mini"; open.textContent = "Open"; open.href = s.url; open.rel = "noopener";
           row.appendChild(open);
         }
+        // Take (gdn-tamose): move a terminal conversation into Guéridon. The bridge waits for
+        // the terminal claude to be idle, stops it, and resumes the same conversation here;
+        // a window started through bin/baton then shows "press R to take it back".
+        if ((s.kind === "local" || s.kind === "vertex-terminal") && s.sessionUuid && s.state !== "unknown") {
+          const take = document.createElement("button");
+          take.className = "mini take";
+          if (takingPid === s.pid) { take.disabled = true; take.textContent = "Taking…"; }
+          else take.textContent = "Take";
+          take.addEventListener("click", () => takeSession(s, take));
+          row.appendChild(take);
+        }
         if (s.kind !== "remote") {
           const end = document.createElement("button");
           end.className = "mini end"; end.textContent = "End";
@@ -404,6 +416,34 @@
       $runningList.appendChild(row);
     }
     return sessions;
+  }
+
+  // POST /take (gdn-tamose). The request can run for as long as the terminal's reply does (the
+  // bridge waits for idle), so the row keeps saying "Taking…" across redraws via takingPid.
+  let takingPid = null;
+  async function takeSession(s, btn) {
+    takingPid = s.pid;
+    btn.disabled = true; btn.textContent = "Taking…";
+    if (s.state !== "idle") setNote("Taking " + s.name + " when Claude finishes this reply…");
+    try {
+      const r = await fetch("/take", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pid: s.pid, sessionId: s.sessionUuid }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setNote("Couldn't take " + s.name + ": " + (body.error || ("HTTP " + r.status)), true);
+        return;
+      }
+      try { sessionStorage.setItem("gdnTakenSession", JSON.stringify({ folder: body.folder, sessionId: body.sessionId })); } catch {}
+      // RAW hash, slash intact — the conversation page matches it against folder names.
+      location.href = "/#" + body.folder;
+    } catch (e) {
+      setNote("Couldn't reach the bridge to take " + s.name, true);
+    } finally {
+      takingPid = null;
+      lastRosterKey = null; // repaint the row's button on the next load
+    }
   }
 
   let armedEnd = null; // { pid, until } — the foreign row whose End reads "Sure?"

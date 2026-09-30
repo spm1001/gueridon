@@ -63,6 +63,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { RegistryRecord } from "./registry-watch.js";
 import { claudePidAlive, teleportSessionUuid, vertexBilledForPid } from "./sessions.js";
 import { walletLabel } from "./bridge-logic.js";
+import { gueridonStateDir } from "./state-dir.js";
 import { uuidVersionOf } from "./session-index.js";
 
 export type LedgerEvent = "open" | "reopen" | "update" | "end";
@@ -137,7 +138,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const TELEPORT_RE = /^(session|cse)_([A-Za-z0-9]+)$/;
 
 export function defaultLedgerPath(home: string = homedir()): string {
-  return join(home, ".config", "gueridon", "session-ledger.jsonl");
+  return join(gueridonStateDir(process.env, home), "session-ledger.jsonl");
 }
 
 export function ledgerKey(sessionId: string, seatDir: string): string {

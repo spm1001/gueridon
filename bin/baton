@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# baton — the terminal end of the session baton (gdn-tamose).
+#
+#   baton run [claude args…]   start claude with a pinned conversation id; if Guéridon takes
+#                              the conversation, stay in the window as the placeholder
+#   baton wait <id>            the placeholder alone: "In Guéridon since HH:MM, press R"
+#
+# One conversation, one holder. The baton file (<state dir>/batons/<id>.json, shape in
+# server/baton.ts) says whether Guéridon or the terminal holds it. When claude exits, this
+# script reads the baton: held by Guéridon means claude was taken, not quit, so the window
+# waits for R. On R it asks Guéridon to let go (POST /release/<id>, which waits for Guéridon's
+# reply to finish and ends its claude) and resumes the same conversation here.
+#
+# Env: BATON_DIR (default $GUERIDON_STATE_DIR/batons, else ~/.config/gueridon/batons),
+#      BATON_CLAUDE (the claude to run, default `claude`),
+#      BATON_BRIDGE (Guéridon's base URL when the baton names none).
+# Needs bash, jq and curl.
+
+set -uo pipefail
+
+BATON_DIR="${BATON_DIR:-${GUERIDON_STATE_DIR:-$HOME/.config/gueridon}/batons}"
+CLAUDE_BIN="${BATON_CLAUDE:-claude}"
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+say() { printf '\033[2m[baton]\033[0m %s\n' "$*" >&2; }
+die() { say "$*"; exit 1; }
+
+command -v jq >/dev/null || die "needs jq"
+command -v curl >/dev/null || die "needs curl"
+
+new_id() {
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid
+  elif command -v uuidgen >/dev/null; then uuidgen | tr 'A-Z' 'a-z'
+  else die "no uuid source"
+  fi
+}
+
+baton_file() { printf '%s/%s.json' "$BATON_DIR" "$1"; }
+
+# field ID JQ-EXPR — prints the value, or nothing when there is no baton
+field() {
+  local f; f=$(baton_file "$1")
+  [[ -f $f ]] || return 0
+  jq -r "$2 // empty" "$f"
+}
+
+write_terminal() {
+  local id=$1 f tmp
+  f=$(baton_file "$id")
+  mkdir -p "$BATON_DIR" && chmod 700 "$BATON_DIR"
+  tmp="$f.$$.tmp"
+  jq -n --arg id "$id" --arg since "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg cwd "$PWD" --arg pane "${TMUX_PANE:-}" \
+    '{v:1, sessionId:$id, holder:"terminal", since:$since, pid:null, cwd:$cwd,
+      pane:(if $pane == "" then null else $pane end), release:null}' > "$tmp" \
+    && mv "$tmp" "$f"
+}
+
+# live_claude PID — the pid is alive and is a claude binary (not a recycled pid)
+live_claude() {
+  local pid=$1 comm exe
+  [[ $pid =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  comm=$(cat "/proc/$pid/comm" 2>/dev/null) || return 1
+  [[ $comm == claude ]] && return 0
+  exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || return 1
+  [[ $exe == */claude/versions/* ]]
+}
+
+# release ID — ask the Guéridon holding ID to let go. Returns 0 once it has.
+release() {
+  local id=$1 url socket user resp code
+  url=$(field "$id" '.release.url'); socket=$(field "$id" '.release.socket'); user=$(field "$id" '.release.user')
+  [[ -z $url && -z $socket ]] && url=${BATON_BRIDGE:-}
+  [[ -z $url && -z $socket ]] && { say "the baton names no Guéridon to ask (set BATON_BRIDGE)"; return 1; }
+  local args=(-sS --max-time 330 -X POST -H 'Content-Type: application/json' -w '\n%{http_code}'
+              -d "$(jq -nc --arg pane "${TMUX_PANE:-}" '{pane:$pane}')")
+  [[ -n $user ]] && args+=(-H "X-Atelier-User: $user")
+  if [[ -n $socket ]]; then args+=(--unix-socket "$socket" "http://localhost/release/$id")
+  else args+=("${url%/}/release/$id"); fi
+  say "asking Guéridon to let go (it waits for its current reply to finish)…"
+  resp=$(curl "${args[@]}")
+  code=${resp##*$'\n'}
+  [[ $code == 200 ]] && return 0
+  say "Guéridon did not let go (HTTP ${code:-none}): ${resp%$'\n'*}"
+  return 1
+}
+
+# acquire ID — make sure no other claude holds ID before this terminal starts one
+acquire() {
+  local id=$1 holder pid
+  holder=$(field "$id" '.holder')
+  [[ $holder == gueridon ]] || return 0
+  release "$id" && return 0
+  pid=$(field "$id" '.pid')
+  if [[ -n $pid ]] && live_claude "$pid"; then
+    die "Guéridon's claude (pid $pid) still holds this conversation; not starting a second one"
+  fi
+  say "Guéridon did not answer and holds no live claude; taking the conversation"
+  return 0
+}
+
+# placeholder ID — wait while Guéridon holds ID. 0 = take it back (R), 1 = leave it (q).
+placeholder() {
+  local id=$1 since key rc shown=""
+  while true; do
+    if [[ $(field "$id" '.holder') == gueridon ]]; then
+      since=$(field "$id" '.since')
+      since=$(date -d "$since" +%H:%M 2>/dev/null || echo "$since")
+      if [[ $shown != "g$since" ]]; then
+        printf '\n  In Guéridon since %s · press R to take it back, q to leave it there\n' "$since" >&2
+        shown="g$since"
+      fi
+    elif [[ $shown != free ]]; then
+      printf '\n  Guéridon has let go · press R to carry on here, q to leave it\n' >&2
+      shown=free
+    fi
+    key="" rc=0
+    IFS= read -rsn1 -t 2 key || rc=$?
+    # a timeout (status > 128) re-checks the baton; end of input leaves the conversation where it is
+    (( rc > 128 )) && continue
+    (( rc != 0 )) && return 1
+    case $key in
+      R|r)
+        if [[ $(field "$id" '.holder') != gueridon ]] || release "$id"; then return 0; fi
+        shown="" ;;
+      q|Q) return 1 ;;
+    esac
+  done
+}
+
+# run_loop ID ARGS… — start claude (ARGS already carry the id), then placeholder whenever taken
+run_loop() {
+  local id=$1; shift
+  local args=("$@") code
+  while true; do
+    acquire "$id" || exit 1
+    write_terminal "$id"
+    "$CLAUDE_BIN" "${args[@]}"; code=$?
+    if [[ $(field "$id" '.holder') != gueridon ]]; then exit "$code"; fi
+    placeholder "$id" || { say "left in Guéridon: baton wait $id"; exit 0; }
+    args=(--resume "$id")
+  done
+}
+
+cmd=${1:-}; shift || true
+case $cmd in
+  run)
+    id=""; args=("$@")
+    for ((i = 0; i < ${#args[@]}; i++)); do
+      case ${args[i]} in
+        --session-id|--resume|-r) id=${args[i+1]:-} ;;
+        --session-id=*|--resume=*) id=${args[i]#*=} ;;
+        --continue|-c) die "baton needs a conversation id: use --resume <id> instead of --continue" ;;
+      esac
+    done
+    if [[ -z $id ]]; then id=$(new_id); args=(--session-id "$id" "${args[@]}"); fi
+    [[ $id =~ $UUID_RE ]] || die "not a conversation id: $id"
+    run_loop "$id" "${args[@]}"
+    ;;
+  wait)
+    id=${1:-}
+    [[ $id =~ $UUID_RE ]] || die "usage: baton wait <conversation id>"
+    placeholder "$id" || exit 0
+    run_loop "$id" --resume "$id"
+    ;;
+  *)
+    sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' >&2
+    exit 2
+    ;;
+esac

@@ -57,10 +57,14 @@ interface Harness {
   sessionsStatus: number;
   intervals: Map<number, number>; // live interval id → delay
   timeouts: Map<number, { fn: () => void; ms: number }>; // pending timeouts
+  /** Request bodies of non-GET fetches, by url. */
+  bodies: Map<string, string>;
+  /** Canned answers for other urls: [status, body]. */
+  answers: Map<string, [number, unknown]>;
 }
 
 function load(): Harness {
-  const h = { sources: [], fetches: [], sessions: () => ({ sessions: [] }), sessionsStatus: 200, intervals: new Map(), timeouts: new Map() } as unknown as Harness;
+  const h = { sources: [], fetches: [], sessions: () => ({ sessions: [] }), sessionsStatus: 200, intervals: new Map(), timeouts: new Map(), bodies: new Map(), answers: new Map() } as unknown as Harness;
   h.dom = new JSDOM(HTML, {
     url: "http://localhost/launch.html",
     runScripts: "dangerously",
@@ -70,8 +74,11 @@ function load(): Harness {
       w.EventSource = class extends FakeEventSource {
         constructor(url: string) { super(url, h.sources); }
       };
-      w.fetch = async (url: string, opts?: { signal?: AbortSignal }) => {
+      w.fetch = async (url: string, opts?: { signal?: AbortSignal; body?: string }) => {
         h.fetches.push(url);
+        if (opts?.body !== undefined) h.bodies.set(url, opts.body);
+        const canned = h.answers.get(url);
+        if (canned) return { ok: canned[0] === 200, status: canned[0], json: async () => canned[1] };
         if (url === "/sessions") {
           // Honour the page's abort signal, as a real fetch does, so a hung answer can time out.
           const aborted = new Promise((_, reject) => opts?.signal?.addEventListener("abort",
@@ -309,5 +316,45 @@ describe("launcher roster over SSE (gdn-jojino)", () => {
     for (const [id, t] of pending) { h.timeouts.delete(id); t.fn(); }
     expect(h.sources.length).toBe(2);
     expect(h.sources[1].url).toBe("/sessions/events");
+  });
+});
+
+describe("Take a terminal conversation (gdn-tamose)", () => {
+  let h: Harness;
+  const UUID = "a168195a-5875-4dab-846c-181282d6fdc7";
+  beforeEach(() => { h = load(); });
+  afterEach(() => h.dom.window.close());
+  const takeButtons = () => [...h.dom.window.document.querySelectorAll(".run-row .take")] as HTMLButtonElement[];
+
+  it("offers Take only on terminal rows that name their conversation and have a known state", async () => {
+    h.sessions = () => ({ sessions: [
+      { ...row(1, "idle"), sessionUuid: UUID },
+      { ...row(2, "busy"), kind: "vertex-terminal", sessionUuid: UUID },
+      { ...row(3, "idle") },                                        // no uuid
+      { ...row(4, "unknown"), sessionUuid: UUID },                  // no status to wait on
+      { ...row(5, "idle"), kind: "remote", sessionUuid: UUID },     // a phone child
+    ] });
+    await up(h.sources[0]);
+    expect(takeButtons()).toHaveLength(2);
+  });
+
+  it("tapping Take posts the pid and conversation, then opens the conversation page on the taken id", async () => {
+    h.sessions = () => ({ sessions: [{ ...row(42, "idle"), sessionUuid: UUID }] });
+    h.answers.set("/take", [200, { folder: "acme/widgets", sessionId: UUID, waitedMs: 0 }]);
+    await up(h.sources[0]);
+    takeButtons()[0].click();
+    await tick(); await tick();
+    expect(JSON.parse(h.bodies.get("/take")!)).toEqual({ pid: 42, sessionId: UUID });
+    expect(JSON.parse(h.dom.window.sessionStorage.getItem("gdnTakenSession")!)).toEqual({ folder: "acme/widgets", sessionId: UUID });
+  });
+
+  it("a refused take says why on the page and stores nothing", async () => {
+    h.sessions = () => ({ sessions: [{ ...row(42, "busy"), sessionUuid: UUID }] });
+    h.answers.set("/take", [409, { error: "still not idle", state: "busy" }]);
+    await up(h.sources[0]);
+    takeButtons()[0].click();
+    await tick(); await tick();
+    expect(h.dom.window.document.getElementById("note")!.textContent).toContain("still not idle");
+    expect(h.dom.window.sessionStorage.getItem("gdnTakenSession")).toBeNull();
   });
 });

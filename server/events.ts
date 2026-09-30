@@ -104,6 +104,12 @@ export type BridgeEvent =
   | { type: "rc:exit-forced"; folder: string; pid: number }
   | { type: "session:end-requested"; pid: number }
   | { type: "session:end-forced"; pid: number }
+  // Session baton (gdn-tamose)
+  | { type: "baton:take"; sessionId: string; pid: number; folder?: string; ok: boolean; status?: number; reason?: string; waitedMs?: number }
+  | { type: "baton:release"; sessionId: string; ok: boolean; ended?: boolean; status?: number; reason?: string }
+  | { type: "baton:write-error"; sessionId: string; error: string }
+  | { type: "session:held-elsewhere"; folder: string; sessionId: string; holderPid: number; pane: string | null }
+  | { type: "session:permission-mode"; folder: string; sessionId: string; mode: string | null }
 
   // Server lifecycle
   | { type: "server:start"; port: number; listen?: unknown; scanRoot: string; requiredUser?: string }
@@ -189,6 +195,11 @@ const LEVEL_MAP: Record<BridgeEvent["type"], LogLevel> = {
   "rc:exit-forced": "warn",
   "session:end-requested": "info",
   "session:end-forced": "warn",
+  "baton:take": "info",
+  "baton:release": "info",
+  "baton:write-error": "error",
+  "session:held-elsewhere": "warn",
+  "session:permission-mode": "info",
   "server:start": "info",
   "server:shutdown": "info",
   "server:shutdown-complete": "info",

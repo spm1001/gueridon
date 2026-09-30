@@ -11,10 +11,10 @@
 import webpush from "web-push";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { gueridonStateDir } from "./state-dir.js";
 import { emit, errorDetail } from "./event-bus.js";
 
-const CONFIG_DIR = join(homedir(), ".config", "gueridon");
+const CONFIG_DIR = gueridonStateDir();
 const VAPID_PATH = join(CONFIG_DIR, "vapid.json");
 const SUBS_PATH = join(CONFIG_DIR, "push-subscriptions.json");
 

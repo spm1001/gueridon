@@ -344,7 +344,13 @@ function sseConnect() {
       // never re-freshes. Only fires when the stored folder matches the one we're opening.
       let freshLaunch = null;
       try { freshLaunch = sessionStorage.getItem('gdnFreshLaunch'); sessionStorage.removeItem('gdnFreshLaunch'); } catch {}
-      ssePostSession(hashFolder, freshLaunch === hashFolder ? 'new' : undefined);
+      // A take from the launcher (gdn-tamose) names the conversation it moved here: ask for
+      // that id, so the page opens the taken conversation and not the folder's latest. Same
+      // one-shot sessionStorage carriage as the fresh launch above.
+      let taken = null;
+      try { taken = JSON.parse(sessionStorage.getItem('gdnTakenSession') || 'null'); sessionStorage.removeItem('gdnTakenSession'); } catch {}
+      ssePostSession(hashFolder, freshLaunch === hashFolder ? 'new'
+        : taken && taken.folder === hashFolder ? taken.sessionId : undefined);
     } else {
       goHome();
     }
