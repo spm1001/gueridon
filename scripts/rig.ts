@@ -4,7 +4,11 @@
  *
  *   npx tsx scripts/rig.ts up                 private dev bridge + tmux session `rig` + a phone tab
  *   npx tsx scripts/rig.ts down               stop all of it
- *   npx tsx scripts/rig.ts loop a|b           run a whole scripted cycle (see LOOPS below)
+ *   npx tsx scripts/rig.ts loop a|b           run a whole scripted cycle (loopA, loopB below)
+ *   npx tsx scripts/rig.ts loop c1|c3|c4|c6   hard cases: c1 = take mid-reply + release with a mid-turn
+ *                                             message, c3 = background shell, c4 = permission dialog +
+ *                                             a phone slash command, c6 = eight facts over three moves
+ *   npx tsx scripts/rig.ts loop hard          all four hard-case loops
  *   npx tsx scripts/rig.ts report             write the run report to ~/scratch/gueridon-rig/
  *   phone:  open | new | take <id> | say <text> | read | tap <n> | upload <path> | shot <name>
  *   term:   start | wait <id> | say <text> | key <k> | read | idle
