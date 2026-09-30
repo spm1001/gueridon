@@ -6,7 +6,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -141,6 +141,28 @@ describe("bin/baton", () => {
     expect(await new Promise((r) => p.on("exit", r))).toBe(0);
     expect(readFileSync(log, "utf-8").trim()).toBe(`--resume ${ID}`);
     expect(readBaton(bdir, ID)).toMatchObject({ holder: "terminal" });
+  });
+
+  it("refuses when the session registry shows a live claude already on the conversation (no baton at all)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "baton-sh-"));
+    // A live process whose comm is "claude": a copy of sleep under that name.
+    const fakeLive = join(dir, "claude");
+    copyFileSync("/bin/sleep", fakeLive); chmodSync(fakeLive, 0o755);
+    const holder = spawn(fakeLive, ["30"], { stdio: "ignore" });
+    try {
+      mkdirSync(join(dir, "cfg", "sessions"), { recursive: true });
+      writeFileSync(join(dir, "cfg", "sessions", `${holder.pid}.json`), JSON.stringify({ pid: holder.pid, sessionId: ID, status: "idle" }));
+      const log = join(dir, "claude.log");
+      const fake = join(dir, "claude-run");
+      writeFileSync(fake, "#!/usr/bin/env bash\necho ran > \"$LOG\"\n"); chmodSync(fake, 0o755);
+      const p = spawn("bash", [SCRIPT, "run", "--resume", ID], {
+        env: { ...process.env, BATON_DIR: join(dir, "b"), BATON_CLAUDE: fake, LOG: log, CLAUDE_CONFIG_DIR: join(dir, "cfg") }, stdio: "ignore",
+      });
+      expect(await new Promise((r) => p.on("exit", r))).toBe(1);
+      expect(existsSync(log)).toBe(false);
+    } finally {
+      holder.kill("SIGKILL");
+    }
   });
 
   it("a claude that simply exits (not taken) ends the script with claude's exit code", async () => {

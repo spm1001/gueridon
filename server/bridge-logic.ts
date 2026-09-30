@@ -896,6 +896,8 @@ export interface RosterEntry {
   stateSince: number | null;
   /** tmux pane id holding the session (e.g. `0:@37.%37`) — the handle gdn-vogidu will send keys to. */
   tmux?: string;
+  /** CC's session name from the registry, when it has one (gdn-gumuta). */
+  label?: string;
 }
 
 /** The subset of a registry record the roster merges in (see server/registry-watch.ts). */
@@ -905,6 +907,8 @@ export interface LiveRosterInfo {
   tmuxPane: string | null;
   sessionId: string | null;
   configDir: string;
+  /** CC's own session name (`gueridon-93`, `modha-c6`) — tells apart rows that share a folder. */
+  name?: string | null;
 }
 
 /**
@@ -994,6 +998,7 @@ export function buildSessionRoster(
       state: live?.state ?? "unknown" as LiveState,
       stateSince: live?.statusUpdatedAt ?? null,
       ...(live?.tmuxPane && { tmux: live.tmuxPane }),
+      ...(live?.name && { label: live.name }),
     };
     const sessionUuid = p.sessionUuid ?? live?.sessionId ?? undefined;
     const rc = rcByPid.get(p.pid);

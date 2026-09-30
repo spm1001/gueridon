@@ -521,10 +521,7 @@ function spawnCC(session: Session): void {
   wireProcess(session);
   emit({ type: "session:spawn", folder: session.folderName, sessionId: session.id, pid: session.process.pid! });
   persistSessions(sessions.values());
-  // Every G on a conversation whose baton is Guéridon's records its pid, however it was
-  // spawned (a take, a reopen after the grace timer, a restart), so the terminal end can
-  // tell a live holder from a dead one.
-  updateBatonPid(session.id, session.process.pid ?? null);
+  claimBatonOnSpawn(session, session.process.pid ?? null);
 
   // Init timeout: if CC doesn't emit an init event within 30s, kill it.
   // This catches hung resumes (observed: 90s stall on third concurrent resume).
@@ -1395,14 +1392,21 @@ function writeBatonLogged(b: Baton): void {
   }
 }
 
-/** Record G's pid on the baton once it spawns, so the terminal end can tell a dead holder
- *  from a live one when Guéridon does not answer. */
-function updateBatonPid(sessionId: string, pid: number | null): void {
+/** Every G that spawns holds the baton for its conversation, however it started (a take, a
+ *  new session, a reopen, a restart). So `bin/baton` finds the release address for any
+ *  conversation Guéridon is running, and can tell a live holder from a dead one by the pid.
+ *  deliverPrompt's guard has already ruled out a live terminal claude on it. */
+function claimBatonOnSpawn(session: Session, pid: number | null): void {
   try {
-    const b = readBaton(BATON_DIR, sessionId);
-    if (b && b.holder === "gueridon") writeBaton(BATON_DIR, { ...b, pid });
+    const prev = readBaton(BATON_DIR, session.id);
+    writeBaton(BATON_DIR, {
+      v: 1, sessionId: session.id, holder: "gueridon",
+      since: prev?.holder === "gueridon" ? prev.since : new Date().toISOString(),
+      pid, cwd: session.folder, pane: prev?.pane ?? null, release: batonReleaseAddress(),
+      takenFrom: prev?.takenFrom ?? null, wrapper: prev?.wrapper ?? null,
+    });
   } catch (err) {
-    emit({ type: "baton:write-error", sessionId, error: errorDetail(err) });
+    emit({ type: "baton:write-error", sessionId: session.id, error: errorDetail(err) });
   }
 }
 

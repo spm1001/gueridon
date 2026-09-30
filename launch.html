@@ -85,18 +85,23 @@
 
   /* RUNNING list */
   #running { border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  /* Two lines per row (gdn-gumuta): the name gets the whole first line, the chips and
+     buttons wrap under it. On one line at 393 px the name got 1-3 characters, and none on a
+     waiting row. */
   .run-row {
-    display: flex; align-items: center; gap: 0.6rem;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.6rem;
     padding: 0.55rem 1.1rem;
   }
+  .run-row .run-name + * { margin-left: calc(8px + 0.6rem); }
   .run-row .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
   .run-row .dot.orienting { background: var(--text-dim); animation: pulse 1.2s ease-in-out infinite; }
   .run-row .dot.local { background: var(--text-dim); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
   .run-row .run-name {
-    flex: 1 1 auto; min-width: 0; font-weight: 600;
+    flex: 1 1 calc(100% - 8px - 0.6rem); min-width: 0; font-weight: 600;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .run-row .run-label { font-weight: 400; color: var(--text-dim); font-size: 0.8rem; }
   .run-row .run-status { flex: 0 0 auto; font-size: 0.75rem; color: var(--text-dim); }
   /* Wallet chip (gdn-zahidu): which billing lane the session runs on. */
   .wchip { flex: 0 0 auto; font-size: 0.66rem; font-weight: 600; border-radius: 5px; padding: 0.05rem 0.4rem; border: 1px solid #444; color: var(--text-dim); }
@@ -300,7 +305,7 @@
       renderRepos();
     }
     const key = JSON.stringify(sessions.map((s) => [
-      s.pid, s.name, s.kind, s.attachable, s.ready, s.url, s.wallet, s.state,
+      s.pid, s.name, s.label, s.baton, s.kind, s.attachable, s.ready, s.url, s.wallet, s.state,
       s.stateSince ? ageLabel(Math.round((Date.now() - s.stateSince) / 1000)) : null, ageLabel(s.ageSec),
     ]));
     if (key === lastRosterKey) return sessions;
@@ -319,6 +324,12 @@
       row.appendChild(dot);
       const name = document.createElement("span");
       name.className = "run-name"; name.textContent = s.name;
+      // CC's session name tells apart rows in the same folder (five "~" phone rows otherwise)
+      if (s.label) {
+        const label = document.createElement("span");
+        label.className = "run-label"; label.textContent = " · " + s.label;
+        name.appendChild(label);
+      }
       row.appendChild(name);
 
       // Wallet chip (gdn-zahidu) — every row shows its billing lane. Class keys the colour;

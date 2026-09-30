@@ -99,11 +99,29 @@ release() {
   return 1
 }
 
+# registry_holder ID — pid of a live claude the session registry says is on ID, if any.
+# Belt and braces under the baton: catches a holder that never wrote one.
+registry_holder() {
+  local dir f pid
+  for dir in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions" "$HOME/.claude-commis/sessions"; do
+    for f in "$dir"/[0-9]*.json; do
+      [[ -f $f ]] || continue
+      pid=$(jq -r --arg id "$1" 'select(.sessionId == $id) | .pid // empty' "$f" 2>/dev/null)
+      [[ -n $pid ]] && live_claude "$pid" && { echo "$pid"; return 0; }
+    done
+  done
+  return 0
+}
+
 # acquire ID — make sure no other claude holds ID before this terminal starts one
 acquire() {
   local id=$1 holder pid
   holder=$(field "$id" '.holder')
-  [[ $holder == gueridon ]] || return 0
+  if [[ $holder != gueridon ]]; then
+    pid=$(registry_holder "$id")
+    [[ -n $pid ]] && die "claude pid $pid is already on this conversation; not starting a second one"
+    return 0
+  fi
   local rc=0
   release "$id" || rc=$?
   (( rc == 0 )) && return 0
@@ -113,6 +131,8 @@ acquire() {
   if [[ -n $pid ]] && live_claude "$pid"; then
     die "Guéridon's claude (pid $pid) still holds this conversation; not starting a second one"
   fi
+  pid=$(registry_holder "$id")
+  [[ -n $pid ]] && die "claude pid $pid is still on this conversation; not starting a second one"
   say "Guéridon did not answer and holds no live claude; taking the conversation"
   return 0
 }

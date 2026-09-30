@@ -339,6 +339,13 @@ describe("Take a terminal conversation (gdn-tamose)", () => {
     expect(takeButtons()).toHaveLength(2);
   });
 
+  it("labels each row with CC's session name so rows in one folder can be told apart (gdn-gumuta)", async () => {
+    h.sessions = () => ({ sessions: [{ ...row(1, "idle"), name: "~", label: "modha-c6" }, { ...row(2, "idle"), name: "~", label: "modha-fb" }] });
+    await up(h.sources[0]);
+    const names = [...h.dom.window.document.querySelectorAll(".run-row .run-name")].map((n) => n.textContent);
+    expect(names).toEqual(["~ · modha-c6", "~ · modha-fb"]);
+  });
+
   it("tapping Take posts the pid and conversation, then opens the conversation page on the taken id", async () => {
     h.sessions = () => ({ sessions: [{ ...row(42, "idle"), sessionUuid: UUID, baton: true }] });
     h.answers.set("/take", [200, { folder: "acme/widgets", sessionId: UUID, waitedMs: 0 }]);

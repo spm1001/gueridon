@@ -29,7 +29,8 @@ import { sseFrame, SSE_HEADERS } from "./bridge-logic.js";
  * Would this registry change alter what GET /sessions renders? Compares exactly the fields
  * buildSessionRoster reads from a record (LiveRosterInfo): the chip (`state`, not the raw
  * status — `shell` and `idle` draw the same chip), its age stamp, the tmux pane, the
- * transcript uuid and the seat. A write that only moves `updatedAt` is not a change.
+ * transcript uuid, the seat and CC's session name (the row label). A write that only moves
+ * `updatedAt` is not a change.
  */
 export function rosterChanged(prev: RegistryRecord | null, next: RegistryRecord): boolean {
   if (!prev) return true;
@@ -37,7 +38,8 @@ export function rosterChanged(prev: RegistryRecord | null, next: RegistryRecord)
     || prev.statusUpdatedAt !== next.statusUpdatedAt
     || prev.tmuxPane !== next.tmuxPane
     || prev.sessionId !== next.sessionId
-    || prev.configDir !== next.configDir;
+    || prev.configDir !== next.configDir
+    || prev.name !== next.name;
 }
 
 interface Subscriber {
