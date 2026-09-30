@@ -12,7 +12,7 @@
  * contract between them, and `bin/baton.test.ts` binds the bash reader to it.
  */
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type BatonHolder = "gueridon" | "terminal";
@@ -103,6 +103,11 @@ export function listBatons(dir: string): { batons: Baton[]; broken: string[] } {
     }
   }
   return { batons, broken };
+}
+
+/** Drop a conversation's baton: nobody holds it any more (a deliberate close). */
+export function removeBaton(dir: string, sessionId: string): void {
+  rmSync(batonPath(dir, sessionId), { force: true });
 }
 
 export function writeBaton(dir: string, baton: Baton): void {

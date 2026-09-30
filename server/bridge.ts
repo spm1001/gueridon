@@ -70,7 +70,7 @@ import {
   lastPermissionMode,
   type PermissionMode,
 } from "./bridge-logic.js";
-import { batonDir, listBatons, readBaton, writeBaton, type Baton, type BatonRelease } from "./baton.js";
+import { batonDir, listBatons, readBaton, removeBaton, writeBaton, type Baton, type BatonRelease } from "./baton.js";
 import { takeSession, releaseSession, foreignHolder } from "./baton-verbs.js";
 
 import {
@@ -1765,6 +1765,11 @@ async function handleExit(folderPath: string, res: ServerResponse): Promise<void
 
   // Write exit marker
   await writeExitMarker(session.folder, session.id);
+  // A deliberate close frees the conversation: a baton left saying "Guéridon holds it" would
+  // steer the folder's next reopen back here (found by the rig, 2026-09-30).
+  try { removeBaton(BATON_DIR, session.id); } catch (err) {
+    emit({ type: "baton:write-error", sessionId: session.id, error: errorDetail(err) });
+  }
 
   // Kill process if running
   if (session.process) {

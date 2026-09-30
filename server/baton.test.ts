@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { batonDir, batonPath, isSessionId, readBaton, writeBaton, type Baton } from "./baton.js";
+import { batonDir, batonPath, isSessionId, listBatons, readBaton, removeBaton, writeBaton, type Baton } from "./baton.js";
 
 const ID = "0c6f6a8e-2d4b-4a57-9d51-3f1f5f0b7a11";
 const baton = (over: Partial<Baton> = {}): Baton => ({
@@ -29,6 +29,20 @@ describe("baton file", () => {
     expect(() => readBaton(dir, ID)).toThrow();
     writeFileSync(batonPath(dir, ID), JSON.stringify({ ...baton(), holder: "nobody" }));
     expect(() => readBaton(dir, ID)).toThrow(/malformed/);
+  });
+
+  it("lists readable batons, names broken ones, and removes one", () => {
+    const dir = batonDir(mkdtempSync(join(tmpdir(), "baton-")));
+    expect(listBatons(dir)).toEqual({ batons: [], broken: [] });
+    writeBaton(dir, baton());
+    writeFileSync(join(dir, "9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d.json"), "{");
+    writeFileSync(join(dir, "notes.txt"), "ignored");
+    const l = listBatons(dir);
+    expect(l.batons.map((b) => b.sessionId)).toEqual([ID]);
+    expect(l.broken).toEqual(["9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d.json"]);
+    removeBaton(dir, ID);
+    expect(readBaton(dir, ID)).toBeNull();
+    removeBaton(dir, ID); // already gone is fine
   });
 
   it("refuses anything but a uuid before it reaches a path", () => {

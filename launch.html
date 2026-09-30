@@ -319,6 +319,10 @@
       const isVertex = s.kind === "vertex"; // Guéridon's own streaming-lane session (gdn-riheri)
       const row = document.createElement("div");
       row.className = "run-row";
+      // Stable handles for drivers (scripts/rig.ts): pick a row by process or conversation,
+      // never by position.
+      row.dataset.pid = String(s.pid);
+      if (s.sessionUuid) row.dataset.session = s.sessionUuid;
       const dot = document.createElement("span");
       dot.className = s.attachable ? (s.ready ? "dot" : "dot orienting") : "dot local";
       row.appendChild(dot);
