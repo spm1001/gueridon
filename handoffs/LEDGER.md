@@ -2,6 +2,7 @@
 
 One line per handoff, newest first. `- [ ]` = not yet processed by an /open sweep; every close appends its line in the same change that writes the handoff.
 
+- [ ] 2026-10-03 [2026-10-03-1309-6cb132cc.md](2026-10-03-1309-6cb132cc.md) — Drove Pi Durable on Claude via Vertex (TUI, crash, resume, steer) as the first steps of a possible Pi lane in Guéridon (gdn-mizago)
 - [ ] 2026-09-30 [2026-09-30-1659-08c0b14b.md](2026-09-30-1659-08c0b14b.md) — Build the session baton end to end, a test rig that drives the phone view and a tmux terminal together, and run the baton's hard cases through it — all deployed on tube (gdn-tamose, gdn-cefuda)
 - [ ] 2026-09-28 [2026-09-28-0256-30b9af55.md](2026-09-28-0256-30b9af55.md) — Make the launcher's session list live over SSE — a registry change nudges the page, which refetches /sessions — measured, cold-checked and deployed (gdn-jojino)
 - [x] 2026-09-14 [2026-09-14-0133-2c753660.md](2026-09-14-0133-2c753660.md) — Ship the session ledger — CC's registry records journaled past their death so a cold phone session keeps its seat and session_… id, with a read helper that says who still holds it (gdn-daluto) (processed 2026-09-28)
