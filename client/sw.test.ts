@@ -58,3 +58,36 @@ describe("sw.js fetch routing", () => {
     expect(handles("/launch/acme%2Fwidgets", "POST")).toBe(false);
   });
 });
+
+describe("sw.js install precache", () => {
+  /** The URLs sw.js hands to cache.addAll when it installs. */
+  async function precached(): Promise<string[]> {
+    const handlers: Record<string, (ev: unknown) => void> = {};
+    let added: string[] = [];
+    const self = {
+      location: { origin: "https://gdn.example" },
+      addEventListener: (type: string, fn: (ev: unknown) => void) => { handlers[type] = fn; },
+      skipWaiting: () => {},
+      clients: { claim: async () => {} },
+    };
+    const caches = { open: async () => ({ addAll: async (urls: string[]) => { added = urls; } }) };
+    vm.runInNewContext(SRC, { self, caches, fetch: () => new Promise(() => {}), Response, URL });
+    let pending: Promise<unknown> = Promise.resolve();
+    handlers.install({ waitUntil: (p: Promise<unknown>) => { pending = p; } });
+    await pending;
+    return added;
+  }
+
+  it("precaches every script and stylesheet index.html loads, so an offline load right after a deploy still renders", async () => {
+    // Without these, the first offline load after a cache-version bump gets the page from
+    // cache but not its render modules: "Gdn is not defined" (Mark Bulling, gueridon #12).
+    const html = readFileSync(join(fileURLToPath(import.meta.url), "../../index.html"), "utf-8");
+    const assets = [
+      ...[...html.matchAll(/<script src="([^"]+)"/g)].map((m) => m[1]),
+      ...[...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map((m) => m[1]),
+    ];
+    expect(assets.length).toBeGreaterThan(5);
+    const urls = await precached();
+    for (const a of assets) expect(urls, a).toContain(a);
+  });
+});

@@ -3,8 +3,17 @@
 
 // v5 (gdn-jojino): drops what v4 cached before the bypass list caught up — /recent, /rc, and
 // any /sessions/events entry an old worker opened on the first launcher load after deploy.
-const CACHE_NAME = "gueridon-shell-v5";
-const SHELL_URLS = ["/", "/manifest.json", "/icon-192.svg", "/icon-512.svg", "/apple-touch-icon.png"];
+// v6: precaches the page's scripts and stylesheet too (Mark Bulling, gueridon #12). activate
+// wipes the old cache, so until they were next fetched online an offline load got the page
+// but not its render modules ("Gdn is not defined"). client/sw.test.ts binds this list to
+// index.html.
+const CACHE_NAME = "gueridon-shell-v6";
+const SHELL_URLS = [
+  "/", "/manifest.json", "/icon-192.svg", "/icon-512.svg", "/apple-touch-icon.png",
+  "/style.css", "/marked.js",
+  "/render-utils.js", "/render-chips.js", "/render-messages.js",
+  "/render-chrome.js", "/render-overlays.js", "/state-handlers.js",
+];
 
 self.addEventListener("install", (event) => {
   // Precache the app shell so it loads offline
