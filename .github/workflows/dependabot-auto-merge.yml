@@ -1,0 +1,80 @@
+name: Auto-merge Dependabot on green
+
+# Rebase-merges a Dependabot PR once its CI run goes green.
+# Deliberately triggered on workflow_run (CI completion), NOT GitHub-native
+# auto-merge: native auto-merge only gates on *required* status checks, which
+# needs branch protection — and branch protection would disrupt direct pushes
+# to main (the maintainer's workflow). This approach gates on green with zero
+# branch protection. Only same-repo Dependabot branches are eligible.
+#
+# The update-type gate below was ported verbatim from spm1001/mise-en-space
+# (commits 20e6a20 + e3e66bc, 2026-10-08) on 2026-10-10 (infra iw-nubede).
+# Copied from spm1001/trousse to this repo on 2026-10-11 (infra iw-nubede).
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write  # dispatch CI on the merged tree (GITHUB_TOKEN pushes trigger nothing)
+
+jobs:
+  auto-merge:
+    # Only when CI passed, on a PR run, from a branch in THIS repo (not a fork).
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge green Dependabot PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          case "$BRANCH" in
+            dependabot/*) ;;
+            *) echo "Not a Dependabot branch ($BRANCH) — skipping."; exit 0 ;;
+          esac
+          pr=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+                 --json number,author \
+                 --jq '.[] | select(.author.login=="app/dependabot") | .number' | head -n1)
+          if [ -z "$pr" ]; then
+            echo "No open Dependabot PR for branch $BRANCH — skipping."
+            exit 0
+          fi
+          # Majors wait for a human (mise-lahutu, 2026-10-08): a merge here is a
+          # release, and unit CI is hermetic, so a major in the sign-in path
+          # (oauthlib 4.0) would ship on tests that never run the real flow.
+          # Fail closed: merge only when EVERY update-type line Dependabot wrote
+          # is patch or minor; none at all means we can't tell, so it waits too.
+          types=$(gh pr view "$pr" --repo "$REPO" --json commits \
+                    --jq '.commits[].messageBody' \
+                  | sed -n 's/^ *update-type: *//p' | sort -u)
+          # Security-update commits carry no update-type line (seen on #43/#44,
+          # 2026-10-08), so read the bump off Dependabot's title instead: same
+          # major is merge-eligible, anything unparseable still waits.
+          if [ -z "$types" ]; then
+            title=$(gh pr view "$pr" --repo "$REPO" --json title --jq .title)
+            from=$(printf '%s' "$title" | sed -n 's/.* from v\{0,1\}\([0-9][0-9]*\)\..* to v\{0,1\}\([0-9][0-9]*\)\..*/\1 \2/p')
+            if [ -n "$from" ]; then
+              set -- $from
+              if [ "$1" = "$2" ]; then types="version-update:semver-minor"; else types="version-update:semver-major"; fi
+            fi
+          fi
+          if [ -z "$types" ] || printf '%s\n' "$types" | grep -qv -E '^version-update:semver-(patch|minor)$'; then
+            why=$(printf '%s' "${types:-no update-type metadata}" | tr '\n' ' ')
+            echo "PR #$pr left for a human: $why"
+            gh pr comment "$pr" --repo "$REPO" \
+              --body "Auto-merge skipped: \`$why\`. Majors (or PRs without update-type metadata) wait for a human, because a merge to main is a release. Check the change against how this repo actually uses the package before merging."
+            exit 0
+          fi
+          echo "CI green on $BRANCH → rebase-merging (this repo allows rebase merges only) Dependabot PR #$pr"
+          gh pr merge "$pr" --repo "$REPO" --rebase --delete-branch
+          # workflow_dispatch is the one event a GITHUB_TOKEN can still fire,
+          # so the merged main gets its own verdict (mise-sasoti).
+          gh workflow run ci.yml --repo "$REPO" --ref main

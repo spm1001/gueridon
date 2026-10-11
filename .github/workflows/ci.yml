@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:  # lets dependabot-auto-merge.yml re-run this on the merged main
   pull_request:
     branches: [main]
   push:
