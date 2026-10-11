@@ -2,6 +2,10 @@ version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
+    # 7-day wait before a version update is proposed (Sameer, 2026-10-11).
+    # Security updates skip cooldowns.
+    cooldown:
+      default-days: 7
     schedule:
       interval: "monthly"
 
