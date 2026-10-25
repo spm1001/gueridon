@@ -16,9 +16,8 @@ Tool and docs: https://github.com/spm1001/bon
   `someday` (revisit condition — item is parked, not ready).
 - "Ready" = status open, empty/absent `waiting_for`, no `someday` (own or
   parent's).
-- If `.bon/backend` contains `dolt`, items live in a shared database this
-  clone can't reach — orient from prose instead (below); an items.jsonl
-  here is a stale pre-migration ghost, not the board.
+- If `.bon/backend` contains `dolt`, this clone predates the board's move
+  into the repo (Dolt was retired on 2026-10-24): `git pull` to get it.
 - Best orientation: read `understanding.md` and the newest handoff in
   `handoffs/` — each lives either in this directory or visibly at the
   repo/room root.
