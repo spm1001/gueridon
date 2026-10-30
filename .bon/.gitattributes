@@ -1,0 +1,3 @@
+# bon board files merge line-wise: concurrent edits to different
+# items union cleanly; the CLI detects same-item collisions itself.
+*.jsonl merge=union
