@@ -12,33 +12,33 @@ client's problem (see docs/kube-brain-mac-body.md).
 ## Portfolio status (2026-06-29 audit)
 
 Parked-but-useful per Sameer; deployed and healthy — **moved hezza → tube
-2026-07-06** (iw-numeho estate migration; phone URL now
+2026-07-06** (infra-numeho estate migration; phone URL now
 `https://tube.atlas-cloud.ts.net`). **Deploy wrinkle found 2026-07-07:**
 `/opt/gueridon` on tube is a plain rsync'd copy, NOT a git checkout — content
 matches dev @ 1097d3e, but CLAUDE.md's deploy step 2 (`git pull` in /opt)
 cannot work until /opt is re-cloned. The 07-06 cutover restart also killed a
-live phone session (KillMode=control-group) → gdn-bumido filed. **2026-07-07 board triage (Sameer + Claude, full-brief re-read): 13 open → 9,
+live phone session (KillMode=control-group) → gueridon-bumido filed. **2026-07-07 board triage (Sameer + Claude, full-brief re-read): 13 open → 9,
 all bite.** CUT with recorded close-notes (read them before re-filing anything
-similar): gdn-vigifo (permission card — lockdown posture abandoned), gdn-jevico
-(warn-before-deploy — folded into deploy discipline + bumido note), gdn-mupito
+similar): gueridon-vigifo (permission card — lockdown posture abandoned), gueridon-jevico
+(warn-before-deploy — folded into deploy discipline + bumido note), gueridon-mupito
 (idle reaping — motivations self-eroded), the whole share-sheet cluster
-gdn-gafode/gdn-fuzeba/gdn-sureje (revealed preference: Shortcut broken since
+gueridon-gafode/gueridon-fuzeba/gueridon-sureje (revealed preference: Shortcut broken since
 Feb, unmissed; Sameer's own page→markdown iOS Shortcut covers the need),
-gdn-howibu/gdn-fadeti (mockup outcome closed achieved-in-substance, snapshot
-tests veiled), gdn-bumido (KillMode stays control-group; deploy discipline =
-enumerate live sessions before restart; /opt re-clone extracted to gdn-pawoso).
+gueridon-howibu/gueridon-fadeti (mockup outcome closed achieved-in-substance, snapshot
+tests veiled), gueridon-bumido (KillMode stays control-group; deploy discipline =
+enumerate live sessions before restart; /opt re-clone extracted to gueridon-pawoso).
 **Same night, the switchboard half SHIPPED (deployed @ 0f91793, phone-verified
-live on spm1001/jeton):** gdn-riheri ✓ (roster is three-kind rc/vertex/local —
+live on spm1001/jeton):** gueridon-riheri ✓ (roster is three-kind rc/vertex/local —
 own `-p` sessions attachable, Open = RAW `/#folder`, End = `/exit`) and
-gdn-hevuri ✓ (wake-refetch + 20s visible-only poll; Sameer's phone poll observed
-beating in /status recentEvents). gdn-pawoso ✓ (/opt re-cloned from GitHub —
-`git pull` deploys work again). OPEN under **gdn-vagori**: gdn-heroso
+gueridon-hevuri ✓ (wake-refetch + 20s visible-only poll; Sameer's phone poll observed
+beating in /status recentEvents). gueridon-pawoso ✓ (/opt re-cloned from GitHub —
+`git pull` deploys work again). OPEN under **gueridon-vagori**: gueridon-heroso
 (resumable-but-idle conversations in the roster — verify-first fork, armed now
 that riheri+hevuri are live; only build if the missing-feeling persists) and
-gdn-pefipi (extract the launcher's inline roster row-builder to a tested client
+gueridon-pefipi (extract the launcher's inline roster row-builder to a tested client
 module — the raw-hash blind-spot class, now three branches deep). Standalone:
-gdn-harili (.env template — verified gap: live .env 6 keys, .env.example 3),
-gdn-muluwo (AskUser chips), gdn-hodoco (1M gauge), gdn-lometu (MCP probe — the
+gueridon-harili (.env template — verified gap: live .env 6 keys, .env.example 3),
+gueridon-muluwo (AskUser chips), gueridon-hodoco (1M gauge), gueridon-lometu (MCP probe — the
 live error text is in its brief now; per-server globs confirmed valid).
 
 **2026-07-07 same night: bridge restarted for the new LLM creds** — dotfiles
@@ -55,24 +55,24 @@ every session it renders; the moment it renders one it doesn't own — a **Verte
 (one-time `replayFromJSONL` at attach, no watcher, while the terminal keeps
 writing) and the roster mis-classifies it (`local`, because its pid isn't in the
 `-p` `sessions` map). Ships:
-- **gdn-kariru** — Guéridon's catch-all `window.onerror` was painting a red
+- **gueridon-kariru** — Guéridon's catch-all `window.onerror` was painting a red
   "Guéridon JS error" banner for a **StopTheMadness Safari-extension** error
   (`webkit-masked-url://`). `__gdnIsForeignError` (index.html) filters extension
   schemes / no-same-origin-frame stacks from both the banner and `/client-error`.
-  The banner keeps its real dead-module job (gdn-lemega).
-- **gdn-kuhaku** — the roster's **4th kind `vertex-terminal`** (was three:
+  The banner keeps its real dead-module job (gueridon-lemega).
+- **gueridon-kuhaku** — the roster's **4th kind `vertex-terminal`** (was three:
   rc/vertex/local). `scanClaudeSessions` reads `/proc/<pid>/environ` OR the
   cmdline `--settings` blob for `CLAUDE_CODE_USE_VERTEX` (the wrappers put it in
   **cmdline**, systemd/`-p` in **environ** — must check both). A foreign
   Vertex-billed proc → `vertex-terminal` (read-only, "vertex · terminal · 1h");
   own `-p` vertex still wins as attachable.
-- **gdn-wuvujo** — the launcher's repo list now **hides repos that have a live
+- **gueridon-wuvujo** — the launcher's repo list now **hides repos that have a live
   session** (client-side: `liveSessionNames` Set, filtered before the search
   query). De-dups the roster AND enforces one-driver-per-folder by not offering a
   live repo for a 2nd launch. Re-runs each poll → a repo reappears when its
   session ends. Seam verified live: session.name == repo.name (both
   SCAN_ROOT-relative owner/repo).
-- **PARKED — gdn-kidowe (baton-pass takeover):** the real "toggle terminal ⇄
+- **PARKED — gueridon-kidowe (baton-pass takeover):** the real "toggle terminal ⇄
   phone". A *simultaneous* mirror is impossible (two drivers, one JSONL), but a
   clean baton-pass is not: tap a `vertex-terminal` row → SIGTERM the foreign pid
   (graceful, resumable — same mechanism as RC End) → resume as Guéridon `-p`.
@@ -83,25 +83,25 @@ writing) and the roster mis-classifies it (`local`, because its pid isn't in the
 **Deploy trap found 2026-07-09:** the first `/opt` `git pull` **aborted** —
 `/opt/gueridon` had uncommitted edits to `sw.js`+`launch.html` (a past deploy
 hot-edited `/opt` directly instead of commit→pull; the edits were byte-identical
-to the already-committed gdn-jafebe change). Resolution: verify the local edits
+to the already-committed gueridon-jafebe change). Resolution: verify the local edits
 against `origin/main` (`git diff origin/main -- <files>`), and if identical,
 `git checkout --` them and ff-pull — the content returns via history. **Never
 hot-edit `/opt`; if a pull aborts on local changes, they're almost always a past
 hot-edit — don't blind-`reset`, diff against origin first.**
 
-**2026-07-12 — End a foreign session (gdn-racuca), built + pushed @018d7e8, deploy
+**2026-07-12 — End a foreign session (gueridon-racuca), built + pushed @018d7e8, deploy
 HELD.** Sameer hit the pincer live: a Claude Desktop-app `batterie-de-savoir` agent
 (Teams-billed, shown `local · 2h`) he could neither End (owner-only `handleRcExit`)
-nor relaunch over (gdn-wuvujo hides live-session repos). Fix: `DELETE /session/:pid`
+nor relaunch over (gueridon-wuvujo hides live-session repos). Fix: `DELETE /session/:pid`
 → SIGTERM by pid (see the End-able≠attachable structural lesson below). Verified
 server-side (5 unit + 3 HTTP integration tests, real process killed end-to-end) and
 client-side (self-render: End button on every foreign row). **NOT deployed** — the
 restart ends every RC session in the bridge cgroup (incl. the self-deploying driver;
-no auto-resume), and Sameer's other live sessions were alive, so gdn-racuca is parked
+no auto-resume), and Sameer's other live sessions were alive, so gueridon-racuca is parked
 `waiting`. Ship with `cd /opt/gueridon && git pull && npm install && sudo systemctl
 restart gueridon`, then tap-test End on a foreign row. (The original batterie-de-savoir
 process self-exited before the SIGTERM test could run — desktop-app agents are ephemeral.)
-Also filed **gdn-botife**: `folders.test.ts` fails 16/39 on clean `main` (pre-existing,
+Also filed **gueridon-botife**: `folders.test.ts` fails 16/39 on clean `main` (pre-existing,
 `scanFolders` returns `[]`; NOT from this session). RESOLVED since: 2026-07-26's session
 baselined `npm test` fully green (772/772 before that night's work, 777/777 after) — if
 the suite looks green, believe it.
@@ -116,11 +116,11 @@ top-level import. The live bridge kept running node 20 **in-memory** (inode rete
 until this session. **This session (Sameer's ask):** restarted gueridon → bridge now
 on node v22.23.1 (both processes), single clean start, :3001 listening, `/repos`
 responds, `pty.node` import proven (the bridge booted). No code change — pure
-node-swap; `/opt` stayed at `bd6f7c5` so gdn-racuca stays HELD. Node runbook lives in
+node-swap; `/opt` stayed at `bd6f7c5` so gueridon-racuca stays HELD. Node runbook lives in
 infra (`machines/tube/README.md` + OPERATIONS `libnode.so.115` gotcha, commit
 `bdae9c2`); tube auto-patches 22.x via its `origin=*` unattended policy. The restart's
 live-session cost surfaced the **salvage** gap (recovering + `--resume`-ing the 5 live
-cgroup sessions into login shells before the restart) — captured as gdn-cepalu's third
+cgroup sessions into login shells before the restart) — captured as gueridon-cepalu's third
 lifecycle verb; the one-driver invariant applies to a terminal `--resume` too (end the
 bridge's copy first).
 
@@ -136,8 +136,8 @@ restart.
 
 **Deploy gap (06-10) is CLOSED:** `/opt/gueridon` == dev at the latest code
 commit (b03c28f); only the un-deployed dev commit is a handoff `.md`. Deploying
-remains the three-step in CLAUDE.md; mind gdn-jevico (a restart kills any live
-bridge sessions). Note CLAUDE.md drift the audit found (→ gdn-higido): dev repo
+remains the three-step in CLAUDE.md; mind gueridon-jevico (a restart kills any live
+bridge sessions). Note CLAUDE.md drift the audit found (→ gueridon-higido): dev repo
 is `~/repos/spm1001/gueridon` (not `~/Repos/`); the unit sources a 2nd
 EnvironmentFile `/etc/claude-code/vertex.env` (Vertex ON — `CLAUDE_CODE_USE_VERTEX=1`,
 `CC_MODEL=opus[1m]`); "bridge sessions have zero MCP" is **false** — mise loads
@@ -155,7 +155,7 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   ("batterie/gueridon"), session creation still used basename() and events
   vanished. Regression gate: integration test creating a nested folder,
   connecting a session, asserting the SSE event's folder field.
-  - **Second instance (gdn-deloce, 2026-06-30) — the hash is part of the contract,
+  - **Second instance (gueridon-deloce, 2026-06-30) — the hash is part of the contract,
     and it's RAW.** The launcher's Vertex button navigates to `/#<owner/repo>`; the
     conversation page matches `location.hash.slice(1)` directly against `folder.name`
     (and `sseConnectFolder` sets `location.hash = name` raw, slash intact). The button
@@ -170,14 +170,14 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
 - **ONE live driver per session JSONL is the invariant everything hangs off (2026-07-09).**
   Two `claude` processes resuming the same session-id both append to one JSONL → interleave and
   corrupt. The invariant forbids a second live *driver*; it says nothing against *removing* one —
-  which is why **ending a foreign session is safe but attaching to it is not** (gdn-racuca, 2026-07-12):
+  which is why **ending a foreign session is safe but attaching to it is not** (gueridon-racuca, 2026-07-12):
   End is subtraction (SIGTERM by pid removes a driver — graceful, resumable, no pty needed), whereas
   attach/resume is addition (a second driver on a JSONL the first is writing = the collision). This
   single fact shapes the whole session-joining story: (a) a foreign session (`vertex-terminal` OR
   `local`) is **End-able but NOT attachable** — Guéridon can SIGTERM it by pid (`DELETE /session/:pid`,
-  gdn-racuca) but has no pty to *drive* it, and attaching would collide; (b) the launcher **hides repos
-  with a live session** (gdn-wuvujo) so a 2nd launch can't resume the JSONL the first is writing; (c) the
-  parked baton-pass (gdn-kidowe) is a *hand-off* (SIGTERM the old, then resume), never a *simultaneous
+  gueridon-racuca) but has no pty to *drive* it, and attaching would collide; (b) the launcher **hides repos
+  with a live session** (gueridon-wuvujo) so a 2nd launch can't resume the JSONL the first is writing; (c) the
+  parked baton-pass (gueridon-kidowe) is a *hand-off* (SIGTERM the old, then resume), never a *simultaneous
   mirror* — precisely because two drivers can't coexist. When adding any "attach / join / resume"
   affordance, first ask: could this put a second live process on a JSONL another process is writing?
   If yes, it must hand off, not share. (Ending never triggers this — it's the safe subtraction.)
@@ -186,16 +186,16 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   would need a watcher+SSE path on its *conversation*, which is still not built. Maintenance mode
   was lifted on 2026-09-27 (dated note under "Keep the streaming lane in MAINTENANCE mode"
   below), and the first thing built under it was a watcher+SSE path for the *roster*
-  (gdn-jojino, 2026-09-28): it carries "a session changed", never a transcript, so this
+  (gueridon-jojino, 2026-09-28): it carries "a session changed", never a transcript, so this
   corollary stands.
 
-- **Roster is FOUR-kind (rc/vertex/vertex-terminal/local) as of gdn-kuhaku.** The contract note
+- **Roster is FOUR-kind (rc/vertex/vertex-terminal/local) as of gueridon-kuhaku.** The contract note
   stands and grew a member: anything touching the roster must move together — the classifier
   (`buildSessionRoster` in bridge-logic + the `vertexBilled` read in `sessions.ts`), the
   `launch.html` render, and CLAUDE.md's `/sessions` row. `vertex-terminal` detection reads
   `/proc` environ OR cmdline (`--settings`) — the wrappers hide Vertex in cmdline, so an
   environ-only check silently mislabels every wrapper session as `local`.
-  - **The `local` bucket is HETEROGENEOUS (2026-07-12, gdn-racuca).** It's not just "hand-started
+  - **The `local` bucket is HETEROGENEOUS (2026-07-12, gueridon-racuca).** It's not just "hand-started
     terminal sessions" — it holds at least three distinct things that look identical in the roster:
     (1) **Claude Desktop-app agents** (the desktop app over RDP on tube — identifiable by the
     `--plugin-dir …/local-agent-mode-sessions/…` + `mcp__ccd_session__*` + `--permission-prompt-tool
@@ -204,7 +204,7 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
     and (3) **RC sessions orphaned by a bridge restart** (the in-memory `rcSessions` map is lost on
     restart, so a previously-Guéridon-owned RC session demotes to `local` — this is common, fires on
     every deploy / the 04:00 reboot). All are now End-able by pid; none are attachable.
-  - **End-able ≠ attachable (gdn-racuca).** Foreign rows (`local`/`vertex-terminal`) get an **End**
+  - **End-able ≠ attachable (gueridon-racuca).** Foreign rows (`local`/`vertex-terminal`) get an **End**
     button → `DELETE /session/:pid` → `handleSessionEnd` (SIGTERM by pid, `isLiveClaudePid` comm-guard,
     SIGKILL fallback @8s). No pty needed — it's the SIGTERM-by-pid primitive. Client `endSession`
     branches: owned rc → `DELETE /launch/:folder`, owned vertex → `POST /exit/:folder`, foreign →
@@ -253,7 +253,7 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      didn't spawn. But discovery ≠ control: with no pty handle we can *see* a
      foreign/terminal session, not drive or kill it (why the roster is read-only
      for `kind:"local"`).
-  4. **CC's session registry, `<configDir>/sessions/<pid>.json`** (gdn-fusijo, 2026-09-13)
+  4. **CC's session registry, `<configDir>/sessions/<pid>.json`** (gueridon-fusijo, 2026-09-13)
      = the live idle / busy / waiting of every registered session, from CC's own state
      machine. `server/registry-watch.ts` watches both seats' directories with inotify and
      the roster merges it on pid. Hooks lost this job because an interrupted turn fires no
@@ -272,9 +272,9 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      `busy`/`idle` — so "batch `-p` writes no status" may no longer hold, or may hold only for
      `-p` runs outside tmux like Garni's verifiers. Not re-censused; the roster's `unknown` is
      still the right rendering for whatever writes none. The registry record
-     is deleted seconds after a CLEAN exit, which is why gdn-daluto journals it (same watcher,
+     is deleted seconds after a CLEAN exit, which is why gueridon-daluto journals it (same watcher,
      second sink — `server/session-ledger.ts`, shipped 2026-09-14). A third sink,
-     `server/roster-feed.ts` (gdn-jojino, 2026-09-28), turns every roster-visible change into a
+     `server/roster-feed.ts` (gueridon-jojino, 2026-09-28), turns every roster-visible change into a
      `sessions-changed` nudge on `GET /sessions/events`, and the launcher refetches `/sessions`
      on each: a permission dialog on a tube-tmux session turned the row amber on an
      iPhone-14-Pro-viewport launcher 0.246, 0.289 and 0.255 s after CC's `statusUpdatedAt`
@@ -292,7 +292,7 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
      exactly the dead phone sessions the RECENT band exists to show.
 
 - **Probing CC's dialogs needs `--permission-mode default`; the estate defaults to bypass
-  (2026-09-13, gdn-fusijo).** An `ask` rule is silent under `bypassPermissions` — only `deny`
+  (2026-09-13, gueridon-fusijo).** An `ask` rule is silent under `bypassPermissions` — only `deny`
   holds there — so a probe session launched the ordinary way never raises the dialog it is
   meant to measure, and the measurement reads as "nothing happened". The recipe that works:
   `--permission-mode default` (the pane then reads `manual mode on`, the ready tell on
@@ -305,13 +305,13 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   calls `reapOrphans()`, which SIGTERMs every pid in the shared
   `~/.config/gueridon/sse-sessions.json` — the LIVE bridge's children. `HOME=/tmp/<scratch>`
   with `.claude/sessions` and `.claude-commis/sessions` symlinked to the real directories gives
-  a dev bridge the real registry and none of the shared state (and, since gdn-daluto, its own
+  a dev bridge the real registry and none of the shared state (and, since gueridon-daluto, its own
   ledger file rather than the live one's). Add a third, read-only symlink — `.claude/projects`
   — if you want `/recent` populated: `scanRecentSessions` reads the farm under `homedir()`,
   so without it `/recent` is empty by construction and reads like a bug (2026-09-14). Kill it
   by the pid `ss -ltnp` names; unlink the symlinks, then remove the scratch home explicitly.
 
-- **Any new streaming endpoint must go on `sw.js`'s bypass list (2026-09-28, gdn-jojino).** The
+- **Any new streaming endpoint must go on `sw.js`'s bypass list (2026-09-28, gueridon-jojino).** The
   PWA's service worker controls every page on the origin — the launcher included, though only
   `index.html` registers it — and anything not on its list takes the shell branch, which clones
   each OK response into Cache Storage. `cache.put` on an SSE stream never completes. The bypass
@@ -319,7 +319,7 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   jsdom page test nor the HTTP tests could see it because neither runs a worker.
   `client/sw.test.ts` now runs the real `sw.js` in a vm and asserts which paths it answers.
 
-- **Timing a chip end to end on one clock (2026-09-28, gdn-jojino).** passe's `:9223` Chrome
+- **Timing a chip end to end on one clock (2026-09-28, gueridon-jojino).** passe's `:9223` Chrome
   runs on tube, so a page-side `Date.now()` and CC's `statusUpdatedAt` share a clock. The
   recipe: load the launcher with `--device "iPhone 14 Pro"`, `eval-file` a MutationObserver
   that stamps the first `.run-row.waiting` per name (plus a wrapped `fetch` and a passive second
@@ -331,7 +331,7 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
   `node_modules` symlink; the old page measured 8.96 s against the new 0.25 s on the same dialog,
   which is what shows the instrument can see a slow page.
 
-- **A two-part fix is a question, not belt-and-braces (2026-09-13, gdn-vidame).** When a fix
+- **A two-part fix is a question, not belt-and-braces (2026-09-13, gueridon-vidame).** When a fix
   ships as "the real change plus a second belt", run the known-bad against each part alone
   before writing the mechanism into the commit message. The session-index flake fix carried a
   path tie-break that passed every test and fixed nothing that had failed — the essayeur's
@@ -341,7 +341,7 @@ dev-toolchain (vitest/vite/esbuild/jsdom) — none on the production runtime pat
 
 ## Session identity across surfaces (2026-08-28 — the switchboard's identity layer)
 
-The gdn-jibudu switchboard ("every session stays in view and can be picked up — any wallet,
+The gueridon-jibudu switchboard ("every session stays in view and can be picked up — any wallet,
 any surface") needs to *name* every session wherever it lives. That identity layer now exists:
 
 - **Teleport/RC ids are derivable offline.** A claude.ai teleport id `session_<body>` and the
@@ -410,7 +410,7 @@ any surface") needs to *name* every session wherever it lives. That identity lay
   needing those fields after death must journal them while the record exists.
   Since 2026-09-13 the bridge watches these directories live (`server/registry-watch.ts`,
   structural primitive 4 above), and since 2026-09-14 journals them (`server/session-ledger.ts`,
-  gdn-daluto): an append-only JSONL at `~/.config/gueridon/session-ledger.jsonl`, one row per
+  gueridon-daluto): an append-only JSONL at `~/.config/gueridon/session-ledger.jsonl`, one row per
   (sessionId, seat directory), never keyed on pid — pids recycle, `/clear` and `/resume` move a
   pid between session ids, a resume keeps a sessionId across pids — carrying the seat, the
   Vertex-vs-Teams tag read from `/proc` once at join, the `session_…` id, cwd, pane, and
@@ -440,25 +440,25 @@ any surface") needs to *name* every session wherever it lives. That identity lay
   the original must stay quiet.
 - **A guard that asks a human to do a mechanical step will be a red light nobody reads**
   (batterie's version ratchet: seven red days, seven unread emails, then automated in
-  bds-hajeli). When a CI check goes red for the same reason day after day, ask whether the
-  check's mechanism can do the thing it is asking for. Same family, this repo: gdn-vidame's
+  batterie-de-savoir-hajeli). When a CI check goes red for the same reason day after day, ask whether the
+  check's mechanism can do the thing it is asking for. Same family, this repo: gueridon-vidame's
   flaky test was red on main for a fortnight before anyone measured it.
 
-Board state as of 2026-09-14: gdn-fusijo (state chip) and gdn-daluto (session ledger) shipped;
-under gdn-jibudu the open threads are **gdn-merozu** (the revived baton-pass, superseding the
-dropped gdn-kidowe; still wants its `--badly` from Sameer — the ledger row now hands it the
+Board state as of 2026-09-14: gueridon-fusijo (state chip) and gueridon-daluto (session ledger) shipped;
+under gueridon-jibudu the open threads are **gueridon-merozu** (the revived baton-pass, superseding the
+dropped gueridon-kidowe; still wants its `--badly` from Sameer — the ledger row now hands it the
 seat and the `session_…` id, and `GET /ledger` the live-holder check, so the wallet sheet's
-"resume on wallet X" has its inputs), **gdn-vogidu** (answer a waiting session's dialog from
-the phone — the `tmux` field each roster row now carries is its handle), **gdn-miseso** (the
+"resume on wallet X" has its inputs), **gueridon-vogidu** (answer a waiting session's dialog from
+the phone — the `tmux` field each roster row now carries is its handle), **gueridon-miseso** (the
 health strip; its wallet history reads the ledger, not a recorder of its own) and
-**gdn-jojino** (the phone's 20 s poll). **gdn-himaba** (the design pass) carries the
+**gueridon-jojino** (the phone's 20 s poll). **gueridon-himaba** (the design pass) carries the
 per-surface handle table, the three-state model, and the Cowork answer.
 
 ## Substrate watch (2026-06-10 read, Fable first-look session)
 
 Gueridon hand-rolled, in February, what Anthropic's stack now provides natively
 piece by piece: the Agent SDK (typed stream events, session management, and
-`canUseTool` — the exact affordance gdn-cabicu/gdn-vigifo are blocked on),
+`canUseTool` — the exact affordance gueridon-cabicu/gueridon-vigifo are blocked on),
 the `claude agents` roster/supervisor (daemonized bg sessions, respawn,
 survives disconnects — overlaps orphan.ts + sse-sessions.json + idle guards),
 and /rc remote control (mobile steering of existing sessions). What none of
@@ -466,7 +466,7 @@ them do: *launch* — from a phone, point a full-freedom session at any folder,
 create folders, share-sheet into a fresh session, push-notify on completion.
 That launcher front-half is the moat; the process-plumbing back-half should be
 allowed to commoditize. Implication: prefer a substrate evaluation (SDK swap /
-roster integration, in the mold of cornichon's bon-nenagu flip) over building
+roster integration, in the mold of cornichon's cornichon-nenagu flip) over building
 new features — especially permission features — on the hand-rolled stream-json
 layer. Cornichon is the architectural sibling (UI shell ↔ dumb pipe ↔
 folder-scoped agent host speaking NDJSON over stdio); its 10:1 deletion when
@@ -481,7 +481,7 @@ there was **no remote-LAUNCH capability anywhere** in Anthropic's stack. That la
 clause was the load-bearing premise under "the launcher front-half is the moat", and
 `claude remote-control` **server mode** has since falsified it. Do not reason from it.
 What survives from this paragraph: `/rc` still can't take a handoff from Guéridon's
-`claude -p` sessions. Two coherent futures, forked by gdn-hocede — **spiked & RESOLVED 2026-06-29 in
+`claude -p` sessions. Two coherent futures, forked by gueridon-hocede — **spiked & RESOLVED 2026-06-29 in
 favour of B being viable:**
 - **A — stays the full mobile client (status quo).** Launches *and* drives.
   Works today; cost is maintaining the hand-rolled stream-json layer (already
@@ -506,7 +506,7 @@ favour of B being viable:**
     deposit/upload are launch/notify features claude.ai's remote UI does NOT
     provide. Future B is a thin launch+share-sheet+push front-end that hands the
     *driving* to claude.ai, not a deletion of Guéridon.
-  - **Precondition, now on the critical path (gdn-rosara):** the spawn must be
+  - **Precondition, now on the critical path (gueridon-rosara):** the spawn must be
     non-Vertex for the claude.ai relay to attach — CONFIRMED both directions
     2026-06-30 (matched-pair spike, see Billing lanes below): Teams attaches,
     Vertex is silently inert. De-Vertexing the Guéridon spawns is the gating
@@ -530,7 +530,7 @@ happened for **session management** — verified live this session:
   2. **Release a bridge-OWNED process** — a live `-p`/RC session's stdin is held by
      the bridge; `claude agents` resuming it live would collide on the one-driver
      invariant. Only gueridon can gracefully release its own grip (SIGTERM, resumable
-     — the gdn-racuca End-by-pid primitive shipped 2026-07-19).
+     — the gueridon-racuca End-by-pid primitive shipped 2026-07-19).
   3. **Launch from a phone** — the moat, unchanged.
 
 **Consequence for the roadmap:** do NOT build a gdn session-enumerator (`gdn ls`)
@@ -565,7 +565,7 @@ infra `machines/tube/OPERATIONS.md` §2, `machines/tube/claude-remote@.service`,
   session simply had nothing to write. **Lesson for the next probe: a fresh RC-server session
   is an empty-set trap — always put a turn through it before concluding anything about
   persistence.**
-- **GRADUATION PROVEN END-TO-END (2026-07-25) — gdn-pizoke's seam, closed.** Phone creates a
+- **GRADUATION PROVEN END-TO-END (2026-07-25) — gueridon-pizoke's seam, closed.** Phone creates a
   session → real work → **Archive** from the phone (the app offers no `/exit` for these) →
   `claude --resume <id>` at the desk answered from the conversation's own history. **Archive
   is a clean end**: the session child exited, no orphan under the server, `claude agents`
@@ -576,7 +576,7 @@ infra `machines/tube/OPERATIONS.md` §2, `machines/tube/claude-remote@.service`,
 - **Roster seam, if the Teams lane survives:** an RC-server session child is identifiable from
   `/proc` by `CLAUDE_CODE_ENVIRONMENT_KIND=bridge` + `ENTRYPOINT=sdk-cli` + `CHILD_SESSION=1`
   (`TERM=dumb`). That would be a 5th `buildSessionRoster` kind. Deliberately NOT filed as a
-  bon — it is only worth building if gdn-sudacu decides the Teams lane stays.
+  bon — it is only worth building if gueridon-sudacu decides the Teams lane stays.
 - **⚠ Posture, worth carrying into any "more servers" decision:** an always-on server is a
   standing full-reach shell (no sandbox by default; global settings allowlist bare tool names
   plus `additionalDirectories:['~']` and `skipAutoPermissionPrompt:true`), permanent and
@@ -598,10 +598,10 @@ after `claude agents` on 2026-07-19 and the `/rc` flag on 2026-06-29):
   when the time comes: `spawnRemoteControl`, `POST /launch`, `DELETE /launch`, `GET /rc`,
   `rcSessions`, `pushLaunchReady`, `isSessionReadyFromTail`/`isRcSessionReady`, the roster's
   `rc` kind, and `bridge-rc.test.ts`.
-- **gdn-ruvegu (session graduation) is largely dissolved for the Teams lane** — an RC-server
+- **gueridon-ruvegu (session graduation) is largely dissolved for the Teams lane** — an RC-server
   session *is* a normal local session, so `claude agents` + `--resume` is the graduation path
-  with no Guéridon involvement. Its children shrink with it: **gdn-kozoha** (billing-lane
-  labelling) matters only for sessions Guéridon still owns, i.e. the Vertex lane; **gdn-pizoke**
+  with no Guéridon involvement. Its children shrink with it: **gueridon-kozoha** (billing-lane
+  labelling) matters only for sessions Guéridon still owns, i.e. the Vertex lane; **gueridon-pizoke**
   (adopt) survives only as the one-driver question in new clothes — *the server* holds its
   session children, so a desk `--resume` still needs a release, now performed by ending the
   session from the phone's native UI.
@@ -629,7 +629,7 @@ announced server mode — which is why we had it as "doesn't exist" for a month.
 (<https://code.claude.com/docs/en/remote-control>) is thorough on the feature and silent on
 running it as a service; the device/directory model is undocumented entirely.
 
-## Plan frame — session graduation (2026-07-19, gdn-cepalu descoped)
+## Plan frame — session graduation (2026-07-19, gueridon-cepalu descoped)
 
 **Read the 2026-07-25 section above first — for the TEAMS lane this whole frame is now
 substrate-provided.** What follows still applies to the **Vertex lane**, which no Anthropic
@@ -651,23 +651,23 @@ lifecycle bugs (each surviving piece maps to one axis):
 - `gdn ls` / bespoke enumerator — `claude agents` is richer + an existing surface.
 - salvage UUID-archaeology — `claude agents --json` gives the sessionId directly.
 - a full state-machine REFACTOR — the substrate removed most symptoms (Symptom 1 →
-  gdn-racuca done; salvage/enumeration → `claude agents`); targeted fixes suffice.
+  gueridon-racuca done; salvage/enumeration → `claude agents`); targeted fixes suffice.
   Keep the three-axis model as the *frame*, not as a mandate to rewrite.
 
 **Key seams (verified this session):**
-- **Symptom 2 — DONE (gdn-duhino, 2026-07-19).** `launch.html` `launchVertex()` did
+- **Symptom 2 — DONE (gueridon-duhino, 2026-07-19).** `launch.html` `launchVertex()` did
   `location.href = "/#"+selected`, carrying NO fresh-vs-resume intent; the conversation page →
   `resolveSessionForFolder` resolved to *resume* whatever that folder last had. Root cause: the
   bridge's `handleSession` ALREADY had a `"new"` mode (`sessionId:"new"` → fresh, no resume) —
-  its trigger was orphaned when the switcher was retired (gdn-deloce). Fix (grep-the-substrate
+  its trigger was orphaned when the switcher was retired (gueridon-deloce). Fix (grep-the-substrate
   win, NOT a state machine): re-connect the trigger — `launchVertex` sets a one-shot
   `sessionStorage` `gdnFreshLaunch` flag; `index.html` consumes it on first hash-connect →
   `sessionId:"new"`. Carried via sessionStorage (not the hash) so the raw `/#owner/repo` contract
   stays untouched. Roster "Open" (no flag) still resumes. Live-verified with a controlled twin
   (control resumes, launcher goes fresh). The bridge `"new"` path is regression-tested
-  (bridge.integration.test.ts); the client wiring is untested inline JS (the gdn-pefipi blind
+  (bridge.integration.test.ts); the client wiring is untested inline JS (the gueridon-pefipi blind
   spot) — verified live only.
-- **Adopt** — `End` (SIGTERM, graceful, resumable — shipped gdn-racuca) → the session
+- **Adopt** — `End` (SIGTERM, graceful, resumable — shipped gueridon-racuca) → the session
   should appear in `claude agents` with its resume command → `return`. PROVEN for
   *terminal* sessions (the screenshot shows ended ones with `resume with: claude
   --resume …`); the load-bearing UNVERIFIED seam is whether a **bridge-owned `-p`/RC**
@@ -712,62 +712,62 @@ a two-lane launcher must *route*, never *detect-and-fallback*.)
 | **Teams** | `claude --remote-control` | claude.ai native | Teams/MAX quota |
 
 So the streaming `-p`+render stack is the **only** path to a Vertex-billed mobile
-session — it IS the Vertex lane. **gdn-mezofu/gdn-deloce/gdn-wimera reframed from
+session — it IS the Vertex lane. **gueridon-mezofu/gueridon-deloce/gueridon-wimera reframed from
 "retire the back-half" to a two-lane model:**
 - **UPDATE 2026-09-27 — maintenance mode LIFTED (Sameer, estate-picture session, asked
   whether the launcher's 20 s poll should become SSE):** "SSE because same. and maintenance -
   not so much - we're going to need it for Atelier." So new feature work on Guéridon is wanted
-  again, starting with the launcher's session list over SSE (gdn-jojino). Whether that covers
+  again, starting with the launcher's session list over SSE (gueridon-jojino). Whether that covers
   the whole stream-json lane or only the launcher side is worth one question to him at
   draw-down; the doctrine line below is kept as the record of what held until today.
-  The launcher's live roster shipped under it on 2026-09-28 (gdn-jojino); the scope question
-  is still open, parked for Sameer on its own card (gdn-wenava).
+  The launcher's live roster shipped under it on 2026-09-28 (gueridon-jojino); the scope question
+  is still open, parked for Sameer on its own card (gueridon-wenava).
 - **Keep the streaming lane in MAINTENANCE mode** — nips and tucks fine (so
-  **gdn-kuciku and gdn-hodoco are NOT moot** — they're live Vertex-lane fixes),
+  **gueridon-kuciku and gueridon-hodoco are NOT moot** — they're live Vertex-lane fixes),
   but no major new feature-building on the drift-prone stream-json layer.
 - **Retire the Vertex lane ONLY on felt pain** — a future CC version breaks the
   stream-json parser, or Vertex-on-mobile stops mattering. "~100 CC versions
   adrift" = "haven't adopted new features," not "broken" (works at v2.1.196).
-- **End state (gdn-deloce — SHIPPED + deployed 2026-06-30):** the launcher is the single
+- **End state (gueridon-deloce — SHIPPED + deployed 2026-06-30):** the launcher is the single
   entry point and offers **"Vertex"** (→ streaming lane, navigates `/#<owner/repo>`) and
   **"Teams"** (→ RC lane, `POST /launch`) buttons; the user picks billing per launch. The
   same change RETIRED the in-conversation session switcher — the launcher is now the only
   chooser; leaving a session (folder-lozenge tap, `/exit`, session end, bare `/`) returns
-  to it. Net −1008/+72 (mostly deletion). CLAUDE.md rewritten for two-lane (gdn-wimera).
+  to it. Net −1008/+72 (mostly deletion). CLAUDE.md rewritten for two-lane (gueridon-wimera).
 
 ## Future B — build framing (planned 2026-06-29, post-gdn-hocede)
 
 **Build progress (2026-06-29 — LIVE IN PROD, loop proven end-to-end through the deployed
-bridge):** Spawn path shipped earlier (`gdn-difoto` node-pty `--remote-control` Vertex→Teams
-+ main-guard; `gdn-senila` URL capture; `gdn-dofuza` push; trust MOOT via `~/repos` cascade).
+bridge):** Spawn path shipped earlier (`gueridon-difoto` node-pty `--remote-control` Vertex→Teams
++ main-guard; `gueridon-senila` URL capture; `gueridon-dofuza` push; trust MOOT via `~/repos` cascade).
 **Then the launcher itself shipped + DEPLOYED (`GUERIDON_ENABLE_RC=1` in `/opt/.env`, prod
 @ 2f10bbd+):**
-- `gdn-todidu` DONE — fresh `launch.html` (two-list: RUNNING + searchable repos), `GET /repos`
+- `gueridon-todidu` DONE — fresh `launch.html` (two-list: RUNNING + searchable repos), `GET /repos`
   (lean: `listRepos`/`collectRepoCandidates`, git-commit recency order, reads NO sessions so
   subagent noise can't appear), flat `.btn-send`-style button. Served at `/launch.html`.
-- `gdn-rilope` DONE — RUNNING list (`GET /rc`) + **End = `DELETE /launch/:folder` → SIGTERM**.
+- `gueridon-rilope` DONE — RUNNING list (`GET /rc`) + **End = `DELETE /launch/:folder` → SIGTERM**.
   Open reopens the claude.ai URL. **SIGTERM is a faithful `/exit`**: claude's
   `process.on("SIGTERM")` GracefulShutdown fires SessionEnd hooks + flushes the JSONL +
   leaves the session resumable — VERIFIED via `notes-capture.log` archiving the ended glaneur
   session. (NOT SIGHUP — claude survives that; NOT typing `/exit` into the pty — view-state
   fragile, gets swallowed by menus. SIGTERM is out-of-band + reliable.) SIGKILL fallback @ 8s.
-- `gdn-cumado` DONE (built+deployed+live-verified) — **conditional auto-`/open`** (`handleLaunch`
+- `gueridon-cumado` DONE (built+deployed+live-verified) — **conditional auto-`/open`** (`handleLaunch`
   passes `/open` only when the repo has `.bon`; else bare spawn, ready immediately) + **readiness
   spinner**. Readiness = last MAIN-thread (`parent_tool_use_id` null) assistant `stop_reason:
   end_turn` (or an AskUserQuestion) in the session JSONL — `isSessionReadyFromTail` (pure) +
   `isRcSessionReady` (fs glue, newest JSONL with mtime ≥ spawnedAt so a stale prior session can't
   false-ready). `/launch`+`/rc` carry `ready`/`autoOpened`; launcher spins "Orienting…" with a
   4-min TIMEOUT fallback (`/open` latency unbounded). Live: glaneur flipped ready at 72s.
-- `gdn-nagepa` DONE — **launch-push gating** via `RCSession.pushOnReady` (default false). Launcher
+- `gueridon-nagepa` DONE — **launch-push gating** via `RCSession.pushOnReady` (default false). Launcher
   launches no longer double/triple-notify (the URL is delivered in-page + via the roster);
-  `pushLaunchReady` fires only `pushOnReady && allClients.size===0`. Share-sheet (`gdn-fuzeba`)
+  `pushLaunchReady` fires only `pushOnReady && allClients.size===0`. Share-sheet (`gueridon-fuzeba`)
   will opt in with `pushOnReady=true`. (Gueridon can only suppress its OWN push; the native
   claude.ai ping is outside our control — this is 3→2, removing the redundancy we own.)
-- `gdn-towiva` DONE — launcher endpoint tests. `server/bridge-rc.test.ts` (node-pty + push.js
+- `gueridon-towiva` DONE — launcher endpoint tests. `server/bridge-rc.test.ts` (node-pty + push.js
   mocked, **imports `bridge.ts` under its main-guard** — first test to do so) covers
   spawnRemoteControl/handleLaunch/handleRcExit; integration tests cover `/repos` recency-order,
   `/rc`+`/sessions` gating+shape, `/launch` traversal-400. 757 tests total.
-- `gdn-batogo` DONE (built+deployed+live-verified) — **the live-sessions roster.** The launcher's
+- `gueridon-batogo` DONE (built+deployed+live-verified) — **the live-sessions roster.** The launcher's
   top section now lists EVERY live `claude` session (`GET /sessions`), not just RC ones. Born when
   Sameer noticed a hand-started session in `~` was invisible. `server/sessions.ts` `/proc`-scans
   `comm=="claude"` (catches RC, `-p`, and terminal sessions; excludes node/bash/in-process
@@ -783,8 +783,8 @@ all verified end-to-end through `/opt`. Native surface: launched sessions appear
 (the native apps notify session-alive, so it doesn't matter — and the AASA/Universal-Link
 route can't be forced from JS anyway; see below). The **streaming UI still serves at `/`**
 — and per the 2026-06-30 two-lane decision (see Billing lanes above) it STAYS, as the
-**Vertex lane**. `gdn-deloce` (the Vertex/Teams chooser + switcher retirement) SHIPPED +
-deployed 2026-06-30; `gdn-wimera` (the CLAUDE.md two-lane rewrite) followed.
+**Vertex lane**. `gueridon-deloce` (the Vertex/Teams chooser + switcher retirement) SHIPPED +
+deployed 2026-06-30; `gueridon-wimera` (the CLAUDE.md two-lane rewrite) followed.
 
 **Native-app deep-link — investigated + closed (2026-06-29):** you CANNOT force a hezza RC
 session into a native Claude app from a web page. Universal Links (`claude.ai/code/session_*`)
@@ -795,24 +795,24 @@ has no session-id input, so it can't attach to a remote session. Net: web/Deskto
 is the driving surface; native-attach is gated on Anthropic shipping an entitled handler.
 
 **Open launcher follow-ups** (cumado/towiva/nagepa/batogo all shipped 2026-06-29):
-- `gdn-fuzeba` (share-sheet → RC path) — **PAUSED** mid-step-1 (pivoted to the roster). When
+- `gueridon-fuzeba` (share-sheet → RC path) — **PAUSED** mid-step-1 (pivoted to the roster). When
   resumed: re-point `handleShareUpload` to `spawnRemoteControl(folderPath, depositNote, true)` —
   the deposit note as the initial prompt, **`pushOnReady=true`** (the phone-in-pocket push the
-  gdn-nagepa flag was built for); keep a `-p` fallback when RC is off (migrate-don't-big-bang).
-- `gdn-mupito` (idle reaping) — **process hygiene, NOT a quota-saver, and largely ERODED.** The
+  gueridon-nagepa flag was built for); keep a `-p` fallback when RC is off (migrate-don't-big-bang).
+- `gueridon-mupito` (idle reaping) — **process hygiene, NOT a quota-saver, and largely ERODED.** The
   2026-06-29 "infra is idle-burning Teams quota" claim was WRONG and is retracted: an idle session
   burns ZERO tokens — cost tracks *turns* only, no passive bleed (verified: an "idle" session sits
   at flat CPU + static JSONL). Its other motivations also eroded under parallel work: invisibility
-  is covered by the RUNNING list / roster (gdn-rilope/gdn-batogo), and relaunch-collision can't
+  is covered by the RUNNING list / roster (gueridon-rilope/gueridon-batogo), and relaunch-collision can't
   happen for RC (spawnRemoteControl is idempotent per folder). Residual case = orphan PIDs +
-  ~440MB RSS per forgotten `-p` session, and that path retires with gdn-deloce. Low priority.
-- `gdn-deloce` — **SHIPPED + deployed 2026-06-30.** The launcher's Vertex/Teams chooser; the
+  ~440MB RSS per forgotten `-p` session, and that path retires with gueridon-deloce. Low priority.
+- `gueridon-deloce` — **SHIPPED + deployed 2026-06-30.** The launcher's Vertex/Teams chooser; the
   same change RETIRED the in-conversation switcher (launcher is the sole chooser; −1008/+72 net).
   One post-ship fix: the Vertex button must write the RAW hash, not `encodeURIComponent` — the
   `%2F` broke the hash↔folder-name match and bounced every Vertex launch home (structural lesson
-  #1, second instance). `gdn-wimera` — CLAUDE.md two-lane rewrite, DONE. `gdn-kuciku` — CLOSED
+  #1, second instance). `gueridon-wimera` — CLAUDE.md two-lane rewrite, DONE. `gueridon-kuciku` — CLOSED
   (phantom: the ask_user folder key was already injected centrally by `broadcastToSession` since
-  Feb; the 06-29 audit misread the call site). gdn-towiva's tests still guard
+  Feb; the 06-29 audit misread the call site). gueridon-towiva's tests still guard
   `/repos`,`/rc`,`/sessions`,`/launch`.
 
 Everything below is the original plan framing.
@@ -828,13 +828,13 @@ Cross-cutting decisions:
   TUI needing a controlling terminal; today's `spawnCC` (bridge.ts) pipes stdio
   for stream-json. Use node-pty. Read the pty only to extract the claude.ai URL
   and detect lifecycle — never to render.
-- **Non-Vertex per spawn = the billing flip (gdn-rosara).** Strip the Vertex
+- **Non-Vertex per spawn = the billing flip (gueridon-rosara).** Strip the Vertex
   trio from the spawn env (`env -u CLAUDE_CODE_USE_VERTEX ANTHROPIC_VERTEX_PROJECT_ID
   ANTHROPIC_MODEL CLOUD_ML_REGION ANTHROPIC_DEFAULT_*_MODEL`) — confirmed in the
   spike to yield Teams, which is what the claude.ai relay attaches to. **Tradeoff,
   Sameer's call:** RC sessions bill to Teams/MAX (its rate limits), not Vertex.
-  Side effect: satisfies gdn-rosara's contamination concern.
-- **Folder trust — CASCADES from a trusted ancestor; no seeding needed (RESOLVED 2026-06-29, gdn-tetepu MOOT, gdn-bekegu DONE).**
+  Side effect: satisfies gueridon-rosara's contamination concern.
+- **Folder trust — CASCADES from a trusted ancestor; no seeding needed (RESOLVED 2026-06-29, gueridon-tetepu MOOT, gueridon-bekegu DONE).**
   CC's trust is NOT per-path at decision time — it walks up to the nearest trusted ANCESTOR
   directory. Verified empirically (3 spawns): a fresh git folder under `~/repos/spm1001`
   spawned `--remote-control` with NO trust prompt *even though its own*
@@ -848,7 +848,7 @@ Cross-cutting decisions:
   deliberately NOT gueridon's job — keeps the launcher out of CC's shared config (option A).
   *Method note:* a claude-code-guide agent claimed "no subtree trust" (citing a glob-pattern
   feature request, #23109); the empirical spawn test contradicted it — for behaviour, test > docs agent.
-- **Initial-prompt injection — CONFIRMED (2026-06-29, gdn-lohupa).**
+- **Initial-prompt injection — CONFIRMED (2026-06-29, gueridon-lohupa).**
   `claude --remote-control <name> "<prompt>"` runs the prompt autonomously AND stays
   remote-control-attachable (spiked: it executed the prompt, printed the result, and
   held the claude.ai URL).
@@ -864,7 +864,7 @@ Cross-cutting decisions:
   transport, state-builder.ts, delta conflation, client render layer, content-hash
   watcher, AskUser overlay, context gauge) once driving moved to claude.ai. That is
   now OFF: the streaming stack is the **Vertex lane** and STAYS (maintenance mode),
-  so gdn-kuciku/gdn-hodoco are NOT retired — they're live Vertex-lane fixes.
+  so gueridon-kuciku/gueridon-hodoco are NOT retired — they're live Vertex-lane fixes.
   Teams-lane launches still hand driving to claude.ai; the moat claude.ai lacks
   (folder picker `/folders`, share-sheet ingest `/upload`, push, spawn lifecycle +
   orphan reaping) is unchanged across both lanes.
