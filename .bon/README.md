@@ -16,6 +16,9 @@ Tool and docs: https://github.com/spm1001/bon
   `someday` (revisit condition — item is parked, not ready).
 - "Ready" = status open, empty/absent `waiting_for`, no `someday` (own or
   parent's).
+- An id from an old commit or handoff that isn't in `items.jsonl` may have
+  been renamed: `aliases.jsonl` maps each old id (`old`) to its current one
+  (`new`). Ids are never reused, so the mapping is safe to follow.
 - If `.bon/backend` contains `dolt`, this clone predates the board's move
   into the repo (Dolt was retired on 2026-10-24): `git pull` to get it.
 - Best orientation: read `understanding.md` and the newest handoff in
